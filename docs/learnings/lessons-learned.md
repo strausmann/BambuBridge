@@ -2,6 +2,28 @@
 
 Neueste zuerst. Format & Prozess: siehe [`README.md`](README.md) und `.claude/rules/error-handling.md`.
 
+## 2026-06-28 — GNOME Remote Desktop: RDP-Passwort nach Reboot „nicht entschlüsselbar" (TPM)
+- **Was passiert ist:** Der System-Mode-Daemon (`gnome-remote-desktop --system`) konnte die an den
+  TPM versiegelten RDP-Credentials nicht laden. Zwei aufeinanderfolgende Symptome: zuerst
+  `Init TPM credentials failed … tcti:IO failure, using GKeyFile as fallback`, später nach Reboot
+  `[RDP] Couldn't retrieve RDP credentials: Esys_ContextLoad failed: tpm:parameter(1):integrity check failed`.
+- **Root Cause:** Der Service-User `gnome-remote-desktop` war **nicht in der `tss`-Gruppe**, die
+  Zugriff auf `/dev/tpmrm0` (`crw-rw---- tss tss`) gewährt → TPM-TCTI ließ sich nicht öffnen
+  (`IO failure`) → grd schrieb die Credentials in den unverschlüsselten GKeyFile-Fallback. Der in
+  einem kurzen Zugriffsfenster erzeugte TPM-Blob (`rdp-credentials.priv`) war zudem **verwaist** und
+  validierte nach dem Reboot nicht mehr gegen den TPM-Zustand (KVM-VM mit emuliertem swtpm,
+  `systemd-tpm2-setup-early` mangels `measured-uki` übersprungen → keine persistente SRK).
+- **Impact:** RDP-Login scheiterte reproduzierbar nach Reboots; lange Fehlsuche Richtung
+  „TPM-/Protokoll-Bug", obwohl es eine **Gruppen-Berechtigung** war.
+- **Fix / Prävention:** `gnome-remote-desktop` der Gruppe `tss` hinzufügen
+  (`usermod -aG tss gnome-remote-desktop`, danach Service neu starten); verwaisten Blob entfernen und
+  Credentials neu versiegeln (`grdctl --system rdp set-credentials`). **Diagnose-Regel:** `tcti:IO
+  failure` ⇒ Geräte-/Gruppen-Permission prüfen (`id <svc-user>`, `getent group tss`,
+  `/proc/<pid>/status` Groups), **nicht** den TPM/Blob; `Esys_ContextLoad … integrity check failed`
+  ⇒ Blob ist stale, neu versiegeln. Offen/zu beobachten: ob der swtpm seinen Owner-Seed über Reboots
+  persistiert (sonst host-/libvirt-seitiger Fix). Verwandt: grd-Keyring-Eintrag (per-User) weiter
+  unten — anderer Speicherpfad, gleiche Klasse „Credential-Storage statt Protokoll".
+
 ## 2026-06-28 — semantic-release scheiterte am eigenen husky/commitlint-Hook
 - **Was passiert ist:** Der erste `release.yml`-Lauf auf `main` schlug fehl: semantic-release
   erstellt den Commit `chore(release): 1.0.0 …`, aber der im CI via `npm install` aktivierte
