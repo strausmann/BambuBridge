@@ -13,6 +13,11 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Disable husky git hooks in CI: semantic-release's git plugin makes the
+    # `chore(release): …` commit, and the husky commit-msg hook would otherwise
+    # run commitlint on that bot commit and reject it (long changelog body lines).
+    env:
+      HUSKY: 0
     steps:
       - uses: actions/checkout@v4
         with:
