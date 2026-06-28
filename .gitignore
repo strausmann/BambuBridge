@@ -1,0 +1,7 @@
+data/
+__pycache__/
+*.pyc
+.venv/
+
+# Claude Code local settings (kann Secrets enthalten)
+.claude/
