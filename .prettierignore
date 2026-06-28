@@ -1,0 +1,10 @@
+# Python app is formatted by Python tooling, not prettier.
+app/
+tests/
+scripts/
+web/
+docs/
+*.py
+.venv/
+node_modules/
+CHANGELOG.md

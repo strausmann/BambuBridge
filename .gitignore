@@ -3,5 +3,10 @@ __pycache__/
 *.pyc
 .venv/
 
-# Claude Code local settings (kann Secrets enthalten)
-.claude/
+# Claude Code: ignore only local/secret files, but DO version-control the
+# shared project agents/commands under .claude/.
+.claude/settings.local.json
+.claude/*.local.json
+
+# Node / tooling
+node_modules/
