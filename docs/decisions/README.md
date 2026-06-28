@@ -18,7 +18,10 @@ Binding decisions for BambuBridge live here, one file per decision, in the
 ## Index
 | ADR | Title | Status |
 |-----|-------|--------|
-| _none yet_ | | |
+| [0001](0001-changelog-emoji-sections.md) | Emoji section headers in changelog & release notes | Proposed |
+
+<!-- ADR numbers are assigned in creation order. The architecture-backfill candidates below get their
+     numbers (0002+) when we create them. -->
 
 <!-- Add a row per ADR. Suggested initial ADRs to backfill from the existing concept docs:
   0001 two-context architecture (MQTT thread + FastAPI)
