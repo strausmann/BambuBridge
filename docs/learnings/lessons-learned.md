@@ -2,6 +2,44 @@
 
 Neueste zuerst. Format & Prozess: siehe [`README.md`](README.md) und `.claude/rules/error-handling.md`.
 
+## 2026-06-29 — grd-RDP-Credentials: TPM-Re-Seal überlebt Reboot nicht (offene Frage geklärt)
+- **Was passiert ist:** Trotz korrektem `tss`-Gruppen-Fix (User ist in `tss`, `/dev/tpmrm0` =
+  `crw-rw---- tss tss`) scheiterte das RDP-Login weiterhin. Journal zeigt **ausschließlich**
+  `Esys_ContextLoad failed: tpm:parameter(1):integrity check failed` über mehrere Boots
+  (PIDs 1298→1253→1125). Datei-Zeitleiste war der Beweis: Blob `rdp-credentials.priv` **23:54
+  versiegelt**, Reboot **23:56**, danach `integrity check failed` — der frisch versiegelte Blob war
+  nach genau einem Reboot kaputt.
+- **Root Cause:** Der **swtpm-State dieser KVM-VM wird host-/libvirt-seitig nicht über Reboots
+  persistiert** → der Owner-Hierarchy-Seed (und damit der Primary/SRK, gegen den grd versiegelt)
+  ändert sich bei jedem Boot → jeder TPM-versiegelte Blob validiert nach dem nächsten Reboot nicht
+  mehr. Damit ist die im 2026-06-28-Eintrag offen gelassene Frage beantwortet: **Re-Seal allein hilft
+  dauerhaft nicht.** Verschärfend: bei funktionierender TPM-Kommunikation, aber kaputtem Blob fällt
+  grd **nicht** auf GKeyFile zurück (Fallback greift nur bei `tcti:IO failure` in der TPM-Init), also
+  bleibt es hängen statt auszuweichen.
+- **Impact:** RDP nach jedem Reboot unbrauchbar; Re-Seal als „Fix" war trügerisch (hält nur bis zum
+  nächsten Boot). Vergleich „Windows-11-VM läuft" ist kein Gegenbeweis — jede Domain hat ihren
+  **eigenen** swtpm-State, und Windows-RDP versiegelt kein eigenständiges Passwort am TPM
+  (Auth via Konto/NTLM-Kerberos).
+- **Fix / Prävention:** Entscheidung getroffen — **vTPM aus der libvirt-Domain entfernen**, damit
+  grd-TPM-Init mit `tcti:IO failure` ausfällt und stabil auf `credentials.ini` (GKeyFile,
+  encrypted-at-rest) zurückfällt, der Reboots übersteht. Host (VM aus): `<tpm>`-Block aus
+  `virsh edit <domain>` löschen. Guest danach: stale `rdp-credentials.priv`* entfernen,
+  `grdctl --system rdp set-credentials <user> <pw>`, grd neu starten, `grdctl --system status` muss
+  sauber sein. **Diagnose-Regel ergänzt:** `integrity check failed` **über mehrere Boots trotz
+  Re-Seal** ⇒ nicht nochmal versiegeln, sondern **vTPM-Persistenz** (host-seitig) als Ursache
+  behandeln. Alternative (nicht gewählt): swtpm host-seitig persistent machen
+  (`persistent_state='yes'` + State unter `/var/lib/libvirt/swtpm/<domain>/` erhalten).
+- **Status (erledigt & verifiziert, 2026-06-29):** vTPM aus der libvirt-Domain entfernt — im Guest
+  bestätigt durch `ls /dev/tpm*` → *No such file* und grd-Journal nach Reboot **nur noch**
+  `Init TPM credentials failed … No TPM device found, using GKeyFile as fallback` + `RDP server
+  started`, **kein `integrity check failed` mehr**. Credentials via
+  `grdctl --system rdp set-credentials strausmann` neu gesetzt; sie liegen jetzt in
+  `…/gnome-remote-desktop/credentials.ini` (Section `[RDP]`, Key `credentials=…`,
+  Perms `-rw------- gnome-remote-desktop`) → überlebt Reboots. `grdctl --system status` sauber
+  (Unit active, RDP enabled :3389, Username gesetzt). Stale Reste entfernt: `rdp-credentials.priv`
+  und beide `*.broken-20260628`-Backups. Offen: reiner End-to-End-RDP-Login nach Reboot als
+  Schlussprobe (grd-Init-Pfad ist diesen Boot bereits sauber durchgelaufen).
+
 ## 2026-06-28 — GNOME Remote Desktop: RDP-Passwort nach Reboot „nicht entschlüsselbar" (TPM)
 - **Was passiert ist:** Der System-Mode-Daemon (`gnome-remote-desktop --system`) konnte die an den
   TPM versiegelten RDP-Credentials nicht laden. Zwei aufeinanderfolgende Symptome: zuerst
