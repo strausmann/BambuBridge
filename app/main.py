@@ -5,6 +5,7 @@ Prototype scaffold — see docs/bambu-spoolman-bridge-concept.md.
 from __future__ import annotations
 
 import logging
+import secrets
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -536,6 +537,18 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Bambu↔Spoolman Bridge", lifespan=lifespan)
 
 
+@app.middleware("http")
+async def _ensure_bridge_ready(request, call_next):
+    """During startup/shutdown (and on init failure) the Bridge may be None;
+    return a clean 503 for API calls instead of crashing with AttributeError."""
+    if bridge is None and request.url.path.startswith("/api"):
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "bridge not ready", "error_code": "service_unavailable"},
+        )
+    return await call_next(request)
+
+
 # ---- error envelope + auth (guideline §8) --------------------------------
 class APIError(HTTPException):
     """HTTPException that renders the guideline error envelope
@@ -560,7 +573,8 @@ def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
     key = bridge.api_key if bridge else ""
     if not key:
         return
-    if x_api_key != key:
+    # Constant-time comparison to avoid leaking the key via timing.
+    if not x_api_key or not secrets.compare_digest(x_api_key, key):
         raise APIError(401, "unauthorized")
 
 

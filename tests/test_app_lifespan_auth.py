@@ -34,6 +34,17 @@ def test_lifespan_creates_and_clears_bridge():
     assert m.bridge is None  # cleared on shutdown
 
 
+def test_api_returns_503_when_bridge_not_ready():
+    """Without the lifespan having run, bridge is None -> API calls get a clean 503."""
+    import app.main as m
+
+    m.bridge = None  # simulate the startup window
+    client = TestClient(m.app)  # no `with` -> lifespan not started
+    r = client.get("/api/printers")
+    assert r.status_code == 503
+    assert r.json() == {"detail": "bridge not ready", "error_code": "service_unavailable"}
+
+
 # ---- BR-1: auth ----------------------------------------------------------
 def test_read_route_needs_no_key():
     write_config(api_key="secret")
