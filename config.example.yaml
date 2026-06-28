@@ -14,6 +14,13 @@ bambu_account:
   token: ""                         # access token (JWT) for cloud-MQTT fallback; empty = LAN only
   username: ""                      # optional; auto-derived from the token if left empty
 
+security:
+  # X-API-Key required on all mutating (POST) endpoints (api-guideline §8).
+  # Leave empty for the HomeLab profile (auth disabled — only safe behind a
+  # trusted reverse proxy). Set a key for the shared-network / workshop profile.
+  # Can also be supplied via the BRIDGE_API_KEY environment variable.
+  api_key: ""
+
 spoolman:
   base_url: "http://spoolman:7912"
   # Community-convention Spoolman extra fields (interop with OpenSpoolMan / BambuSpoolPal):

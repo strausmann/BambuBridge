@@ -174,6 +174,16 @@ class BambuPrinterMQTT:
         self._thread = threading.Thread(target=run, name=f"mqtt-{self.serial}", daemon=True)
         self._thread.start()
 
+    def stop(self) -> None:
+        """Stop the network loop and disconnect cleanly (used on app shutdown)."""
+        try:
+            self._client.disconnect()  # breaks loop_forever()
+        except Exception:  # noqa: BLE001
+            log.exception("[%s] MQTT disconnect failed", self.serial)
+        t = self._thread
+        if t is not None:
+            t.join(timeout=2.0)
+
     # ---- callbacks --------------------------------------------------------
     def _on_connect(self, client, userdata, flags, rc):
         log.info("[%s] connected rc=%s", self.serial, rc)
