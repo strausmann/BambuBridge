@@ -10,11 +10,11 @@
 4. Implement with tests. Validate locally. Open a PR referencing the issue.
 
 ## Source of truth
-The guidelines are binding and take precedence:
+Binding, in this order of precedence — **ADR > Guideline > Code/README** (see `.claude/rules/adr.md`, `CLAUDE.md` R7):
+- `docs/decisions/` — **ADRs have the highest authority** (the *why*; amend by superseding, never by editing).
 - `docs/api-guideline.md` — API: `/api/v1`, snake_case, field glossary, error envelope
   `{detail,error_code}`, `X-API-Key` auth, HTTPS.
 - `docs/database-guideline.md` — SQLite (WAL, `user_version` migrations, defined tables).
-- `docs/decisions/` — ADRs (the *why*; amend by superseding, never by editing).
 - `CLAUDE.md` — hard rules for any (human or AI) contributor.
 
 If a change alters an endpoint/field/config, update the guideline **+** README **+**
