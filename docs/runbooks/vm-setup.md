@@ -97,7 +97,7 @@ sudo systemctl mask sleep.target suspend.target hibernate.target suspend-then-hi
 
 ## 7. Python-Dev (Projekt)
 ```bash
-sudo apt-get install -y python3.14-venv
+sudo apt-get install -y python3-venv   # venv für das Standard-python3 (hier 3.14)
 cd ~/Repos/BambuBridge && python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
 python -m pytest -q
