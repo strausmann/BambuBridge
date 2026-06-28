@@ -9,9 +9,12 @@ Legende: 🔴 must-fix · 🟠 should-fix · 🟡 nice-to-have · Status: [ ] of
 
 ## 🔴 Kritisch
 
-- **BR-1 [ ] Keine Auth auf druckersteuernder API.** Lösung: `X-API-Key`-Dependency (Guideline §8),
+- **BR-1 [x] Keine Auth auf druckersteuernder API.** Lösung: `X-API-Key`-Dependency (Guideline §8),
   Key aus `security.api_key`/`BRIDGE_API_KEY`, auf allen mutierenden Routen; Deployment-Profile
   HomeLab vs. Werkstatt. Default: ohne Key = Warnung + nur hinter Proxy.
+  → erledigt: `require_api_key` auf allen POST-Routen, Error-Envelope `{detail,error_code}`
+  (`APIError` + Handler), Startup-Warnung bei fehlendem Key, `security:` in `config.example.yaml`.
+  Tests: `tests/test_app_lifespan_auth.py`.
 - **BR-2 [ ] Ungelockter Cross-Thread-Zugriff** auf `live_trays`, `_last_cali`, `_pending_assign`,
   `_staged_slot`, `ams_identity` (MQTT-Thread vs. FastAPI-Threadpool → „dict changed size").
   Lösung: ein `state_lock` um **alle** Zugriffe; Iterationen über Kopien.
@@ -20,8 +23,11 @@ Legende: 🔴 must-fix · 🟠 should-fix · 🟡 nice-to-have · Status: [ ] of
   (DB-Guideline §3). `live_trays`/`_last_cali` bleiben flüchtig (Cache).
 - **BR-4 [ ] `_staged_slot` global (ein Slot)** → Mehrnutzer/Retry überschreibt. Lösung:
   session-/clientbezogen in `kv` (`staged_slot:<session>`); RMW unter Lock.
-- **BR-5 [ ] `bridge = Bridge()` beim Import** (braucht config.yaml, bricht uvicorn/Tests) +
+- **BR-5 [x] `bridge = Bridge()` beim Import** (braucht config.yaml, bricht uvicorn/Tests) +
   veraltetes `@app.on_event`. Lösung: Lazy-Init im **FastAPI `lifespan`**.
+  → erledigt: `bridge` wird im `lifespan` erzeugt (Import braucht keine config.yaml mehr),
+  `@app.on_event` entfernt, sauberes Shutdown via `Bridge.stop()`/`BambuPrinterMQTT.stop()`.
+  Tests: `tests/test_app_lifespan_auth.py`.
 - **BR-6 [ ] Doku überzeichnet „implementiert"** für Cloud-Push/k-Set (hängt an unbestätigtem
   Endpoint / evtl. Dev-Mode). Lösung: in den Docs als „blockiert/gated, ungetestet" labeln
   (Capability-Matrix referenzieren).

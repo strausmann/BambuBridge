@@ -6,11 +6,12 @@ from __future__ import annotations
 
 import logging
 import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -78,6 +79,11 @@ class Bridge:
         onb = self.cfg.get("onboard", {})
         self.auto_create = bool(onb.get("auto_create", False))   # auto-create sort+spool on unknown tag
         self.default_vendor = onb.get("default_vendor", "Bambu Lab")
+
+        # API key for the X-API-Key auth dependency (guideline §8). Empty = auth
+        # disabled (HomeLab profile: rely on a trusted reverse proxy).
+        sec = self.cfg.get("security", {})
+        self.api_key = str(sec.get("api_key") or os.environ.get("BRIDGE_API_KEY") or "")
 
         # live view of trays seen via MQTT, used by the job tracker
         self.live_trays: dict[tuple[str, int, int], Tray] = {}
@@ -368,6 +374,16 @@ class Bridge:
         log.warning("printer %s: no usable transport (need lan.host or bambu_account.token)", p.get("name"))
         return None
 
+    def stop(self) -> None:
+        """Disconnect all MQTT clients (called on app shutdown via lifespan)."""
+        for client in self._printers:
+            try:
+                client.stop()
+            except Exception:  # noqa: BLE001
+                log.exception("stopping client %s failed", getattr(client, "serial", "?"))
+        self._printers.clear()
+        self._clients_by_serial.clear()
+
     # ---- write path (MQTT commands) --------------------------------------
     def _next_seq(self) -> str:
         self._seq += 1
@@ -493,13 +509,59 @@ class Bridge:
             return list(self._pending.values())
 
 
-bridge = Bridge()
-app = FastAPI(title="Bambu↔Spoolman Bridge")
+# The Bridge is created lazily in the lifespan handler (BR-5) so that importing
+# this module — for tests or `uvicorn app.main:app` introspection — does not
+# require a config.yaml or open any MQTT connections.
+bridge: Bridge | None = None
 
 
-@app.on_event("startup")
-def _startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global bridge
+    bridge = Bridge()
+    if not bridge.api_key:
+        log.warning(
+            "No API key configured (security.api_key / BRIDGE_API_KEY) — "
+            "X-API-Key auth is DISABLED. Only run behind a trusted reverse "
+            "proxy (HomeLab profile). See docs/api-guideline.md §8."
+        )
     bridge.start()
+    try:
+        yield
+    finally:
+        bridge.stop()
+        bridge = None
+
+
+app = FastAPI(title="Bambu↔Spoolman Bridge", lifespan=lifespan)
+
+
+# ---- error envelope + auth (guideline §8) --------------------------------
+class APIError(HTTPException):
+    """HTTPException that renders the guideline error envelope
+    ``{"detail": ..., "error_code": ...}``."""
+
+    def __init__(self, status_code: int, error_code: str, detail: str | None = None):
+        super().__init__(status_code=status_code, detail=detail or error_code)
+        self.error_code = error_code
+
+
+@app.exception_handler(APIError)
+async def _api_error_handler(_request, exc: APIError) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail, "error_code": exc.error_code},
+    )
+
+
+def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
+    """Guard for mutating routes. When no key is configured, auth is disabled
+    (HomeLab profile). Otherwise a matching ``X-API-Key`` header is required."""
+    key = bridge.api_key if bridge else ""
+    if not key:
+        return
+    if x_api_key != key:
+        raise APIError(401, "unauthorized")
 
 
 # ---- API models ----------------------------------------------------------
@@ -568,13 +630,13 @@ def api_filaments() -> list[dict]:
     return bridge.spoolman.list_filaments()
 
 
-@app.post("/api/bind")
+@app.post("/api/bind", dependencies=[Depends(require_api_key)])
 def api_bind(req: BindReq) -> dict[str, str]:
     bridge.bind(req.tag_uid, req.spool_id)
     return {"status": "ok"}
 
 
-@app.post("/api/cloud/import")
+@app.post("/api/cloud/import", dependencies=[Depends(require_api_key)])
 def api_cloud_import(req: CloudImportReq) -> dict[str, Any]:
     try:
         return bridge.run_cloud_import(req.source, req.path, req.dry_run)
@@ -618,7 +680,7 @@ def api_printer_ams(serial: str) -> dict[str, Any]:
     return bridge.ams_view(serial)
 
 
-@app.post("/api/cali/set")
+@app.post("/api/cali/set", dependencies=[Depends(require_api_key)])
 def api_cali_set(req: KSetReq) -> dict[str, str]:
     try:
         bridge.set_k(req.serial, req.ams_id, req.tray_id, req.k, req.n)
@@ -634,7 +696,7 @@ def api_kcatalog() -> list[dict]:
     return bridge.kcatalog.all()
 
 
-@app.post("/api/ams/unload")
+@app.post("/api/ams/unload", dependencies=[Depends(require_api_key)])
 def api_unload(req: UnloadReq) -> dict[str, str]:
     try:
         bridge.unload(req.serial, req.ams_id)
@@ -645,13 +707,13 @@ def api_unload(req: UnloadReq) -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/api/slot/stage")
+@app.post("/api/slot/stage", dependencies=[Depends(require_api_key)])
 def api_slot_stage(req: StageReq) -> dict[str, str]:
     bridge.stage_slot(req.serial, req.ams_id, req.tray_id)
     return {"status": "ok"}
 
 
-@app.post("/api/slot/assign")
+@app.post("/api/slot/assign", dependencies=[Depends(require_api_key)])
 def api_slot_assign(req: AssignReq) -> dict[str, Any]:
     try:
         return bridge.assign_to_staged(req.spool_id, req.tag_uid)
@@ -667,7 +729,7 @@ def api_spoolmandb_summary(refresh: bool = False) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"SpoolmanDB fetch failed: {e}")
 
 
-@app.post("/api/spoolmandb/import")
+@app.post("/api/spoolmandb/import", dependencies=[Depends(require_api_key)])
 def api_spoolmandb_import(req: SpoolmanDBImportReq) -> dict[str, Any]:
     try:
         entries = bridge.spoolmandb_entries()
@@ -676,12 +738,12 @@ def api_spoolmandb_import(req: SpoolmanDBImportReq) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"SpoolmanDB import failed: {e}")
 
 
-@app.post("/api/preset/generate")
+@app.post("/api/preset/generate", dependencies=[Depends(require_api_key)])
 def api_preset_generate(req: PresetReq) -> dict[str, Any]:
     return generate_preset(**req.model_dump())
 
 
-@app.post("/api/onboard_auto")
+@app.post("/api/onboard_auto", dependencies=[Depends(require_api_key)])
 def api_onboard_auto(req: TagReq) -> dict[str, Any]:
     try:
         spool_id = bridge.auto_create_by_tag(req.tag_uid)
@@ -690,13 +752,13 @@ def api_onboard_auto(req: TagReq) -> dict[str, Any]:
     return {"status": "ok", "spool_id": spool_id}
 
 
-@app.post("/api/free")
+@app.post("/api/free", dependencies=[Depends(require_api_key)])
 def api_free(req: TagReq) -> dict[str, str]:
     bridge.tags.free_tag(req.tag_uid)
     return {"status": "ok"}
 
 
-@app.post("/api/reassign")
+@app.post("/api/reassign", dependencies=[Depends(require_api_key)])
 def api_reassign(req: ReassignReq) -> dict[str, str]:
     ok, msg = bridge.tags.reassign(req.tag_uid, req.spool_id, req.spool_material)
     if not ok:
@@ -706,7 +768,7 @@ def api_reassign(req: ReassignReq) -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/api/label/{spool_id}")
+@app.post("/api/label/{spool_id}", dependencies=[Depends(require_api_key)])
 def api_label(spool_id: int) -> dict[str, str]:
     bridge._maybe_print_label(spool_id)
     return {"status": "ok"}
