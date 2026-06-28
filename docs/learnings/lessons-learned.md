@@ -2,7 +2,15 @@
 
 Neueste zuerst. Format & Prozess: siehe [`README.md`](README.md) und `.claude/rules/error-handling.md`.
 
-## 2026-06-28 — Schlussfolgerung öffentlich gepostet vor vollständiger Verifikation
+## 2026-06-28 — semantic-release scheiterte am eigenen husky/commitlint-Hook
+- **Was passiert ist:** Der erste `release.yml`-Lauf auf `main` schlug fehl: semantic-release
+  erstellt den Commit `chore(release): 1.0.0 …`, aber der im CI via `npm install` aktivierte
+  **husky `commit-msg`-Hook** ließ commitlint darüber laufen → `body-max-line-length` (100) durch die
+  Changelog-Zeile (Feature-Bullet mit langer Commit-URL) verletzt → Commit + Release abgebrochen.
+- **Root Cause:** husky-Hooks im CI aktiv; sie linten auch den automatisch erzeugten Release-Commit.
+- **Impact:** Kein Tag/Release/CHANGELOG erzeugt (Release-Pipeline rot).
+- **Fix / Prävention:** `HUSKY: 0` als Job-`env` in `release.yml` (Hooks im CI aus). Standardpraxis;
+  betrifft nur den Bot-Commit, nicht die commitlint-Prüfung von Contributor-Commits (eigener Workflow).
 - **Was passiert ist:** Die Aussage „Pangolin nutzt ein veraltetes IronRDP" wurde als
   Schlussfolgerung präsentiert und öffentlich im Issue kommentiert, **bevor** der aktuelle Release
   (1.19.4) konkret geprüft war (erst auf Nachfrage verifiziert).
