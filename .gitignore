@@ -2,6 +2,10 @@ data/
 __pycache__/
 *.pyc
 .venv/
+node_modules/
 
-# Claude Code local settings (kann Secrets enthalten)
-.claude/
+# Claude Code: ignore ALL local .claude/ files (settings.local.json, history,
+# stats, task state, …) EXCEPT the shared, version-controlled project agents/rules.
+.claude/*
+!.claude/agents/
+!.claude/rules/

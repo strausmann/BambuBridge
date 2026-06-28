@@ -1,0 +1,22 @@
+{
+  "name": "bambubridge-tooling",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Dev tooling (commit lint, semantic-release, formatting) for BambuBridge. The application itself is Python (see requirements.txt).",
+  "scripts": {
+    "prepare": "husky",
+    "commitlint": "commitlint --edit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^19.5.0",
+    "@commitlint/config-conventional": "^19.5.0",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "conventional-changelog-conventionalcommits": "^8.0.0",
+    "husky": "^9.1.6",
+    "prettier": "^3.3.3",
+    "semantic-release": "^24.1.0"
+  }
+}
