@@ -1,5 +1,5 @@
 import { expect, test as base, type Page } from "@playwright/test";
-import { BASE_URL, BOOTSTRAP_HEADER, BOOTSTRAP_KEY, RESET_PATH } from "./env";
+import { BASE_URL, BOOTSTRAP_HEADER, BOOTSTRAP_KEY, RESET_HEADERS, RESET_PATH } from "./env";
 
 /**
  * Every test starts from a fresh install (empty database, bootstrap open) and fails on any
@@ -8,7 +8,8 @@ import { BASE_URL, BOOTSTRAP_HEADER, BOOTSTRAP_KEY, RESET_PATH } from "./env";
 const test = base.extend<{ guard: void }>({
   guard: [
     async ({ page, request }, use) => {
-      expect((await request.post(RESET_PATH)).status()).toBe(204);
+      expect(BOOTSTRAP_KEY.length, "E2E_BOOTSTRAP_KEY is set by playwright.config.ts").toBeGreaterThanOrEqual(32);
+      expect((await request.post(RESET_PATH, { headers: RESET_HEADERS })).status()).toBe(204);
       const violations: string[] = [];
       const foreign: string[] = [];
       page.on("console", (message) => {
@@ -103,6 +104,48 @@ test("first start: the bootstrap key creates an admin token, shown exactly once,
   await page.getByRole("link", { name: "Zurück zur Anmeldung" }).click();
   await signIn(page, token);
   await expect(page.getByRole("heading", { name: "Übersicht" })).toBeVisible();
+});
+
+test("the unused admin token is not lost to Back or to a link: the screen asks first", async ({ page }) => {
+  await page.goto("/sign-in");
+  await page.getByRole("link", { name: "Erstes Admin-Token anlegen" }).click();
+  await page.getByLabel("Bootstrap-Schlüssel").fill(BOOTSTRAP_KEY);
+  await page.getByRole("button", { name: "Admin-Token anlegen" }).click();
+  const shown = page.getByTestId("admin-token");
+  await expect(shown).toBeVisible();
+  const token = (await shown.textContent())!;
+
+  await page.goBack();
+  const question = page.getByRole("alertdialog");
+  await expect(question).toContainText("Das Token wird danach nicht mehr angezeigt.");
+  await expect(page.getByRole("button", { name: "Hier bleiben" })).toBeFocused();
+  await shot(page, "bootstrap-leave-question");
+  await page.getByRole("button", { name: "Hier bleiben" }).click();
+  await expect(question).toHaveCount(0);
+  await expect(page).toHaveURL(/\/bootstrap$/);
+  await expect(shown).toHaveText(token);
+
+  // Using the token is not "leaving": no question on the way into the shell.
+  await page.getByRole("button", { name: "Weiter zur Oberfläche" }).click();
+  await expect(page.getByRole("heading", { name: "Übersicht" })).toBeVisible();
+  await expect(question).toHaveCount(0);
+});
+
+test("a return target that resolves to another host or to a server path ends on the overview", async ({ page }) => {
+  const token = await bootstrapToken(page);
+  for (const target of ["/..//evil.example/p", "/.\\/evil.example/p", "/%2e%2e//evil.example/p", "/api/v1/info", "/auth/continue", "/openapi.json", "/docs"]) {
+    await page.goto(`/sign-in?redirect=${encodeURIComponent(target)}`);
+    await signIn(page, token);
+    await expect(page.getByRole("heading", { name: "Übersicht" }), target).toBeVisible();
+    expect(new URL(page.url()).pathname, target).toBe("/");
+    await page.getByRole("button", { name: "Abmelden" }).click();
+    await expect(page.getByRole("heading", { name: "Anmelden" })).toBeVisible();
+  }
+});
+
+test("the reset path of the test server needs its header", async ({ request }) => {
+  expect((await request.post(RESET_PATH)).status()).toBe(403);
+  expect((await request.post(RESET_PATH, { headers: { "X-Requested-With": "reset" } })).status()).toBe(403);
 });
 
 test("a wrong bootstrap key and a wrong token are refused with a message", async ({ page }) => {

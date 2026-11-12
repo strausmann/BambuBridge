@@ -1,5 +1,10 @@
+import { randomBytes } from "node:crypto";
 import { defineConfig, devices } from "@playwright/test";
 import { BASE_URL, PORT } from "./e2e/env";
+
+// One random bootstrap key per run. The server (started below) and the test workers are child
+// processes and inherit it; a worker that loads this file again keeps the value it inherited.
+process.env.E2E_BOOTSTRAP_KEY ??= randomBytes(32).toString("base64url");
 
 // The server under test is the real backend serving the production build on a throw-away
 // PostgreSQL database: `backend/tests/e2e_app.py` (needs BAMBUBRIDGE_TEST_DATABASE_URL).
