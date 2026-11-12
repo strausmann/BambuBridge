@@ -73,19 +73,30 @@ class EventService:
         that lock. So the events of one source carry increasing times in commit order, and a
         consumer never sees a later event of a source before an earlier one. The price: a
         second ``emit`` for the same source waits until the first caller commits or rolls
-        back, so keep the transaction short. A transaction that emits for several sources
-        should do so in a fixed order (two transactions taking the same two sources in
-        opposite order deadlock, and PostgreSQL aborts one of them).
+        back. So emit late in the transaction and commit soon after. All events without a
+        source (``source_instance_id=None``) share one lock and wait for each other in the
+        same way. A transaction that emits for several sources should do so in a fixed order
+        (two transactions taking the same two sources in opposite order deadlock, and
+        PostgreSQL aborts one of them).
 
-        Raises :class:`InvalidEventTypeError` for a type name outside the naming scheme. A
-        missing partition for the current month is a database error (there is no default
-        partition); see :mod:`app.events.partitions`.
+        Raises :class:`InvalidEventTypeError` for a type name outside the naming scheme and
+        ``ValueError`` for a ``payload`` that is not a dict or a ``schema_version`` that is
+        not an integer of at least 1. A missing partition for the current month is a database
+        error (there is no default partition); see :mod:`app.events.partitions`.
         """
         if not isinstance(type, str) or not EVENT_TYPE_PATTERN.fullmatch(type):
             raise InvalidEventTypeError(
                 "event type must match (account|inventory|integration|display)"
                 ".<subject>.<action> in lower case"
             )
+        if not isinstance(payload, dict):
+            raise ValueError("payload must be a dict")
+        if (
+            isinstance(schema_version, bool)
+            or not isinstance(schema_version, int)
+            or schema_version < 1
+        ):
+            raise ValueError("schema_version must be an integer of at least 1")
         await events_repo.lock_source(session, source_instance_id)
         if dedup_key is not None:
             window = int(self._settings.get("events.dedup_window_seconds"))

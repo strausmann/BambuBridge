@@ -149,15 +149,19 @@ async def test_fail_backs_off_and_stops_after_10(service: EventService, db_sessi
     (delivery,) = await outbox.claim(db_session, "sse")
     await db_session.commit()
 
+    async def db_clock() -> datetime:
+        return (await db_session.execute(text("SELECT clock_timestamp()"))).scalar_one()
+
     for attempt in range(1, 10):
+        earliest = await db_clock()
         await outbox.fail(db_session, delivery.id, f"boom {attempt}")
+        latest = await db_clock()
         await db_session.commit()
         row = await _row(db_session, delivery.id)
-        now = (await db_session.execute(text("SELECT clock_timestamp()"))).scalar_one()
-        wait = (row.available_at - now).total_seconds()
         assert (row.status, row.attempts, row.last_error) == ("pending", attempt, f"boom {attempt}")
-        # Retry after 2^attempts seconds.
-        assert 2**attempt - 1.5 < wait <= 2**attempt
+        # Retry after 2^attempts seconds, counted from the moment of the failure.
+        wait = timedelta(seconds=2**attempt)
+        assert earliest + wait <= row.available_at <= latest + wait
         assert await outbox.claim(db_session, "sse") == []
         await db_session.commit()
 
@@ -202,3 +206,14 @@ async def test_fail_stores_at_most_2000_characters_of_the_error(
     await outbox.fail(db_session, delivery.id, "e" * 5000)
     await db_session.commit()
     assert (await _row(db_session, delivery.id)).last_error == "e" * 2000
+
+
+async def test_fail_strips_nul_bytes_from_the_error(
+    service: EventService, db_session: AsyncSession
+):
+    await _emit_committed(service, db_session, 1)
+    (delivery,) = await outbox.claim(db_session, "sse")
+    await outbox.fail(db_session, delivery.id, "bo\x00om\x00")
+    await db_session.commit()
+    row = await _row(db_session, delivery.id)
+    assert (row.last_error, row.attempts) == ("boom", 1)

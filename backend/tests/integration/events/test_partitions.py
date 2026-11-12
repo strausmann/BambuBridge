@@ -9,10 +9,13 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.events import partitions
 from app.events.partitions import PARTITIONED_TABLES, ensure_partitions
+from app.events.service import EventService
 from app.models.event import Event
+from tests.integration.events.conftest import counts, emit
 
 
 async def _partitions(session: AsyncSession, parent: str = "events") -> set[str]:
@@ -137,3 +140,90 @@ async def test_alembic_check_ignores_the_child_partitions(
 
     # Alembic's env runs its own event loop, so it gets a thread of its own.
     await asyncio.to_thread(command.check, alembic_config)
+
+
+async def test_concurrent_ensure_partitions_create_each_partition_once(
+    db_session: AsyncSession, sessions: async_sessionmaker[AsyncSession]
+):
+    names = ["events_y2036m05", "events_y2036m06", "events_y2036m07"]
+    await _drop(db_session, *names)
+    now = datetime(2036, 5, 10, tzinfo=UTC)
+
+    async def one() -> list[str]:
+        async with sessions() as session:
+            created = await ensure_partitions(session, now)
+            await asyncio.sleep(0.05)  # keep the transaction open while the other one runs
+            await session.commit()
+            return created
+
+    results = await asyncio.wait_for(asyncio.gather(one(), one(), one()), timeout=10)
+
+    assert sorted(name for created in results for name in created) == names
+    assert set(names) <= await _partitions(db_session)
+    await _drop(db_session, *names)
+
+
+async def test_ensure_partitions_does_not_wait_for_the_bootstrap_lock(
+    db_session: AsyncSession, session2: AsyncSession
+):
+    await _drop(db_session, "events_y2037m01")
+    # The single-key advisory lock that serialises the first admin token (api_keys repository).
+    await db_session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": 0x6262_0002})
+
+    created = await asyncio.wait_for(
+        ensure_partitions(session2, datetime(2037, 1, 5, tzinfo=UTC), months_ahead=0), timeout=3
+    )
+
+    assert created == ["events_y2037m01"]
+    await session2.rollback()
+    await db_session.rollback()
+
+
+async def test_ensure_partitions_gives_up_when_the_table_is_in_use(
+    service: EventService,
+    db_session: AsyncSession,
+    session2: AsyncSession,
+    sessions: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    await _drop(db_session, "events_y2038m01")
+    monkeypatch.setattr(partitions, "DDL_LOCK_TIMEOUT_SECONDS", 0.5)
+    # A reader keeps its transaction open: the partition DDL needs the table exclusively.
+    await db_session.execute(text("SELECT count(*) FROM events"))
+
+    async def emit_committed() -> None:
+        async with sessions() as session:
+            await emit(service, session)
+            await session.commit()
+
+    ddl = asyncio.create_task(
+        ensure_partitions(session2, datetime(2038, 1, 5, tzinfo=UTC), months_ahead=0)
+    )
+    await asyncio.sleep(0.1)
+    writer = asyncio.create_task(emit_committed())  # queues behind the waiting DDL
+
+    try:
+        with pytest.raises(DBAPIError) as exc:
+            await asyncio.wait_for(ddl, timeout=3)
+        assert getattr(exc.value.orig, "sqlstate", None) == "55P03"  # lock_not_available
+        await asyncio.wait_for(writer, timeout=3)
+    finally:
+        for task in (ddl, writer):
+            task.cancel()
+        await session2.rollback()
+        await db_session.rollback()
+
+    assert await counts(sessions) == (1, 1)
+    assert "events_y2038m01" not in await _partitions(db_session)
+
+
+async def test_ensure_partitions_leaves_the_callers_lock_timeout_alone(db_session: AsyncSession):
+    await _drop(db_session, "events_y2039m01")
+    before = (await db_session.execute(text("SHOW lock_timeout"))).scalar_one()
+
+    assert await ensure_partitions(
+        db_session, datetime(2039, 1, 5, tzinfo=UTC), months_ahead=0
+    ) == ["events_y2039m01"]
+
+    assert (await db_session.execute(text("SHOW lock_timeout"))).scalar_one() == before
+    await db_session.rollback()

@@ -127,9 +127,13 @@ was committed. `emit` does not commit; the caller does.
   LOCKED`, so several workers never get the same one), then call `outbox.complete` or
   `outbox.fail`. A failed delivery is retried after 2, 4, 8 ... seconds and is set to
   `failed` after the tenth attempt.
+  Keep the claim transaction short (claim a batch, hand it on, commit): while it is open,
+  no new monthly partition can be created.
 - **Partitions:** `events` is partitioned by month (`events_y2026m12`). The server creates
   the partitions for the current and the next two months at startup and every day at
-  00:05 UTC. There is no default partition.
+  00:05 UTC. There is no default partition. Creating one needs the table exclusively for a
+  moment; if a long transaction still uses it, the server gives up after 3 seconds and
+  tries again a minute later, so writers are never held up for longer than that.
 
 ## Health checks
 

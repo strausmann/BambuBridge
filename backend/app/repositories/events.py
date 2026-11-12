@@ -10,15 +10,17 @@ from collections.abc import Iterable, Sequence
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, insert, select, text, tuple_
+from sqlalchemy import Select, func, insert, select, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.event import Event
 from app.models.event_delivery import EventDelivery
 
-# First key of the two-key advisory lock form, so the per-source locks share no key space
-# with the single-key locks used elsewhere ("bbev").
-_SOURCE_LOCK_NAMESPACE = 0x6262_6576
+# First key of the two-key advisory lock form ("bbev"): the locks of the event core share
+# no key space with the single-key locks used elsewhere. The second key is ``hashtext`` of
+# the source for the per-source locks and a fixed number for anything else (see
+# ``app.events.partitions``).
+EVENTS_LOCK_NAMESPACE = 0x6262_6576
 
 
 async def lock_source(session: AsyncSession, source_instance_id: uuid.UUID | None) -> None:
@@ -30,9 +32,33 @@ async def lock_source(session: AsyncSession, source_instance_id: uuid.UUID | Non
     await session.execute(
         text("SELECT pg_advisory_xact_lock(:namespace, hashtext(:source))"),
         {
-            "namespace": _SOURCE_LOCK_NAMESPACE,
+            "namespace": EVENTS_LOCK_NAMESPACE,
             "source": "" if source_instance_id is None else str(source_instance_id),
         },
+    )
+
+
+def duplicate_query(
+    *, source_instance_id: uuid.UUID | None, dedup_key: str, window_seconds: int
+) -> Select[uuid.UUID]:
+    """Lookup of an event of the source with this ``dedup_key`` in the last seconds.
+
+    The lower time bound uses ``statement_timestamp()``, not ``clock_timestamp()``: it is
+    fixed for the statement, so PostgreSQL leaves out the partitions older than the window
+    and can use the ``(source_instance_id, occurred_at)`` index for the range. A volatile
+    clock would make every call scan the whole history of the source. The statement starts
+    after :func:`lock_source` returned, so no earlier event of the source can be later than it.
+    """
+    same_source = (
+        Event.source_instance_id.is_(None)
+        if source_instance_id is None
+        else Event.source_instance_id == source_instance_id
+    )
+    since = func.statement_timestamp() - func.make_interval(0, 0, 0, 0, 0, 0, window_seconds)
+    return (
+        select(Event.id)
+        .where(same_source, Event.dedup_key == dedup_key, Event.occurred_at > since)
+        .limit(1)
     )
 
 
@@ -44,16 +70,12 @@ async def duplicate_exists(
     window_seconds: int,
 ) -> bool:
     """Whether the source wrote an event with this ``dedup_key`` in the last seconds."""
-    same_source = (
-        Event.source_instance_id.is_(None)
-        if source_instance_id is None
-        else Event.source_instance_id == source_instance_id
-    )
-    since = func.clock_timestamp() - func.make_interval(0, 0, 0, 0, 0, 0, window_seconds)
     found = await session.scalar(
-        select(Event.id)
-        .where(same_source, Event.dedup_key == dedup_key, Event.occurred_at > since)
-        .limit(1)
+        duplicate_query(
+            source_instance_id=source_instance_id,
+            dedup_key=dedup_key,
+            window_seconds=window_seconds,
+        )
     )
     return found is not None
 

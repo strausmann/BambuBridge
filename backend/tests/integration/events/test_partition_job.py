@@ -177,3 +177,48 @@ async def test_app_ensures_partitions_at_startup_and_has_an_event_service(
 def _ym(index: int) -> tuple[int, int]:
     year, month0 = divmod(index, 12)
     return year, month0 + 1
+
+
+async def test_stop_survives_a_task_that_died(
+    sessions: async_sessionmaker[AsyncSession], caplog: pytest.LogCaptureFixture
+):
+    async def broken_sleep(_seconds: float) -> None:
+        raise RuntimeError("detail that must stay out of the log")
+
+    job = PartitionMaintenance(sessions, sleep=broken_sleep)
+    await job.start()
+    for _ in range(200):
+        if job._task is not None and job._task.done():
+            break
+        await asyncio.sleep(0.01)
+
+    with caplog.at_level(logging.ERROR, logger="app.events.partitions"):
+        await job.stop()  # must not raise: the shutdown steps after it still have to run
+
+    assert [r.getMessage() for r in caplog.records] == [
+        "partition maintenance task ended unexpectedly (RuntimeError)"
+    ]
+    assert job._task is None
+
+
+async def test_job_reports_a_lock_timeout_and_keeps_going(
+    sessions: async_sessionmaker[AsyncSession],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    now = datetime(2040, 1, 5, tzinfo=UTC)
+    await _drop(sessions, "events_y2040m01", "events_y2040m02", "events_y2040m03")
+    monkeypatch.setattr(partitions, "DDL_LOCK_TIMEOUT_SECONDS", 0.3)
+    await db_session.execute(text("SELECT count(*) FROM events"))
+    job = PartitionMaintenance(sessions, clock=lambda: now)
+
+    with caplog.at_level(logging.ERROR, logger="app.events.partitions"):
+        assert await asyncio.wait_for(job.run_once(), timeout=3) is False
+    assert [r.getMessage() for r in caplog.records] == [
+        "partition maintenance failed (DBAPIError, SQLSTATE 55P03)"
+    ]
+
+    await db_session.rollback()
+    assert await job.run_once() is True
+    await _drop(sessions, "events_y2040m01", "events_y2040m02", "events_y2040m03")

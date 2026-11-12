@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
+from datetime import UTC, datetime
+from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.events import outbox
 from app.events import service as service_module
+from app.events.partitions import ensure_partitions, partition_name
 from app.events.service import EventService, InvalidEventTypeError, register_subscriber
 from app.models.event import Event
 from app.models.event_delivery import EventDelivery
+from app.repositories import events as events_repo
 from app.settings_store.store import SettingsStore
 from tests.integration.events.conftest import EVENT_TYPE, SOURCE_A, SOURCE_B, counts, emit
 
@@ -250,3 +256,91 @@ async def test_emit_waits_for_an_open_emit_of_the_same_source_only(
     claimed = await outbox.claim(db_session, "sse")
     by_source = [d.event.payload["n"] for d in claimed if d.event.source_instance_id == SOURCE_A]
     assert by_source == [1, 3]
+
+
+async def test_concurrent_emits_with_one_dedup_key_write_one_event(
+    service: EventService, sessions: async_sessionmaker[AsyncSession]
+):
+    async def one() -> uuid.UUID | None:
+        async with sessions() as session:
+            event_id = await emit(service, session, dedup_key="same")
+            await asyncio.sleep(0.05)  # both transactions are open at the same time
+            await session.commit()
+            return event_id
+
+    results = await asyncio.gather(one(), one())
+
+    assert sorted(r is None for r in results) == [False, True]
+    assert await counts(sessions) == (1, 1)
+
+
+def _relations(node: dict[str, Any]) -> set[str]:
+    found = {node["Relation Name"]} if "Relation Name" in node else set()
+    for child in node.get("Plans", []):
+        found |= _relations(child)
+    return found
+
+
+async def test_dedup_lookup_reads_only_the_partitions_of_the_window(db_session: AsyncSession):
+    now = datetime.now(UTC)
+    index = now.year * 12 + now.month - 1
+
+    def name(offset: int) -> str:
+        return partition_name("events", (index + offset) // 12, (index + offset) % 12 + 1)
+
+    # Partitions of the three months before this one, as a server running for a while has.
+    await ensure_partitions(
+        db_session, datetime((index - 3) // 12, (index - 3) % 12 + 1, 1, tzinfo=UTC)
+    )
+    await db_session.commit()
+    statement = events_repo.duplicate_query(
+        source_instance_id=SOURCE_A, dedup_key="k", window_seconds=60
+    ).compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
+
+    raw = (await db_session.execute(text(f"EXPLAIN (FORMAT JSON) {statement}"))).scalar_one()
+    plan = (json.loads(raw) if isinstance(raw, str) else raw)[0]["Plan"]
+
+    # The lower time bound is fixed when the statement starts, so the partitions that end
+    # before the window are left out. (The month just before this one is not asserted: in
+    # the first minute of a month it is part of the window.)
+    scanned = _relations(plan)
+    assert name(0) in scanned, plan
+    assert not scanned & {name(-3), name(-2)}, scanned
+
+
+@pytest.mark.parametrize("payload", [None, [], "text", 3, [("a", 1)]])
+async def test_emit_rejects_a_payload_that_is_not_a_dict(
+    payload: object,
+    service: EventService,
+    db_session: AsyncSession,
+    sessions: async_sessionmaker[AsyncSession],
+):
+    with pytest.raises(ValueError, match="payload"):
+        await service.emit(
+            db_session,
+            type=EVENT_TYPE,
+            source_instance_id=SOURCE_A,
+            payload=payload,  # type: ignore[arg-type]
+            schema_version=1,
+        )
+    await db_session.commit()
+    assert await counts(sessions) == (0, 0)
+
+
+@pytest.mark.parametrize("version", [0, -1, True, False, 1.0, "1", None])
+async def test_emit_rejects_a_schema_version_that_is_not_a_positive_int(
+    version: object,
+    service: EventService,
+    db_session: AsyncSession,
+    sessions: async_sessionmaker[AsyncSession],
+):
+    with pytest.raises(ValueError, match="schema_version"):
+        await service.emit(
+            db_session,
+            type=EVENT_TYPE,
+            source_instance_id=SOURCE_A,
+            payload={},
+            schema_version=version,  # type: ignore[arg-type]
+        )
+    await db_session.commit()
+    assert await counts(sessions) == (0, 0)

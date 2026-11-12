@@ -4,6 +4,12 @@ Nothing here commits. The rows returned by :func:`claim` stay locked until the c
 transaction ends, so a worker claims, processes, calls :func:`complete` / :func:`fail` and
 commits. If it rolls back or dies instead, the deliveries are simply pending again.
 
+Keep that transaction short (claim a batch, hand it on, commit): besides the row locks it
+holds a read lock on ``events``, and creating a monthly partition needs that table
+exclusively for a moment. Partition upkeep gives up after a few seconds and tries again a
+minute later (see :mod:`app.events.partitions`), so a claim transaction that stays open for
+long keeps new partitions from being created.
+
 Order: :func:`claim` returns deliveries by event time, then delivery id. A delivery that
 failed comes back only after its wait, so it can be overtaken by later ones; and two workers
 of one subscriber get disjoint batches whose relative order is up to them.
@@ -107,9 +113,8 @@ async def fail(session: AsyncSession, id: int, error: str) -> None:  # noqa: A00
 
     It becomes due again after ``2^attempts`` seconds (2 s after the first failure, 512 s
     after the ninth); the tenth failure sets it to ``failed`` for good. ``error`` is stored
-    in ``last_error`` (first 2000 characters): pass a short reason, never payload contents
-    or secrets.
+    in ``last_error`` (first 2000 characters, NUL bytes removed because PostgreSQL text
+    cannot hold them): pass a short reason, never payload contents or secrets.
     """
-    await session.execute(
-        _FAIL, {"id": id, "error": error[:MAX_ERROR_LENGTH], "max_attempts": MAX_ATTEMPTS}
-    )
+    reason = error.replace("\x00", "")[:MAX_ERROR_LENGTH]
+    await session.execute(_FAIL, {"id": id, "error": reason, "max_attempts": MAX_ATTEMPTS})
