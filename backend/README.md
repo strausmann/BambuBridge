@@ -15,3 +15,12 @@ export BAMBUBRIDGE_TEST_DATABASE_URL=postgresql+asyncpg://postgres:test@localhos
 
 Migrations: `uv run alembic upgrade head` and `uv run alembic check` (reads `BAMBUBRIDGE_DATABASE_URL`).
 The container entrypoint runs `alembic upgrade head` before it starts the server.
+
+## Rotating the secret key
+
+Secrets in the database (`app_settings.secret_token`) are sealed with `BAMBUBRIDGE_SECRET_KEY`.
+To change the key, set the new value as `BAMBUBRIDGE_SECRET_KEY` and the previous one as
+`BAMBUBRIDGE_SECRET_KEY_OLD`, then run `bambubridge secrets rotate`. All secrets are re-encrypted
+in one transaction (nothing changes if one cannot be opened); afterwards remove
+`BAMBUBRIDGE_SECRET_KEY_OLD` and start the server. The old key is read by this command only, never
+by the server. Without the old key the command exits with status 2.

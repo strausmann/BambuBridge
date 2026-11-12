@@ -1,0 +1,278 @@
+"""Runtime settings store.
+
+The database is the only source: there is no environment override. Plain values are read
+into memory by :meth:`SettingsStore.load`; secrets are opened with the :class:`SecretBox`
+and are never returned by :meth:`SettingsStore.describe` (only ``set`` and
+``undecryptable``). A secret that cannot be opened (another ``BAMBUBRIDGE_SECRET_KEY``,
+damaged token) is reported as such and reads as ``None``; it never raises at load time.
+
+:meth:`SettingsStore.set_many` writes and issues ``pg_notify`` in the same transaction, so
+other instances (see :mod:`app.settings_store.listener`) reload after the commit.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import delete, select, text
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.app_setting import AppSetting
+from app.security.secret_box import SealedSecret, SecretBox, UndecryptableSecretError
+from app.settings_store.registry import (
+    SETTINGS,
+    InvalidSettingValueError,
+    SettingDef,
+    SettingsError,
+    SettingType,
+    UnknownSettingError,
+    validate_value,
+)
+
+CHANNEL = "bambubridge_settings"
+
+_log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SettingView:
+    """What the API may show about a setting. ``value`` is always ``None`` for secrets."""
+
+    key: str
+    type: SettingType
+    section: str
+    value: Any
+    default: Any
+    set: bool
+    undecryptable: bool
+    min: int | None
+    max: int | None
+    choices: tuple[str, ...] | None
+
+
+class SettingsStore:
+    def __init__(self, box: SecretBox) -> None:
+        self._box = box
+        self._values: dict[str, Any] = {}
+        self._secrets: dict[str, str] = {}
+        self._secret_present: set[str] = set()
+        self._undecryptable: set[str] = set()
+        self._subscribers: list[Callable[[set[str]], None]] = []
+
+    # -- subscribers --------------------------------------------------------
+
+    def subscribe(self, callback: Callable[[set[str]], None]) -> None:
+        """``callback(changed_keys)`` runs after a change, local or loaded from the database."""
+        self._subscribers.append(callback)
+
+    def _notify(self, keys: set[str]) -> None:
+        for callback in list(self._subscribers):
+            try:
+                callback(set(keys))
+            except Exception as exc:
+                # Type name only: a subscriber's message could carry a setting value.
+                _log.error("settings subscriber %r failed (%s)", callback, type(exc).__name__)
+
+    # -- reading ------------------------------------------------------------
+
+    @staticmethod
+    def _definition(key: str) -> SettingDef:
+        d = SETTINGS.get(key)
+        if d is None:
+            raise UnknownSettingError("unknown setting key", keys=[key])
+        return d
+
+    def get(self, key: str) -> Any:
+        """Effective value of a plain setting (stored value or default)."""
+        d = self._definition(key)
+        if d.type == "secret":
+            raise TypeError(f"{key} is a secret; read it with secret()")
+        return self._values.get(key, d.default)
+
+    def secret(self, key: str) -> str | None:
+        """Plaintext of a secret; ``None`` if unset, empty or undecryptable."""
+        d = self._definition(key)
+        if d.type != "secret":
+            raise TypeError(f"{key} is not a secret; read it with get()")
+        return self._secrets.get(key) or None
+
+    def describe(self) -> list[SettingView]:
+        views: list[SettingView] = []
+        for key, d in SETTINGS.items():
+            is_secret = d.type == "secret"
+            views.append(
+                SettingView(
+                    key=key,
+                    type=d.type,
+                    section=d.section,
+                    value=None if is_secret else self.get(key),
+                    default=None if is_secret else d.default,
+                    set=key in self._secret_present if is_secret else key in self._values,
+                    undecryptable=key in self._undecryptable,
+                    min=d.min,
+                    max=d.max,
+                    choices=d.choices,
+                )
+            )
+        return views
+
+    # -- loading ------------------------------------------------------------
+
+    async def load(self, session: AsyncSession) -> None:
+        """Replace the in-memory state with the database content."""
+        values: dict[str, Any] = {}
+        secrets: dict[str, str] = {}
+        present: set[str] = set()
+        undecryptable: set[str] = set()
+        for row in (await session.execute(select(AppSetting))).scalars():
+            d = SETTINGS.get(row.key)
+            if d is None:
+                continue
+            if d.type == "secret":
+                if row.secret_token is None or row.secret_key_id is None:
+                    continue
+                present.add(row.key)
+                try:
+                    sealed = SealedSecret(row.secret_key_id, row.secret_token)
+                    secrets[row.key] = self._box.open(sealed, aad=row.key)
+                except UndecryptableSecretError:
+                    undecryptable.add(row.key)
+                    _log.warning("stored secret %s cannot be decrypted", row.key)
+                continue
+            if row.value is None:
+                continue
+            try:
+                values[row.key] = validate_value(d, row.value)
+            except SettingsError:
+                _log.warning("ignoring invalid stored setting %s", row.key)
+        self._values, self._secrets = values, secrets
+        self._secret_present, self._undecryptable = present, undecryptable
+
+    def _snapshot(self) -> dict[str, Any]:
+        snap: dict[str, Any] = {}
+        for key, d in SETTINGS.items():
+            if d.type == "secret":
+                snap[key] = (
+                    key in self._secret_present,
+                    key in self._undecryptable,
+                    self._secrets.get(key),
+                )
+            else:
+                snap[key] = self.get(key)
+        return snap
+
+    async def reload_and_notify(self, session: AsyncSession) -> set[str]:
+        """:meth:`load`, then tell subscribers which settings differ from before."""
+        before = self._snapshot()
+        await self.load(session)
+        after = self._snapshot()
+        changed = {key for key in SETTINGS if before[key] != after[key]}
+        if changed:
+            self._notify(changed)
+        return changed
+
+    # -- writing ------------------------------------------------------------
+
+    async def set_many(self, session: AsyncSession, values: dict[str, Any]) -> None:
+        """Validate, write and ``pg_notify`` in one transaction, then commit.
+
+        ``None`` resets a plain setting to its default; ``None`` or ``""`` clears a secret.
+        All-or-nothing: an invalid value or a database error changes nothing.
+        """
+        unknown = sorted(k for k in values if k not in SETTINGS)
+        if unknown:
+            raise UnknownSettingError("unknown setting key", keys=unknown)
+        clean: dict[str, Any] = {}
+        for key, value in values.items():
+            d = SETTINGS[key]
+            clean[key] = None if value is None else validate_value(d, value)
+        if not clean:
+            return
+
+        now = datetime.now(UTC)
+        sealed: dict[str, SealedSecret] = {}
+        to_delete: list[str] = []
+        rows: list[dict[str, Any]] = []
+        for key, value in clean.items():
+            d = SETTINGS[key]
+            if value is None or (d.type == "secret" and value == ""):
+                to_delete.append(key)
+            elif d.type == "secret":
+                sealed[key] = self._box.seal(value, aad=key)
+                rows.append(
+                    {
+                        "key": key,
+                        "value": None,
+                        "secret_token": sealed[key].token,
+                        "secret_key_id": sealed[key].key_id,
+                        "updated_at": now,
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "key": key,
+                        "value": value,
+                        "secret_token": None,
+                        "secret_key_id": None,
+                        "updated_at": now,
+                    }
+                )
+
+        try:
+            if to_delete:
+                await session.execute(delete(AppSetting).where(AppSetting.key.in_(to_delete)))
+            if rows:
+                stmt = insert(AppSetting).values(rows)
+                await session.execute(
+                    stmt.on_conflict_do_update(
+                        index_elements=[AppSetting.key],
+                        set_={
+                            "value": stmt.excluded.value,
+                            "secret_token": stmt.excluded.secret_token,
+                            "secret_key_id": stmt.excluded.secret_key_id,
+                            "updated_at": stmt.excluded.updated_at,
+                        },
+                    )
+                )
+            # pg_notify is NOTIFY with bound parameters; delivered when the transaction commits.
+            await session.execute(
+                text("select pg_notify(:channel, :payload)"),
+                {"channel": CHANNEL, "payload": json.dumps(sorted(clean))},
+            )
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+        for key, value in clean.items():
+            d = SETTINGS[key]
+            if d.type == "secret":
+                self._undecryptable.discard(key)
+                if value == "" or value is None:
+                    self._secrets.pop(key, None)
+                    self._secret_present.discard(key)
+                else:
+                    self._secrets[key] = value
+                    self._secret_present.add(key)
+            elif value is None:
+                self._values.pop(key, None)
+            else:
+                self._values[key] = value
+        self._notify(set(clean))
+
+
+__all__ = [
+    "CHANNEL",
+    "InvalidSettingValueError",
+    "SettingView",
+    "SettingsError",
+    "SettingsStore",
+    "UnknownSettingError",
+]

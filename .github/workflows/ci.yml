@@ -61,3 +61,6 @@ jobs:
 
       - name: Tests with branch coverage
         run: uv run pytest --cov=app --cov-branch --cov-report=term-missing --cov-fail-under=80
+
+      - name: Coverage gate for auth and security code (at least 90 %)
+        run: uv run coverage report --include='app/auth/*,app/security/*' --fail-under=90

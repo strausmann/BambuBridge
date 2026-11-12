@@ -81,6 +81,10 @@ warn_unused_ignores = true
 show_error_codes = true
 disallow_untyped_decorators = false   # FastAPI/pytest decorators
 
+[[tool.mypy.overrides]]
+module = ["asyncpg", "asyncpg.*"]
+ignore_missing_imports = true   # asyncpg ships no type information
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

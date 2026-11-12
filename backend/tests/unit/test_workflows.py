@@ -36,3 +36,9 @@ def test_ci_cancels_only_pull_request_runs():
     text = (WORKFLOWS / "ci.yml").read_text()
     assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
     assert "cancel-in-progress: true" not in text
+
+
+def test_ci_gates_auth_and_security_coverage_at_90_percent():
+    # Text scan (see module docstring): the property is the literal command.
+    text = (WORKFLOWS / "ci.yml").read_text()
+    assert "coverage report --include='app/auth/*,app/security/*' --fail-under=90" in text
