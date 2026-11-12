@@ -24,12 +24,17 @@ from app.auth.dependencies import SCOPE_MARKER
 from app.config import Settings
 from app.main import create_app
 
-# The only operations that may be called without a token or session.
+# The only operations that may be called without a token or session. ``/auth/continue``
+# authenticates itself (session or identity provider); ``/docs`` and ``/openapi.json`` are
+# the public API description.
 PUBLIC_OPERATIONS: frozenset[tuple[str, str]] = frozenset(
     {
         ("get", "/healthz"),
         ("post", "/api/v1/auth/session"),
         ("get", "/api/v1/info"),
+        ("get", "/auth/continue"),
+        ("get", "/docs"),
+        ("get", "/openapi.json"),
     }
 )
 KEY_SCHEME = "BambuBridgeKey"
@@ -170,3 +175,16 @@ def test_every_non_public_route_is_guarded_by_a_scope_dependency(
     assert unguarded == [], "routes without require_scope/require_admin_or_bootstrap:\n" + (
         "\n".join(unguarded)
     )
+
+
+def test_session_and_settings_routes_declare_their_scopes(schema: dict[str, Any]):
+    expected = {
+        ("get", "/api/v1/auth/session"): ["read"],
+        ("delete", "/api/v1/auth/session"): ["read"],
+        ("get", "/api/v1/settings"): ["admin"],
+        ("put", "/api/v1/settings"): ["admin"],
+        ("get", "/readiness"): ["read"],
+    }
+    found = {(m, p): _declared_scopes(op) for m, p, op in _operations(schema)}
+    for operation, scopes in expected.items():
+        assert found.get(operation) == scopes, operation

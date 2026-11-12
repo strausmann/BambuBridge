@@ -19,6 +19,9 @@ The container entrypoint runs `alembic upgrade head` before it starts the server
 ## Rotating the secret key
 
 Secrets in the database (`app_settings.secret_token`) are sealed with `BAMBUBRIDGE_SECRET_KEY`.
+The key is a master key and is never used directly: AES-GCM for stored secrets, the CSRF tokens
+and the session binding each use their own sub-key derived with HKDF-SHA256. The key id stored
+next to a sealed secret identifies the master key, so rotation works on the master key alone.
 To change the key:
 
 1. **Stop the server.** A running server holds the old key; after the rotation it would report
@@ -47,7 +50,10 @@ The first admin token comes from one of two places:
   long as an enabled, unexpired token with scope `admin` exists, bootstrap answers 403
   `bootstrap_closed`. If the user `admin` is disabled or no longer has the role `admin`,
   bootstrap refuses with `bootstrap_owner_disabled` / `bootstrap_owner_not_admin` instead of
-  issuing a token that could not be used.
+  issuing a token that could not be used. Each client address may present five wrong
+  bootstrap keys per minute; after that it gets 429 without the key being compared, also for
+  the right key. While the variable is set and bootstrap is open, the server logs a warning at
+  start: create the first admin token, then remove `BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY`.
 - **CLI:** `bambubridge admin create-key --scope admin --name NAME` (reads
   `BAMBUBRIDGE_DATABASE_URL`) prints the token once on stdout.
 
@@ -56,14 +62,62 @@ requests get 429 with `Retry-After`. Failed checks (wrong token bodies) have a s
 budget per presented prefix (10 per minute, then 429; the same for unknown prefixes, so the
 answer does not reveal whether a prefix exists). The budget changes the status code of a
 failed check, not its cost: every attempt is checked with bcrypt, so a correct token is always
-accepted, even while its prefix is under attack. At most four bcrypt checks run at once; further
+accepted, even while its prefix is under attack. In addition each client address has a budget of
+30 failed checks per minute: an address over it gets 429 before any bcrypt work, for every
+prefix alike. This only throttles the guessing address; a correct token from any other address,
+or from the same address while under budget, is still checked and accepted, and a token verified
+in the last five minutes is accepted even from an address over budget. IPv4 clients are counted
+per address (IPv4-mapped IPv6 as IPv4), IPv6 clients per /64 network. A request without a usable
+client address skips this per-client check (the per-prefix budget still applies), so such
+clients never share one bucket. The client address is the forwarded one, trusted only from the
+single proxy address in `FORWARDED_ALLOW_IPS`. If that setting does not match your proxy, every
+client appears as the proxy's own address and all of them share one budget: one guesser then
+throttles everyone, so check it when all clients get 429 at once.
+Browser sign-ins (`POST /api/v1/auth/session`, `GET /auth/continue`) are limited per client address
+by the setting `auth.sign_in_limit_per_minute` (clients without a usable address share one
+sign-in bucket). At most four bcrypt checks run at once; further
 requests queue. Protecting CPU against request floods is the job of the reverse proxy in front of
-BambuBridge. The counters live in process memory: they are per process and start fresh after a restart.
+BambuBridge. Request bodies are limited to 64 KiB: a larger `Content-Length`, or a chunked body that
+grows past it, is refused with 413 before any handler or credential check runs. The request
+header block and chunked trailers are limited to 64 KiB by the HTTP server (larger: 400 and the
+connection is closed). The counters live in process memory: they are per process and start fresh
+after a restart.
 `last_used_at` is updated at most once per minute.
 
 Errors are problem details (`application/problem+json`) with a stable `error_code`, for example
 `not_authenticated`, `invalid_token`, `token_expired`, `token_disabled`, `owner_disabled`,
 `insufficient_scope`, `rate_limited`, `invalid_bootstrap_key`, `bootstrap_closed`,
 `validation_failed` (field locations and messages only, never the submitted values),
-`not_found`, `method_not_allowed`, `database_unavailable` (the database cannot be reached)
+`not_found`, `method_not_allowed`, `payload_too_large` (request body over 64 KiB), `database_unavailable` (the database cannot be reached)
 and `internal_error` (anything else; details only in the server log).
+
+## Browser sessions
+
+A browser signs in with a token (`POST /api/v1/auth/session`) or through the trusted SSO header
+(`GET /auth/continue`). Sessions last 12 hours. Each user has at most 20 active sessions per
+credential: one API token is one credential, and all identity-provider (SSO) sign-ins of the user
+together are another. A new sign-in over the cap revokes the oldest session of the same
+credential only, so a token, even one with scope `read`, can never sign the operator out of a
+session opened with another token or with SSO. In total a user can hold at most
+20 × (number of the user's API tokens + 1) active sessions.
+
+`GET /auth/continue` without a valid session cookie opens a new SSO session each time. The
+session cookie is `SameSite=Strict`, so a link from another site that leads a signed-in browser
+there also opens a new session. This is accepted: only the session token's hash is stored, so an
+existing session cannot be handed out again; new sessions count against
+`auth.sign_in_limit_per_minute`; and because the cap is per credential, the churn only rotates
+that user's own SSO sessions.
+
+## Health checks
+
+`GET /healthz` needs no credentials and answers 200 while the process runs. `GET /readiness`
+needs scope `read` and checks the database and the settings listener: 200 when both are up,
+otherwise 503 naming the part that is down. The credential check is bounded to 3 seconds; under a
+flood of invalid tokens it can run out of that time, and `/readiness` then answers 503 with
+`database: unavailable`. It never answers 200 to a request without a valid credential. `HEAD` is
+answered wherever `GET` is, with the same status and headers and no body.
+
+## Reverse proxy
+
+BambuBridge does not set `Strict-Transport-Security`. HSTS belongs to the TLS-terminating
+reverse proxy in front of it (Traefik, Pangolin): set it there for the public host name.

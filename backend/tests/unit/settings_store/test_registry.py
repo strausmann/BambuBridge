@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Collection
+
 import pytest
 
+import app.auth.identity  # noqa: F401 - registers the providers the default names
 from app.settings_store.registry import (
     SETTINGS,
     SSO_USER_HEADERS,
     InvalidSettingValueError,
     SettingDef,
+    allowed_choices,
+    set_choices_source,
     validate_value,
 )
 from app.settings_store.store import SettingsStore
@@ -22,6 +27,7 @@ def test_registry_matches_the_specified_defaults_and_bounds():
         "sso.trust_header": ("str", "X-Pangolin-Token", None, None),
         "sso.trust_token": ("secret", "", 32, None),
         "auth.sign_in_limit_per_minute": ("int", 10, 1, 600),
+        "auth.identity_providers": ("choices", ["pangolin_header"], None, None),
         "retention.events_days": ("int", 90, 1, 3650),
         "retention.communication_days": ("int", 30, 1, 3650),
         "events.dedup_window_seconds": ("int", 600, 0, 86400),
@@ -80,10 +86,12 @@ def test_url_rejects_other_schemes_credentials_and_junk(bad: object):
     assert "pw" not in str(e.value)
 
 
-def test_secret_may_be_empty_and_is_not_stripped():
+def test_secret_may_be_empty_and_is_never_silently_stripped():
     secret = SETTINGS["sso.trust_token"]
     assert validate_value(secret, "") == ""
-    assert validate_value(secret, " " + "a" * 40) == " " + "a" * 40
+    # Edge spaces are refused (see below), not stripped: the stored value is what was sent.
+    with pytest.raises(InvalidSettingValueError):
+        validate_value(secret, " " + "a" * 40)
     with pytest.raises(InvalidSettingValueError):
         validate_value(secret, "a" * 4097)
 
@@ -108,3 +116,84 @@ def test_the_url_binding_guard_does_fire_for_a_url_setting():
     # Counter-check of the guard above: with a url setting present it reports it.
     with_url = {**SETTINGS, "x.url": URL}
     assert _url_settings_without_binding(with_url) == ["x.url"]
+
+
+@pytest.fixture
+def choice_source():
+    """Register choice sources for test-only keys and remove them afterwards."""
+    from app.settings_store import registry as settings_registry
+
+    keys: list[str] = []
+    before = dict(settings_registry._CHOICE_SOURCES)
+
+    def register(key: str, source: Callable[[], Collection[str]]) -> None:
+        keys.append(key)
+        set_choices_source(key, source)
+
+    try:
+        yield register
+    finally:
+        for key in keys:
+            settings_registry._CHOICE_SOURCES.pop(key, None)
+    # Checked here, not in a separate test: a test's outcome must not depend on the order
+    # in which the tests run.
+    assert before == settings_registry._CHOICE_SOURCES
+
+
+def test_choices_validated_against_the_current_source(choice_source):
+    d = SettingDef("x.list", "choices", [], "x")
+    with pytest.raises(InvalidSettingValueError):
+        validate_value(d, ["a"])  # no source: nothing is allowed
+    assert validate_value(d, []) == []
+    allowed = {"a", "b"}
+    choice_source("x.list", lambda: sorted(allowed))
+    assert validate_value(d, ["b", "a"]) == ["b", "a"]
+    assert allowed_choices(d) == ("a", "b")
+    allowed.add("c")  # registered later: valid without a restart
+    assert validate_value(d, ["c"]) == ["c"]
+
+
+@pytest.mark.parametrize("bad", ["a", ["a", "a"], [1], ["zzz"], ["a"] * 33, None, {"a": 1}])
+def test_choices_rejects(bad: object, choice_source):
+    d = SettingDef("x.list2", "choices", [], "x")
+    choice_source("x.list2", lambda: ["a"])
+    with pytest.raises(InvalidSettingValueError) as e:
+        validate_value(d, bad)
+    assert "zzz" not in str(e.value)
+
+
+def test_identity_providers_choices_are_the_registered_kinds():
+    from app.auth.identity import registry
+
+    assert allowed_choices(SETTINGS["auth.identity_providers"]) == registry.kinds()
+    assert "pangolin_header" in registry.kinds()
+
+
+@pytest.mark.parametrize("name", ["X Pangolin", "X-Token:", "", "X\tY", "Ä-Token", "(x)", "a/b"])
+def test_trust_header_must_be_a_token_name(name: str):
+    with pytest.raises(InvalidSettingValueError) as e:
+        validate_value(SETTINGS["sso.trust_header"], name)
+    if name:
+        assert name not in str(e.value)
+
+
+@pytest.mark.parametrize("name", ["X-Pangolin-Token", "x_trust", "X-A.B~1!#$%&'*+^`|"])
+def test_trust_header_accepts_token_names(name: str):
+    assert validate_value(SETTINGS["sso.trust_header"], name) == name
+
+
+@pytest.mark.parametrize("edge", [" ", "   "])
+@pytest.mark.parametrize("where", ["leading", "trailing"])
+def test_secret_with_edge_whitespace_is_refused(edge: str, where: str):
+    # Audit H6: the presented header value is stripped, so an edge space never matches.
+    core = "t" * 40
+    value = edge + core if where == "leading" else core + edge
+    with pytest.raises(InvalidSettingValueError) as e:
+        validate_value(SETTINGS["sso.trust_token"], value)
+    assert core not in str(e.value)
+    assert "space" in str(e.value)
+
+
+def test_secret_with_inner_space_is_kept():
+    value = "t" * 20 + " " + "t" * 20
+    assert validate_value(SETTINGS["sso.trust_token"], value) == value

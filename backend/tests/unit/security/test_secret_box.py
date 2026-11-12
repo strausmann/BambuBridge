@@ -11,6 +11,7 @@ from app.security.secret_box import (
     SecretBox,
     UndecryptableSecretError,
     key_id_for,
+    secret_box_from_key,
     secret_box_from_settings,
 )
 
@@ -117,3 +118,29 @@ def test_from_settings_uses_the_configured_key(settings: Settings):
     raw = base64.urlsafe_b64decode(settings.secret_key.get_secret_value())
     assert box.active_key_id == key_id_for(raw)
     assert box.open(box.seal("v", aad="k"), aad="k") == "v"
+
+
+def test_box_encrypts_with_a_derived_key_not_the_master():
+    import base64
+
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    from app.security.keys import derive_subkey
+
+    master = bytes(range(32))
+    box = secret_box_from_key(master)
+    sealed = box.seal("hello", aad="k")
+    # The key id still names the master key.
+    assert sealed.key_id == key_id_for(master)
+    _, nonce_b64, ct_b64 = sealed.token.split(".")
+
+    def b64d(text: str) -> bytes:
+        return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+    nonce, ciphertext = b64d(nonce_b64), b64d(ct_b64)
+    with pytest.raises(InvalidTag):
+        AESGCM(master).decrypt(nonce, ciphertext, b"k")
+    aes_key = derive_subkey(master, "secret-box")
+    assert AESGCM(aes_key).decrypt(nonce, ciphertext, b"k") == b"hello"
+    assert box.open(sealed, aad="k") == "hello"

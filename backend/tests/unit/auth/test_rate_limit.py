@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.auth.rate_limit import SlidingWindowRateLimiter
+from app.auth.rate_limit import SlidingWindowRateLimiter, client_key
 
 
 class FakeClock:
@@ -84,3 +84,21 @@ def test_limit_must_be_positive():
     limiter = SlidingWindowRateLimiter(clock=FakeClock())
     with pytest.raises(ValueError, match="limit"):
         limiter.hit("k", limit=0)
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("192.0.2.7", "192.0.2.7"),
+        (" 192.0.2.7 ", "192.0.2.7"),
+        ("::ffff:192.0.2.7", "192.0.2.7"),
+        ("2001:db8:1:2::1", "2001:db8:1:2::/64"),
+        ("2001:db8:1:2:aaaa:bbbb:cccc:dddd", "2001:db8:1:2::/64"),
+        ("fe80::1%eth0", "fe80::/64"),
+        ("not-an-ip", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_client_key_groups_ipv6_by_64(host: str | None, expected: str | None):
+    assert client_key(host) == expected

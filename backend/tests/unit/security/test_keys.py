@@ -4,7 +4,7 @@ import base64
 
 import pytest
 
-from app.security.keys import decode_secret_key
+from app.security.keys import SUBKEY_LABELS, decode_secret_key, derive_subkey
 
 RAW = b"test-secret-key-0123456789abcdef"
 GOOD = base64.urlsafe_b64encode(RAW).decode()  # 44 characters, one padding character
@@ -71,3 +71,37 @@ def test_error_message_never_contains_the_input():
     with pytest.raises(ValueError) as e:
         decode_secret_key(secretish, name="K")
     assert secretish not in str(e.value)
+
+
+# --- sub-keys (audit H7) -------------------------------------------------------------------
+
+
+def test_sub_keys_differ_from_the_master_and_from_each_other():
+    master = bytes(range(32))
+    keys = {label: derive_subkey(master, label) for label in SUBKEY_LABELS}
+    assert len(keys) == 3
+    assert all(len(k) == 32 for k in keys.values())
+    assert master not in keys.values()
+    assert len(set(keys.values())) == len(keys)
+    # Deterministic: the same master always gives the same sub-keys.
+    assert keys == {label: derive_subkey(master, label) for label in SUBKEY_LABELS}
+    # Another master gives other sub-keys.
+    other = bytes(range(1, 33))
+    assert all(derive_subkey(other, label) != keys[label] for label in SUBKEY_LABELS)
+
+
+def test_sub_keys_are_hkdf_sha256_with_distinct_labels():
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    master = bytes(range(32))
+    for label in SUBKEY_LABELS:
+        expected = HKDF(
+            algorithm=hashes.SHA256(), length=32, salt=None, info=f"bambubridge/{label}/v1".encode()
+        ).derive(master)
+        assert derive_subkey(master, label) == expected
+
+
+def test_unknown_sub_key_label_is_refused():
+    with pytest.raises(ValueError, match="label"):
+        derive_subkey(bytes(32), "other")  # type: ignore[arg-type]

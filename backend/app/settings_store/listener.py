@@ -53,6 +53,11 @@ class SettingsListener:
         # and operators terminate exactly this connection.
         self.connection_pid: int | None = None
 
+    @property
+    def connected(self) -> bool:
+        """Whether the ``LISTEN`` connection is up right now."""
+        return self.connection_pid is not None
+
     async def start(self) -> None:
         """Start listening; returns once connected (or after a short grace period).
 
