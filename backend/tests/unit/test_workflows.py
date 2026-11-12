@@ -29,3 +29,10 @@ def test_all_workflow_actions_pinned_by_sha():
     assert not offenders, (
         "actions must be pinned by commit SHA with a version comment:\n" + "\n".join(offenders)
     )
+
+
+def test_ci_cancels_only_pull_request_runs():
+    # Text scan (see module docstring): the property is the literal expression.
+    text = (WORKFLOWS / "ci.yml").read_text()
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
+    assert "cancel-in-progress: true" not in text

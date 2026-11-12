@@ -11,7 +11,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Only superseded pull-request runs are cancelled; pushes to main always complete.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   backend:
@@ -33,7 +34,7 @@ jobs:
       run:
         working-directory: backend
     env:
-      # Used from the database task on; the service must already be declared.
+      # Required by the test suite (conftest creates a database per run on this server).
       BAMBUBRIDGE_TEST_DATABASE_URL: postgresql+asyncpg://postgres:test@localhost:5432/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
