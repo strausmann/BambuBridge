@@ -15,7 +15,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 26
+          node-version: "26.13.1"
       - name: Install tooling from the root lockfile
         run: npm ci
       - name: Lint PR commits
