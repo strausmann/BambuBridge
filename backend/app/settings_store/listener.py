@@ -153,5 +153,8 @@ class SettingsListener:
             self._lost.set()
 
     async def _reload(self) -> None:
+        # A reload can overlap a ``SettingsStore.set_many`` of the same process (the NOTIFY
+        # arrives at commit, the writer's own cache update just after). The state converges,
+        # but a subscriber may see the same change twice; see ``set_many``.
         async with self._reload_lock, self._sessions() as session:
             await self._store.reload_and_notify(session)

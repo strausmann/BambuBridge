@@ -184,6 +184,13 @@ class SettingsStore:
 
         ``None`` resets a plain setting to its default; ``None`` or ``""`` clears a secret.
         All-or-nothing: an invalid value or a database error changes nothing.
+
+        Consistency is eventual. The local cache and the subscribers are updated *after* the
+        commit, while the NOTIFY is delivered *at* the commit, so a reload started by the
+        listener can run in between: the cache is then refreshed from the database first and
+        subscribers may be told about the same keys twice (once by the reload, once here).
+        Subscribers must therefore be idempotent. Nothing is lost or reordered, and every
+        instance converges on the database content.
         """
         unknown = sorted(k for k in values if k not in SETTINGS)
         if unknown:

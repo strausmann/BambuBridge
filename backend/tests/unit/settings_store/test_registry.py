@@ -9,6 +9,7 @@ from app.settings_store.registry import (
     SettingDef,
     validate_value,
 )
+from app.settings_store.store import SettingsStore
 
 URL = SettingDef("x.url", "url", "", "x")
 BOOL = SettingDef("x.flag", "bool", False, "x")
@@ -85,3 +86,25 @@ def test_secret_may_be_empty_and_is_not_stripped():
     assert validate_value(secret, " " + "a" * 40) == " " + "a" * 40
     with pytest.raises(InvalidSettingValueError):
         validate_value(secret, "a" * 4097)
+
+
+def _url_settings_without_binding(settings: dict[str, SettingDef]) -> list[str]:
+    """Names of url settings while the store cannot bind secrets to a URL."""
+    if hasattr(SettingsStore, "resolve_probe"):  # the binding lives next to the probe
+        return []
+    return sorted(k for k, d in settings.items() if d.type == "url")
+
+
+def test_no_url_setting_exists_before_url_bound_secrets_are_implemented():
+    offenders = _url_settings_without_binding(SETTINGS)
+    assert not offenders, (
+        f"{offenders} added a url setting, but URL-bound secrets and resolve_probe were "
+        "deferred (issue #45, PR #80): implement them in the same task, so that a secret "
+        "is only ever sent to the URL it was saved with"
+    )
+
+
+def test_the_url_binding_guard_does_fire_for_a_url_setting():
+    # Counter-check of the guard above: with a url setting present it reports it.
+    with_url = {**SETTINGS, "x.url": URL}
+    assert _url_settings_without_binding(with_url) == ["x.url"]
