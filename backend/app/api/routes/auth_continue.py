@@ -38,11 +38,32 @@ def _has_control(text: str) -> bool:
     return any(ord(c) < 0x20 or ord(c) == 0x7F for c in text)
 
 
+def _remove_dot_segments(path: str) -> str:
+    """RFC 3986 section 5.2.4 for an absolute path, as browsers apply it."""
+    segments = path.split("/")
+    out: list[str] = []
+    for segment in segments:
+        if segment == ".":
+            continue
+        if segment == "..":
+            if len(out) > 1:
+                out.pop()
+            continue
+        out.append(segment)
+    if segments[-1] in (".", ".."):
+        out.append("")
+    return "/".join(out)
+
+
 def _looks_absolute(path: str) -> bool:
     if not path.startswith("/") or path.startswith(("//", "/\\")):
         return True
     parts = urlsplit(path)
-    return bool(parts.scheme or parts.netloc)
+    if parts.scheme or parts.netloc:
+        return True
+    # ``/.//host`` resolves to the path ``//host``: same origin today, but a page that
+    # navigates to its own pathname would leave the site.
+    return _remove_dot_segments(parts.path).startswith(("//", "/\\"))
 
 
 def safe_next(value: str | None) -> str:
@@ -51,7 +72,8 @@ def safe_next(value: str | None) -> str:
     The value itself must be printable ASCII without backslash or whitespace (browsers drop
     tabs and newlines, so ``/\t/evil`` would become ``//evil``). Refused besides: anything
     not starting with a single ``/``; ``//host`` and ``/\host`` (which browsers treat as
-    another host); a scheme or authority. These shape checks are repeated after up to three
+    another host), also when it only appears after resolving dot segments (``/.//host``,
+    ``/x/..//host``); a scheme or authority. These shape checks are repeated after up to three
     rounds of percent-decoding (with tabs and newlines removed, as a browser would, and
     no other control character allowed), so
     encoded variants such as ``/%2F%2Fevil`` or ``/%5Cevil`` are refused as well.

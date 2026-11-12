@@ -44,3 +44,26 @@ def test_relative_paths_are_kept(value: str):
 )
 def test_everything_else_becomes_root(value: str | None):
     assert safe_next(value) == "/"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "/.//evil.example/x",
+        "/%2e%2e//evil.example/x",
+        "/%2E//evil.example",
+        "/./%2F/evil.example",
+        "/x/..//evil.example",
+        "/../..//evil.example",
+        "/.%2e//evil.example",
+        "/%252e//evil.example",
+    ],
+)
+def test_dot_segments_that_resolve_to_another_host_become_root(value: str):
+    # Audit H5: browsers resolve dot segments, so these land on a path "//host/...".
+    assert safe_next(value) == "/"
+
+
+@pytest.mark.parametrize("value", ["/a/./b", "/a/../b", "/./printers", "/a/..", "/.well-known/x"])
+def test_harmless_dot_segments_are_kept(value: str):
+    assert safe_next(value) == value
