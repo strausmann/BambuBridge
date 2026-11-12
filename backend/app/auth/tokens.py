@@ -14,6 +14,8 @@ import hashlib
 import re
 import secrets
 import string
+import weakref
+from collections.abc import Callable
 
 import bcrypt
 from cachetools import TTLCache
@@ -22,6 +24,8 @@ TOKEN_PREFIX = "bb_pat_"  # noqa: S105 - the public token type marker, not a sec
 BODY_LENGTH = 40
 PREFIX_LENGTH = 16
 BCRYPT_ROUNDS = 12
+# At most this many bcrypt computations run at once (per event loop); the rest wait.
+BCRYPT_CONCURRENCY = 4
 _ALPHABET = string.digits + string.ascii_letters
 _FORMAT = re.compile(rf"^{TOKEN_PREFIX}[0-9A-Za-z]{{{BODY_LENGTH}}}$")
 
@@ -29,6 +33,22 @@ _FORMAT = re.compile(rf"^{TOKEN_PREFIX}[0-9A-Za-z]{{{BODY_LENGTH}}}$")
 # SHA-256 digest of the token, never the token itself. A hit only skips bcrypt; whether
 # the token is enabled, unexpired and owned by an enabled user is checked on every request.
 _verify_cache: TTLCache[tuple[bytes, str], bool] = TTLCache(maxsize=1024, ttl=300)
+
+
+# One semaphore per event loop: asyncio primitives bind to the loop they are first used in.
+_bcrypt_slots: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+async def _run_bcrypt[T](func: Callable[..., T], *args: str) -> T:
+    """Run bcrypt work in a worker thread, at most ``BCRYPT_CONCURRENCY`` at a time."""
+    loop = asyncio.get_running_loop()
+    slots = _bcrypt_slots.get(loop)
+    if slots is None:
+        slots = _bcrypt_slots[loop] = asyncio.Semaphore(BCRYPT_CONCURRENCY)
+    async with slots:
+        return await asyncio.to_thread(func, *args)
 
 
 def generate_token() -> tuple[str, str]:
@@ -55,7 +75,7 @@ def hash_token(plaintext: str) -> str:
 
 async def hash_token_async(plaintext: str) -> str:
     """``hash_token`` in a worker thread, so bcrypt does not block the event loop."""
-    return await asyncio.to_thread(hash_token, plaintext)
+    return await _run_bcrypt(hash_token, plaintext)
 
 
 def _checkpw(plaintext: str, hashed: str) -> bool:
@@ -65,14 +85,22 @@ def _checkpw(plaintext: str, hashed: str) -> bool:
         return False
 
 
+def _cache_key(plaintext: str, hashed: str) -> tuple[bytes, str]:
+    return hashlib.sha256(plaintext.encode()).digest(), hashed
+
+
+def is_cached(plaintext: str, hashed: str) -> bool:
+    """Whether this token was verified against this hash recently (no bcrypt work)."""
+    return bool(_verify_cache.get(_cache_key(plaintext, hashed)))
+
+
 async def verify_token(plaintext: str, hashed: str) -> bool:
     """Whether ``plaintext`` matches ``hashed``; bcrypt runs in a worker thread."""
-    key = (hashlib.sha256(plaintext.encode()).digest(), hashed)
-    if _verify_cache.get(key):
+    if is_cached(plaintext, hashed):
         return True
-    ok = await asyncio.to_thread(_checkpw, plaintext, hashed)
+    ok = await _run_bcrypt(_checkpw, plaintext, hashed)
     if ok:
-        _verify_cache[key] = True
+        _verify_cache[_cache_key(plaintext, hashed)] = True
     return ok
 
 
@@ -93,7 +121,7 @@ async def dummy_verify(plaintext: str) -> bool:
     Used for an unknown prefix, so the response time does not reveal whether a prefix
     exists. Never cached.
     """
-    return await asyncio.to_thread(_dummy_check, plaintext)
+    return await _run_bcrypt(_dummy_check, plaintext)
 
 
 def clear_verify_cache() -> None:

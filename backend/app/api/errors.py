@@ -10,6 +10,7 @@ key, SQL text or request input never reaches a response.
 from __future__ import annotations
 
 import logging
+import traceback
 from collections.abc import Mapping
 from http import HTTPStatus
 from typing import Any
@@ -104,26 +105,80 @@ async def _api_error_handler(_request: Request, exc: Exception) -> JSONResponse:
     return exc.response()
 
 
+def _sqlstate(exc: DBAPIError) -> str:
+    code = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+    return str(code) if code else "unknown"
+
+
 async def _dbapi_error_handler(_request: Request, exc: Exception) -> JSONResponse:
-    """Connection-level errors are 503; any other driver error is a bug (500)."""
-    if isinstance(exc, (OperationalError, InterfaceError)) or (
-        isinstance(exc, DBAPIError) and exc.connection_invalidated
-    ):
-        # The type only: SQLAlchemy messages carry SQL text.
-        _log.error("database unavailable while handling a request: %s", type(exc).__name__)
+    """Connection-level errors are 503; any other driver error is a bug (500).
+
+    Logged with class and SQLSTATE only. The driver text (``orig``) can carry row values
+    (``DETAIL: Key (name)=(...)``), so neither the message nor ``exc_info`` is logged;
+    the traceback frames (code locations, no message) are kept for debugging.
+    """
+    if not isinstance(exc, DBAPIError):  # pragma: no cover - registered for DBAPIError only
+        raise TypeError("handler registered for another exception type")
+    if isinstance(exc, (OperationalError, InterfaceError)) or exc.connection_invalidated:
+        _log.error(
+            "database unavailable while handling a request: %s (SQLSTATE %s)",
+            type(exc).__name__,
+            _sqlstate(exc),
+        )
         return DatabaseUnavailableError().response()
-    _log.error("unhandled database error", exc_info=exc)
+    _log.error(
+        "unhandled database error: %s (SQLSTATE %s)\n%s",
+        type(exc).__name__,
+        _sqlstate(exc),
+        "".join(traceback.format_tb(exc.__traceback__)),
+    )
     return _internal_error()
 
 
+# Fixed texts per Pydantic error type. Pydantic's own messages may quote input (the
+# offending character of a UUID, a length, a limit); unknown types get the generic text.
+_VALIDATION_MESSAGES: dict[str, str] = {
+    "missing": "Field required",
+    "extra_forbidden": "Unknown field",
+    "string_type": "Must be a string",
+    "string_too_short": "Too short",
+    "string_too_long": "Too long",
+    "string_pattern_mismatch": "Does not match the required format",
+    "literal_error": "Not an allowed value",
+    "enum": "Not an allowed value",
+    "uuid_parsing": "Invalid UUID",
+    "uuid_type": "Invalid UUID",
+    "int_parsing": "Must be an integer",
+    "int_type": "Must be an integer",
+    "int_from_float": "Must be an integer",
+    "bool_parsing": "Must be a boolean",
+    "bool_type": "Must be a boolean",
+    "greater_than_equal": "Value too small",
+    "greater_than": "Value too small",
+    "less_than_equal": "Value too large",
+    "less_than": "Value too large",
+    "datetime_parsing": "Invalid date-time",
+    "datetime_from_date_parsing": "Invalid date-time",
+    "datetime_type": "Invalid date-time",
+    "timezone_aware": "Date-time must include a time zone",
+    "json_invalid": "Invalid JSON",
+    "model_attributes_type": "Must be an object",
+    "dict_type": "Must be an object",
+    "list_type": "Must be a list",
+}
+_GENERIC_VALIDATION_MESSAGE = "Invalid value"
+
+
 def _sanitize_validation_errors(errors: Any) -> list[dict[str, object]]:
-    """Location, message and type of each error; never ``input`` or ``ctx``."""
+    """Location, a fixed message and the type of each error; never ``input`` or ``ctx``."""
     result: list[dict[str, object]] = []
     for err in list(errors)[:_MAX_VALIDATION_ERRORS]:
         loc = [str(part) for part in err.get("loc", ())]
         if err.get("type") == "extra_forbidden" and loc:
             loc[-1] = "<unknown field>"  # a field name the client chose is not echoed
-        result.append({"loc": loc, "msg": str(err.get("msg", "")), "type": str(err.get("type"))})
+        kind = str(err.get("type"))
+        message = _VALIDATION_MESSAGES.get(kind, _GENERIC_VALIDATION_MESSAGE)
+        result.append({"loc": loc, "msg": message, "type": kind})
     return result
 
 
@@ -154,11 +209,12 @@ async def _http_exception_handler(_request: Request, exc: Exception) -> JSONResp
     if not isinstance(exc, StarletteHTTPException):  # pragma: no cover
         raise TypeError("handler registered for another exception type")
     status = exc.status_code
+    try:
+        title = HTTPStatus(status).phrase
+    except ValueError:  # non-standard code such as 499
+        title = "HTTP error"
     return problem_response(
-        status,
-        _HTTP_ERROR_CODES.get(status, "http_error"),
-        HTTPStatus(status).phrase,
-        headers=exc.headers,
+        status, _HTTP_ERROR_CODES.get(status, "http_error"), title, headers=exc.headers
     )
 
 

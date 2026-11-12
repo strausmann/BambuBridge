@@ -29,7 +29,13 @@ async def connected(session: AsyncSession) -> AsyncSession:
 
 
 async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
-    """FastAPI dependency: one connected session per request from the app's factory."""
+    """FastAPI dependency: one connected session per request from the app's factory.
+
+    The connection is acquired up front, which also starts the transaction. Handlers
+    therefore finish their work with ``await session.commit()`` (or ``rollback()``) and
+    use ``session.begin_nested()`` for a savepoint, never ``session.begin()``, which
+    raises because a transaction is already in progress.
+    """
     factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
     async with factory() as session:
         yield await connected(session)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import string
 
@@ -77,7 +78,6 @@ async def test_verify_cache_hit_skips_bcrypt(monkeypatch: pytest.MonkeyPatch):
 
 def test_verify_handles_garbage_hash():
     plaintext, _ = generate_token()
-    import asyncio
 
     assert asyncio.run(verify_token(plaintext, "not-a-bcrypt-hash")) is False
 
@@ -100,3 +100,39 @@ def test_looks_like_token(value: str, ok: bool):
 def test_token_prefix_is_first_16_characters():
     plaintext, prefix = generate_token()
     assert token_prefix(plaintext) == prefix
+
+
+async def test_bcrypt_work_is_limited_by_a_semaphore(monkeypatch: pytest.MonkeyPatch):
+    import threading
+    import time
+
+    tokens.clear_verify_cache()
+    lock = threading.Lock()
+    state = {"current": 0, "peak": 0}
+
+    def slow_check(_password: bytes, _hashed: bytes) -> bool:
+        with lock:
+            state["current"] += 1
+            state["peak"] = max(state["peak"], state["current"])
+        time.sleep(0.05)
+        with lock:
+            state["current"] -= 1
+        return False
+
+    monkeypatch.setattr(tokens.bcrypt, "checkpw", slow_check)
+    hashed = "$2b$12$" + "a" * 53
+    work = [verify_token(generate_token()[0], hashed) for _ in range(6)]
+    work += [tokens.dummy_verify(generate_token()[0]) for _ in range(6)]
+    tokens._dummy_hash()  # computed outside the measured section
+    await asyncio.gather(*work)
+    assert state["peak"] == tokens.BCRYPT_CONCURRENCY == 4
+
+
+def test_is_cached_reports_only_successful_verifications():
+    tokens.clear_verify_cache()
+    plaintext, _ = generate_token()
+    hashed = hash_token(plaintext)
+    assert tokens.is_cached(plaintext, hashed) is False
+    assert asyncio.run(verify_token(plaintext, hashed)) is True
+    assert tokens.is_cached(plaintext, hashed) is True
+    assert tokens.is_cached(generate_token()[0], hashed) is False

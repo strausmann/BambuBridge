@@ -369,15 +369,70 @@ async def test_failed_verifications_limited_per_key_without_touching_real_budget
 
     monkeypatch.setattr(deps, "FAILED_VERIFICATIONS_PER_MINUTE", 3)
     real = await issue_token(engine, "admin", rate_limit_per_minute=5)
+    # The holder used the token recently, so its verification is cached.
+    assert (await client.get(BASE, headers={KEY_HEADER: real})).status_code == 200
     wrong = real[:16] + "W" * (len(real) - 16)
     for _ in range(3):
         _problem(await client.get(BASE, headers={KEY_HEADER: wrong}), 401, "invalid_token")
     r = await client.get(BASE, headers={KEY_HEADER: wrong})
     _problem(r, 429, "rate_limited")
     assert 1 <= int(r.headers["Retry-After"]) <= 60
-    # The real token keeps its full budget of 5 requests per minute.
-    for _ in range(5):
+    # The real token keeps its own budget of 5 requests per minute (1 used above).
+    for _ in range(4):
         assert (await client.get(BASE, headers={KEY_HEADER: real})).status_code == 200
+    _problem(await client.get(BASE, headers={KEY_HEADER: real}), 429, "rate_limited")
+
+
+async def test_exhausted_failure_budget_skips_bcrypt(
+    client: httpx.AsyncClient, engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+):
+    import app.auth.dependencies as deps
+
+    monkeypatch.setattr(deps, "FAILED_VERIFICATIONS_PER_MINUTE", 2)
+    real = await issue_token(engine, "admin")
+    assert (await client.get(BASE, headers={KEY_HEADER: real})).status_code == 200  # cached
+    known_wrong = real[:16] + "W" * (len(real) - 16)
+    unknown = TOKEN_PREFIX + "U" * 40
+    for value in (known_wrong, unknown):
+        for _ in range(2):
+            _problem(await client.get(BASE, headers={KEY_HEADER: value}), 401, "invalid_token")
+
+    calls: list[str] = []
+    real_verify, real_dummy = deps.verify_token, deps.dummy_verify
+
+    async def counting_verify(plaintext: str, hashed: str) -> bool:
+        calls.append("verify")
+        return await real_verify(plaintext, hashed)
+
+    async def counting_dummy(plaintext: str) -> bool:
+        calls.append("dummy")
+        return await real_dummy(plaintext)
+
+    monkeypatch.setattr(deps, "verify_token", counting_verify)
+    monkeypatch.setattr(deps, "dummy_verify", counting_dummy)
+    for value in (known_wrong, unknown):
+        for _ in range(3):
+            r = await client.get(BASE, headers={KEY_HEADER: value})
+            _problem(r, 429, "rate_limited")
+            assert int(r.headers["Retry-After"]) >= 1
+    assert calls == []  # no bcrypt work for a prefix over its failure budget
+    # A recently verified holder of the attacked prefix still gets through (cache hit).
+    assert (await client.get(BASE, headers={KEY_HEADER: real})).status_code == 200
+
+
+async def test_uncached_holder_of_an_attacked_prefix_waits_for_the_window(
+    client: httpx.AsyncClient, engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+):
+    # Documented trade-off: while a prefix is over its failure budget, only a cached
+    # verification gets through; an uncached correct token gets 429 until the window ends.
+    import app.auth.dependencies as deps
+    import app.auth.tokens as tokens
+
+    monkeypatch.setattr(deps, "FAILED_VERIFICATIONS_PER_MINUTE", 1)
+    real = await issue_token(engine, "admin")
+    tokens.clear_verify_cache()
+    wrong = real[:16] + "W" * (len(real) - 16)
+    _problem(await client.get(BASE, headers={KEY_HEADER: wrong}), 401, "invalid_token")
     _problem(await client.get(BASE, headers={KEY_HEADER: real}), 429, "rate_limited")
 
 
@@ -453,10 +508,11 @@ async def test_failure_limit_does_not_reveal_whether_a_prefix_exists(
             out.append((r.status_code, r.json()["error_code"]))
         return out
 
+    assert (await client.get(BASE, headers={KEY_HEADER: real})).status_code == 200  # cached
     expected = [(401, "invalid_token")] * 3 + [(429, "rate_limited")] * 2
     assert await sequence(known_wrong) == expected
     assert await sequence(unknown) == expected
-    # The real holder of the attacked prefix is not throttled: a correct check succeeds.
+    # The recently verified holder of the attacked prefix is not throttled.
     assert (await client.get(BASE, headers={KEY_HEADER: real})).status_code == 200
 
 
@@ -495,3 +551,21 @@ async def test_authenticated_request_uses_one_pooled_connection(
     finally:
         event.remove(pool, "checkout", on_checkout)
         event.remove(pool, "checkin", on_checkin)
+
+
+async def test_parallel_failures_cannot_overrun_the_budget(
+    client: httpx.AsyncClient, engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+):
+    # Concurrent attempts all pass the pre-check before any failure is recorded; the
+    # budget is enforced again when each failure is counted.
+    import asyncio
+
+    import app.auth.dependencies as deps
+
+    monkeypatch.setattr(deps, "FAILED_VERIFICATIONS_PER_MINUTE", 1)
+    real = await issue_token(engine, "admin")
+    wrong = real[:16] + "P" * (len(real) - 16)
+    results = await asyncio.gather(
+        *(client.get(BASE, headers={KEY_HEADER: wrong}) for _ in range(3))
+    )
+    assert sorted(r.status_code for r in results) == [401, 429, 429]

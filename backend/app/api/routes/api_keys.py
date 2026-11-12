@@ -25,6 +25,8 @@ from app.schemas.problem import ProblemDetail
 
 router = APIRouter(prefix="/api/v1/admin/api-keys", tags=["api-keys"])
 
+# The request session already has an open transaction: commit() or begin_nested(), never
+# begin() (see ``app.db.session.get_session``).
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[AuthContext, Depends(require_scope("admin"))]
 

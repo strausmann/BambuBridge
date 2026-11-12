@@ -29,13 +29,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.errors import ApiError
 from app.auth.rate_limit import SlidingWindowRateLimiter
 from app.auth.scopes import Scope, lower_scope, satisfies
-from app.auth.tokens import dummy_verify, looks_like_token, token_prefix, verify_token
+from app.auth.tokens import (
+    dummy_verify,
+    is_cached,
+    looks_like_token,
+    token_prefix,
+    verify_token,
+)
 from app.config import Settings
 from app.db.session import get_session
 from app.repositories import api_keys as api_keys_repo
 
 # The request's own session (FastAPI caches it per request, so the route gets the same one):
 # a request never holds two pool connections, which could exhaust the pool under load.
+# It arrives with a transaction already open: use commit() or begin_nested(), never
+# begin() (see ``app.db.session.get_session``).
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 KEY_HEADER = "X-BambuBridge-Key"
@@ -100,9 +108,12 @@ def _record_failure(failures: SlidingWindowRateLimiter, prefix: str) -> NoReturn
 
     Keyed by the prefix string for known and unknown prefixes alike, so the answers
     (401 ... then 429 after the same number of failures) do not reveal whether a prefix
-    exists. Only failed attempts use this budget: a correct token is always verified and
-    accepted, so guessing against a prefix never locks out its holder, and the token's
-    own request limit is untouched. The limiter's LRU cap bounds the stored prefixes.
+    exists. Only failed attempts count; the token's own request limit is untouched. Once
+    the budget is used up, requests for that prefix get 429 without any bcrypt work,
+    except a token whose verification is still cached (recently used by its holder). An
+    uncached correct token therefore waits for the window like an attacker; that is the
+    price of not spending bcrypt on a prefix under attack. The limiter's LRU cap bounds
+    the stored prefixes.
     """
     allowed, retry_after = failures.hit(prefix, limit=FAILED_VERIFICATIONS_PER_MINUTE)
     if not allowed:
@@ -120,6 +131,11 @@ async def authenticate_token(
     failures: SlidingWindowRateLimiter = request.app.state.failed_auth_limiter
     prefix = token_prefix(presented)
     found = await api_keys_repo.get_by_prefix(session, prefix)
+    blocked_for = failures.retry_after(prefix, limit=FAILED_VERIFICATIONS_PER_MINUTE)
+    if blocked_for and not (found is not None and is_cached(presented, found[0].hash)):
+        # Over the failure budget: answer without bcrypt. Only a token verified within the
+        # cache lifetime still gets through, so a recent legitimate holder keeps working.
+        raise _rate_limited(blocked_for)
     if found is None:
         await dummy_verify(presented)  # same bcrypt work as for a known prefix
         _record_failure(failures, prefix)

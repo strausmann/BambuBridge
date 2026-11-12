@@ -57,6 +57,16 @@ class SlidingWindowRateLimiter:
             self._hits.popitem(last=False)
         return True, 0
 
+    def retry_after(self, key: Hashable, *, limit: int) -> int:
+        """Seconds until a hit would be allowed again; 0 if allowed now. Records nothing."""
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        now = self._clock()
+        hits = [t for t in self._hits.get(key, ()) if t > now - self._window]
+        if len(hits) < limit:
+            return 0
+        return max(1, math.ceil(hits[-limit] + self._window - now))
+
     def reset(self, key: Hashable) -> None:
         """Forget a key (e.g. after its token was deleted)."""
         self._hits.pop(key, None)
