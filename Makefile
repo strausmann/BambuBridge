@@ -107,12 +107,14 @@ lint: ci-image
 	@$(PY_RUN) sh -exc "$$LINT_STEPS"
 
 # Lints every commit in COMMITLINT_RANGES (default: the commits of the current branch that
-# are not on origin/main).
+# are not on origin/main). Commits that are already on origin/main are never linted again:
+# after "git merge origin/main" a pushed range contains them, and they are not yours to fix.
 .PHONY: commitlint
 commitlint: node_modules/.package-lock.json
 	@rm -rf .cache/commitlint && mkdir -p .cache/commitlint
-	@for range in $(COMMITLINT_RANGES); do \
-		shas=$$(git rev-list "$$range" --) || \
+	@on_main=; ! git rev-parse --verify -q origin/main >/dev/null || on_main=^origin/main; \
+	for range in $(COMMITLINT_RANGES); do \
+		shas=$$(git rev-list "$$range" $$on_main --) || \
 			{ echo "cannot resolve $$range - run: git fetch origin" >&2; exit 1; }; \
 		for sha in $$shas; do \
 			git log -1 --format=%B $$sha > .cache/commitlint/$$sha.msg; done; \

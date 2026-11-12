@@ -46,6 +46,7 @@ make ci-db-stop # stop the test Postgres
   lints the commit message with commitlint. `pre-push` runs ruff, the format check and mypy on your
   working tree and lints the commits you are pushing: per pushed ref the range from the remote's
   current commit to yours, or `origin/main..<your commit>` for a branch the remote does not have yet.
+  Commits that are already on `origin/main` (merged into your branch) are not linted again.
   Deleting a remote branch checks nothing. Both hooks start containers, so Docker must be running
   (they say so if it is not); the first run downloads the images and dependencies. `HUSKY=0` skips
   both hooks, `git commit --no-verify` skips `commit-msg`, `git push --no-verify` skips `pre-push`.
