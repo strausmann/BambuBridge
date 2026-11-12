@@ -136,10 +136,12 @@ def _record_failure(
     before bcrypt was rejected: anyone who knows a prefix could then lock out its holder
     whenever the holder's token is not in the verify cache (restart, eviction, first use),
     and skipping only unknown prefixes would bring back the prefix-existence timing oracle.
-    A correct token is therefore always accepted. Concurrent bcrypt work is capped by a
-    semaphore (``app.auth.tokens.BCRYPT_CONCURRENCY``), so a flood queues requests instead
-    of exhausting the thread pool; protecting CPU against floods is the job of the reverse
-    proxy in front of the service. The limiter's LRU cap bounds the stored prefixes.
+    Within the per-prefix budget a correct token is therefore always accepted; the per-client
+    budget is the one exception (see ``authenticate_token``): a token that is not in the verify
+    cache and comes from an over-budget address (or IPv6 /64) gets 429. Concurrent bcrypt work
+    is capped by a semaphore (``app.auth.tokens.BCRYPT_CONCURRENCY``), so a flood queues
+    requests instead of exhausting the thread pool; protecting CPU against floods is the job
+    of the reverse proxy in front of the service. The limiter's LRU cap bounds the stored prefixes.
     """
     if client_failures is not None and client is not None:  # unknown clients: no bucket
         client_failures.hit(client, limit=FAILED_VERIFICATIONS_PER_CLIENT_PER_MINUTE)

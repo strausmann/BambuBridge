@@ -68,7 +68,8 @@ single proxy address in `FORWARDED_ALLOW_IPS`. If that setting does not match yo
 client appears as the proxy's own address and all of them share one budget: one guesser then
 throttles everyone, so check it when all clients get 429 at once.
 Browser sign-ins (`POST /api/v1/auth/session`, `GET /auth/continue`) are limited per client address
-by the setting `auth.sign_in_limit_per_minute`. At most four bcrypt checks run at once; further
+by the setting `auth.sign_in_limit_per_minute` (clients without a usable address share one
+sign-in bucket). At most four bcrypt checks run at once; further
 requests queue. Protecting CPU against request floods is the job of the reverse proxy in front of
 BambuBridge. The counters live in process memory: they are per process and start fresh after a restart.
 `last_used_at` is updated at most once per minute.
