@@ -357,3 +357,80 @@ async def test_prefix_collision_is_retried(
     r = await admin_client.post(BASE, json={"name": "two", "scope": "read"})
     assert r.status_code == 201, r.text
     assert r.json()["prefix"] == (TOKEN_PREFIX + "N" * 40)[:16]
+
+
+# --- failed verifications, timing, last_used_at throttling -----------------------------------
+
+
+async def test_failed_verifications_limited_per_key_without_touching_real_budget(
+    client: httpx.AsyncClient, engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+):
+    import app.auth.dependencies as deps
+
+    monkeypatch.setattr(deps, "FAILED_VERIFICATIONS_PER_MINUTE", 3)
+    real = await issue_token(engine, "admin", rate_limit_per_minute=5)
+    wrong = real[:16] + "W" * (len(real) - 16)
+    for _ in range(3):
+        _problem(await client.get(BASE, headers={KEY_HEADER: wrong}), 401, "invalid_token")
+    r = await client.get(BASE, headers={KEY_HEADER: wrong})
+    _problem(r, 429, "rate_limited")
+    assert 1 <= int(r.headers["Retry-After"]) <= 60
+    # The real token keeps its full budget of 5 requests per minute.
+    for _ in range(5):
+        assert (await client.get(BASE, headers={KEY_HEADER: real})).status_code == 200
+    _problem(await client.get(BASE, headers={KEY_HEADER: real}), 429, "rate_limited")
+
+
+async def test_unknown_prefix_runs_a_dummy_bcrypt_check(
+    client: httpx.AsyncClient, admin_token: str, monkeypatch: pytest.MonkeyPatch
+):
+    import app.auth.tokens as tokens
+
+    calls: list[bytes] = []
+    real_checkpw = tokens.bcrypt.checkpw
+
+    def spy(password: bytes, hashed: bytes) -> bool:
+        calls.append(hashed)
+        return real_checkpw(password, hashed)
+
+    monkeypatch.setattr(tokens.bcrypt, "checkpw", spy)
+    unknown = TOKEN_PREFIX + "U" * 40
+    _problem(await client.get(BASE, headers={KEY_HEADER: unknown}), 401, "invalid_token")
+    assert len(calls) == 1  # same bcrypt work as for a known prefix with a wrong body
+    assert calls[0].startswith(b"$2b$12$")
+
+
+async def test_last_used_at_written_at_most_once_per_minute(
+    admin_client: httpx.AsyncClient,
+    engine: AsyncEngine,
+    admin_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    updates: list[bool] = []
+    original = api_keys_repo.touch_last_used
+
+    async def recording(*args: object, **kwargs: object) -> bool:
+        updated = await original(*args, **kwargs)  # type: ignore[arg-type]
+        updates.append(updated)
+        return updated
+
+    monkeypatch.setattr(api_keys_repo, "touch_last_used", recording)
+    assert (await admin_client.get(BASE)).status_code == 200
+    first = (await _key_row(engine, admin_token)).last_used_at
+    assert (await admin_client.get(BASE)).status_code == 200
+    assert updates == [True, False]
+    assert (await _key_row(engine, admin_token)).last_used_at == first
+
+
+async def test_last_used_at_refreshed_after_a_minute(
+    admin_client: httpx.AsyncClient, engine: AsyncEngine, admin_token: str
+):
+    assert (await admin_client.get(BASE)).status_code == 200
+    old = datetime.now(UTC) - timedelta(seconds=61)
+    async with make_session_factory(engine)() as session:
+        await session.execute(
+            update(ApiKey).where(ApiKey.prefix == admin_token[:16]).values(last_used_at=old)
+        )
+        await session.commit()
+    assert (await admin_client.get(BASE)).status_code == 200
+    assert (await _key_row(engine, admin_token)).last_used_at > old  # type: ignore[operator]

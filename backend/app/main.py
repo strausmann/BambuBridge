@@ -36,8 +36,9 @@ def create_app(settings: Settings, *, web_dist_dir: Path | None = None) -> FastA
     app.state.web_dist_dir = web_dist_dir
     app.state.engine = make_engine(settings.database_url.get_secret_value())
     app.state.session_factory = make_session_factory(app.state.engine)
-    # Per process (see app.auth.rate_limit).
+    # Per process (see app.auth.rate_limit): requests per token, failed checks per prefix.
     app.state.rate_limiter = SlidingWindowRateLimiter()
+    app.state.failed_auth_limiter = SlidingWindowRateLimiter()
     register_error_handlers(app)
     app.include_router(health.router)
     app.include_router(api_keys.router)

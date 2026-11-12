@@ -101,3 +101,19 @@ async def test_role_check_constraint(db_session: AsyncSession):
     db_session.add(User(display_name="bad", role="root"))
     with pytest.raises(IntegrityError):
         await db_session.flush()
+
+
+async def test_get_or_create_admin_finds_admin_by_name_after_role_change(engine: AsyncEngine):
+    factory = make_session_factory(engine)
+    async with factory() as session:
+        first = await users_repo.get_or_create_admin(session)
+        first.role = "read"
+        await session.commit()
+    async with factory() as session:
+        again = await users_repo.get_or_create_admin(session)
+        await session.commit()
+    assert again.id == first.id
+    assert again.role == "read"  # not repaired silently, not duplicated
+    async with factory() as session:
+        names = (await session.scalars(select(User.display_name))).all()
+    assert names == ["admin"]

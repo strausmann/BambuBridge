@@ -16,15 +16,16 @@ _ADMIN_LOCK_KEY = 0x6262_0001  # "bb" + 1
 
 
 async def get_or_create_admin(session: AsyncSession) -> User:
-    """Return the single user ``admin`` (role ``admin``), creating it on first use.
+    """Return the single user named ``admin``, creating it (role ``admin``) on first use.
 
-    Idempotent, also under concurrency (advisory lock until the caller's commit). The
-    caller commits.
+    Looked up by name only, so a later role change or a disabled flag never leads to a
+    second user named ``admin``; callers check ``role``/``enabled`` themselves. Idempotent,
+    also under concurrency (advisory lock until the caller's commit). The caller commits.
     """
     await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _ADMIN_LOCK_KEY})
     user = await session.scalar(
         select(User)
-        .where(User.display_name == ADMIN_DISPLAY_NAME, User.role == "admin")
+        .where(User.display_name == ADMIN_DISPLAY_NAME)
         .order_by(User.created_at, User.id)
         .limit(1)
     )

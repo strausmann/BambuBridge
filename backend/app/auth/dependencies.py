@@ -29,11 +29,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.api.errors import ApiError
 from app.auth.rate_limit import SlidingWindowRateLimiter
 from app.auth.scopes import Scope, lower_scope, satisfies
-from app.auth.tokens import looks_like_token, token_prefix, verify_token
+from app.auth.tokens import dummy_verify, looks_like_token, token_prefix, verify_token
 from app.config import Settings
+from app.db.session import connected
 from app.repositories import api_keys as api_keys_repo
 
 KEY_HEADER = "X-BambuBridge-Key"
+# Attribute set on every scope-guard dependency; the OpenAPI gate walks route dependants
+# and requires it on every non-public route.
+SCOPE_MARKER = "__bambubridge_scope__"
+# Wrong token bodies tolerated per known prefix and minute before answering 429.
+FAILED_VERIFICATIONS_PER_MINUTE = 10
 BOOTSTRAP_HEADER = "X-BambuBridge-Bootstrap"
 
 _key_header = APIKeyHeader(
@@ -75,18 +81,36 @@ def _invalid_token() -> ApiError:
     return _unauthorized("invalid_token", "Invalid API token")
 
 
+def _rate_limited(retry_after: int) -> ApiError:
+    return ApiError(
+        429,
+        "rate_limited",
+        "Rate limit exceeded",
+        detail=f"Retry after {retry_after} seconds.",
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
 async def authenticate_token(request: Request, presented: str, need: Scope) -> AuthContext:
     """Check an API token from the header and return its context (or raise ``ApiError``)."""
     if not looks_like_token(presented):
         raise _invalid_token()
     factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
     limiter: SlidingWindowRateLimiter = request.app.state.rate_limiter
+    failures: SlidingWindowRateLimiter = request.app.state.failed_auth_limiter
     async with factory() as session:
+        await connected(session)
         found = await api_keys_repo.get_by_prefix(session, token_prefix(presented))
         if found is None:
+            await dummy_verify(presented)  # same bcrypt work as for a known prefix
             raise _invalid_token()
         key, owner = found
         if not await verify_token(presented, key.hash):
+            # Wrong bodies for a known prefix have their own budget; the token's own
+            # rate limit is untouched, so guessing never locks out the real holder.
+            allowed, retry_after = failures.hit(key.id, limit=FAILED_VERIFICATIONS_PER_MINUTE)
+            if not allowed:
+                raise _rate_limited(retry_after)
             raise _invalid_token()
         if not key.enabled:
             raise _unauthorized("token_disabled", "API token disabled")
@@ -96,15 +120,9 @@ async def authenticate_token(request: Request, presented: str, need: Scope) -> A
             raise _unauthorized("owner_disabled", "Owner of the API token is disabled")
         allowed, retry_after = limiter.hit(key.id, limit=key.rate_limit_per_minute)
         if not allowed:
-            raise ApiError(
-                429,
-                "rate_limited",
-                "Rate limit exceeded",
-                detail=f"Retry after {retry_after} seconds.",
-                headers={"Retry-After": str(retry_after)},
-            )
-        await api_keys_repo.touch_last_used(session, key.id)
-        await session.commit()
+            raise _rate_limited(retry_after)
+        if await api_keys_repo.touch_last_used(session, key.id):
+            await session.commit()
     effective = lower_scope(cast(Scope, key.scope), cast(Scope, owner.role))
     if not satisfies(effective, need):
         raise ApiError(
@@ -134,6 +152,7 @@ def require_scope(need: Scope) -> Callable[..., Awaitable[AuthContext]]:
         # Seam for the browser session (cookie) path; until then no header means 401.
         raise _not_authenticated()
 
+    setattr(dependency, SCOPE_MARKER, need)
     return dependency
 
 
@@ -141,6 +160,9 @@ def check_bootstrap_key(settings: Settings, presented: str) -> AuthContext:
     """Accept the bootstrap key (constant time). Wrong or unconfigured key: one fixed 401.
 
     The answer does not reveal whether bootstrap is configured or already closed.
+    ``hmac.compare_digest`` is constant-time only for inputs of equal length; a presented
+    value of a different length can reveal the key's length through timing. That is
+    acceptable: the key is at least 32 characters, so knowing its length does not help.
     """
     expected = settings.bootstrap_admin_key.get_secret_value()
     matches = hmac.compare_digest(presented.encode(), expected.encode())
@@ -161,3 +183,6 @@ async def require_admin_or_bootstrap(
         return check_bootstrap_key(request.app.state.settings, bootstrap)
     # Seam for the browser session (cookie) path; until then 401.
     raise _not_authenticated()
+
+
+setattr(require_admin_or_bootstrap, SCOPE_MARKER, "admin")

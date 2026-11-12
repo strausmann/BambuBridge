@@ -72,7 +72,13 @@ async def create_api_key(
         await api_keys_repo.lock_bootstrap(session)
         if await api_keys_repo.usable_admin_token_exists(session):
             raise ApiError(403, "bootstrap_closed", "Bootstrap is closed")
-        owner_id = (await users_repo.get_or_create_admin(session)).id
+        owner = await users_repo.get_or_create_admin(session)
+        # Never issue a dead token: it would close bootstrap without granting access.
+        if not owner.enabled:
+            raise ApiError(403, "bootstrap_owner_disabled", "The admin user is disabled")
+        if owner.role != "admin":
+            raise ApiError(403, "bootstrap_owner_not_admin", "The admin user lacks the admin role")
+        owner_id = owner.id
     else:
         if auth.user_id is None:  # pragma: no cover - tokens and sessions always carry a user
             raise RuntimeError("authenticated caller without a user")

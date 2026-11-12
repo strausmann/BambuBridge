@@ -3,6 +3,11 @@
 A route declares its scope through ``require_scope`` (or the bootstrap-aware create
 dependency); FastAPI then lists the ``BambuBridgeKey`` security scheme with exactly one
 scope on the operation. Anything else must be on ``PUBLIC_OPERATIONS``.
+
+The schema tests check the *declaration* only. That the declared dependency actually
+guards the route is checked separately on the route's dependant tree
+(``test_every_non_public_route_is_guarded_by_a_scope_dependency``); the behaviour itself
+is tested in ``tests/integration/api``.
 """
 
 from __future__ import annotations
@@ -12,8 +17,10 @@ from typing import Any
 
 import pytest
 from fastapi import FastAPI
-from fastapi.routing import APIRoute
+from fastapi.dependencies.models import Dependant
+from fastapi.routing import APIRoute, RouteContext, iter_route_contexts
 
+from app.auth.dependencies import SCOPE_MARKER
 from app.config import Settings
 from app.main import create_app
 
@@ -65,6 +72,7 @@ def _declared_scopes(op: dict[str, Any]) -> list[str]:
 
 
 def test_every_api_route_declares_scope_or_is_public(schema: dict[str, Any]):
+    # Declaration only: see the module docstring and the dependant-tree test below.
     violations = []
     for method, path, op in _operations(schema):
         scopes = _declared_scopes(op)
@@ -76,13 +84,24 @@ def test_every_api_route_declares_scope_or_is_public(schema: dict[str, Any]):
     assert violations == [], "routes without exactly one declared scope:\n" + "\n".join(violations)
 
 
+def _api_routes(application: FastAPI) -> list[RouteContext]:
+    """Every API route with its effective path and dependencies.
+
+    ``application.routes`` holds included routers as unexpanded entries, so the routes are
+    expanded with ``iter_route_contexts`` (the same walk FastAPI's OpenAPI uses).
+    """
+    routes = [
+        ctx
+        for ctx in iter_route_contexts(application.routes)
+        if isinstance(ctx.original_route, APIRoute)
+    ]
+    assert routes, "no API routes found; the route walk is broken"
+    return routes
+
+
 def test_no_api_route_is_hidden_from_the_schema(application: FastAPI):
     # A route outside the schema would escape the scope check above.
-    hidden = [
-        route.path
-        for route in application.routes
-        if isinstance(route, APIRoute) and not route.include_in_schema
-    ]
+    hidden = [ctx.path for ctx in _api_routes(application) if not ctx.include_in_schema]
     assert hidden == []
 
 
@@ -117,3 +136,37 @@ def test_every_operation_has_tag_and_summary(schema: dict[str, Any]):
 
 def test_problem_detail_is_a_component(schema: dict[str, Any]):
     assert "ProblemDetail" in schema["components"]["schemas"]
+
+
+def _guard_scopes(dependant: Dependant) -> list[str]:
+    """Scopes of every scope-guard dependency anywhere in the dependant tree."""
+    found = []
+    call = dependant.call
+    if call is not None and hasattr(call, SCOPE_MARKER):
+        found.append(getattr(call, SCOPE_MARKER))
+    for sub in dependant.dependencies:
+        found.extend(_guard_scopes(sub))
+    return found
+
+
+def test_every_non_public_route_is_guarded_by_a_scope_dependency(
+    application: FastAPI, schema: dict[str, Any]
+):
+    declared = {(m, p): _declared_scopes(op) for m, p, op in _operations(schema)}
+    unguarded = []
+    checked = 0
+    for ctx in _api_routes(application):
+        for method in sorted(m.lower() for m in ctx.methods or ()):
+            checked += 1
+            if (method, ctx.path) in PUBLIC_OPERATIONS:
+                continue
+            guards = _guard_scopes(ctx.dependant)
+            if not guards:
+                unguarded.append(f"{method.upper()} {ctx.path}")
+                continue
+            # The guard really enforces the scope the schema declares.
+            assert guards == declared[(method, ctx.path)], (method, ctx.path, guards)
+    assert checked == len(_operations(schema))  # every documented operation was walked
+    assert unguarded == [], "routes without require_scope/require_admin_or_bootstrap:\n" + (
+        "\n".join(unguarded)
+    )

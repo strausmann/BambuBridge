@@ -11,4 +11,7 @@ def make_engine(url: str) -> AsyncEngine:
     Isolation is the PostgreSQL default ``READ COMMITTED``; code that needs more
     takes row locks or sets a stronger level for its own transaction.
     """
-    return create_async_engine(url, isolation_level="READ COMMITTED", pool_pre_ping=True)
+    # hide_parameters: bound values (hashes, settings) stay out of exception messages.
+    return create_async_engine(
+        url, isolation_level="READ COMMITTED", pool_pre_ping=True, hide_parameters=True
+    )

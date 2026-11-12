@@ -94,9 +94,24 @@ async def delete(session: AsyncSession, key_id: uuid.UUID) -> bool:
     return result.first() is not None
 
 
-async def touch_last_used(session: AsyncSession, key_id: uuid.UUID) -> None:
-    """Set ``last_used_at`` to now. The caller commits."""
-    await session.execute(update(ApiKey).where(ApiKey.id == key_id).values(last_used_at=func.now()))
+# last_used_at is written at most once per this interval per token.
+LAST_USED_RESOLUTION_SECONDS = 60
+
+
+async def touch_last_used(session: AsyncSession, key_id: uuid.UUID) -> bool:
+    """Set ``last_used_at`` to now unless it was set within the last minute.
+
+    Returns whether a row was written. The caller commits.
+    """
+    stale = func.now() - text(f"interval '{LAST_USED_RESOLUTION_SECONDS} seconds'")
+    result = await session.execute(
+        update(ApiKey)
+        .where(ApiKey.id == key_id)
+        .where(or_(ApiKey.last_used_at.is_(None), ApiKey.last_used_at < stale))
+        .values(last_used_at=func.now())
+        .returning(ApiKey.id)
+    )
+    return result.first() is not None
 
 
 async def lock_bootstrap(session: AsyncSession) -> None:
@@ -105,16 +120,14 @@ async def lock_bootstrap(session: AsyncSession) -> None:
 
 
 async def usable_admin_token_exists(session: AsyncSession) -> bool:
-    """Whether a token exists that can act as admin right now.
+    """Whether an enabled, unexpired token with scope ``admin`` exists (bootstrap closed).
 
-    Enabled, not expired, scope ``admin`` and owned by an enabled user with role
-    ``admin`` (a token's effective scope is capped by its owner's role).
+    The owner is deliberately not considered: whether a disabled or demoted admin user can
+    get a new token is decided by the bootstrap route, which refuses to issue dead tokens.
     """
     query = select(
         exists()
-        .where(ApiKey.owner_user_id == User.id)
         .where(ApiKey.scope == "admin", ApiKey.enabled.is_(True))
         .where(or_(ApiKey.expires_at.is_(None), ApiKey.expires_at > func.now()))
-        .where(User.enabled.is_(True), User.role == "admin")
     )
     return bool(await session.scalar(query))

@@ -1,24 +1,34 @@
 """Error responses as RFC 9457 problem details with a stable ``error_code``.
 
-Routes and dependencies raise ``ApiError``; database failures become 503
-``database_unavailable``. Messages are fixed strings chosen here: a token, the bootstrap
-key or SQL text never reaches a response.
+Routes and dependencies raise ``ApiError``. Database outages are translated at the
+database boundary (``DatabaseUnavailableError``, see ``app.db.session``) or recognised as
+connection-level SQLAlchemy errors; everything else is a 500 ``internal_error``.
+Messages are fixed strings chosen here: an exception message, a token, the bootstrap
+key, SQL text or request input never reaches a response.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from http import HTTPStatus
+from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.schemas.problem import ProblemDetail
 
 PROBLEM_MEDIA_TYPE = "application/problem+json"
+# Exceptions that mean "the database cannot be reached", not "the query was wrong".
+CONNECTION_ERRORS: tuple[type[BaseException], ...] = (OSError, OperationalError, InterfaceError)
 
 _log = logging.getLogger(__name__)
+_MAX_VALIDATION_ERRORS = 20
 
 
 class ApiError(Exception):
@@ -40,6 +50,23 @@ class ApiError(Exception):
         self.detail = detail
         self.headers = dict(headers or {})
 
+    def response(self) -> JSONResponse:
+        return problem_response(
+            self.status, self.error_code, self.title, detail=self.detail, headers=self.headers
+        )
+
+
+class DatabaseUnavailableError(ApiError):
+    """The database could not be reached (raised at the connection boundary)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            503,
+            "database_unavailable",
+            "Database unavailable",
+            detail="The database could not be reached. Try again later.",
+        )
+
 
 def problem_response(
     status: int,
@@ -48,10 +75,17 @@ def problem_response(
     *,
     detail: str | None = None,
     headers: Mapping[str, str] | None = None,
+    extensions: dict[str, object] | None = None,
 ) -> JSONResponse:
     problem = ProblemDetail(
-        title=title, status=status, detail=detail, error_code=error_code
-    ).model_dump(exclude_none=True, exclude={"extensions"})
+        title=title,
+        status=status,
+        detail=detail,
+        error_code=error_code,
+        extensions=extensions or {},
+    ).model_dump(exclude_none=True)
+    if not problem["extensions"]:
+        del problem["extensions"]
     return JSONResponse(
         status_code=status,
         content=problem,
@@ -60,27 +94,109 @@ def problem_response(
     )
 
 
+def _internal_error() -> JSONResponse:
+    return problem_response(500, "internal_error", "Internal server error")
+
+
 async def _api_error_handler(_request: Request, exc: Exception) -> JSONResponse:
     if not isinstance(exc, ApiError):  # pragma: no cover - registered for ApiError only
         raise TypeError("handler registered for another exception type")
+    return exc.response()
+
+
+async def _dbapi_error_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """Connection-level errors are 503; any other driver error is a bug (500)."""
+    if isinstance(exc, (OperationalError, InterfaceError)) or (
+        isinstance(exc, DBAPIError) and exc.connection_invalidated
+    ):
+        # The type only: SQLAlchemy messages carry SQL text.
+        _log.error("database unavailable while handling a request: %s", type(exc).__name__)
+        return DatabaseUnavailableError().response()
+    _log.error("unhandled database error", exc_info=exc)
+    return _internal_error()
+
+
+def _sanitize_validation_errors(errors: Any) -> list[dict[str, object]]:
+    """Location, message and type of each error; never ``input`` or ``ctx``."""
+    result: list[dict[str, object]] = []
+    for err in list(errors)[:_MAX_VALIDATION_ERRORS]:
+        loc = [str(part) for part in err.get("loc", ())]
+        if err.get("type") == "extra_forbidden" and loc:
+            loc[-1] = "<unknown field>"  # a field name the client chose is not echoed
+        result.append({"loc": loc, "msg": str(err.get("msg", "")), "type": str(err.get("type"))})
+    return result
+
+
+async def _validation_handler(_request: Request, exc: Exception) -> JSONResponse:
+    if not isinstance(exc, RequestValidationError):  # pragma: no cover
+        raise TypeError("handler registered for another exception type")
     return problem_response(
-        exc.status, exc.error_code, exc.title, detail=exc.detail, headers=exc.headers
+        422,
+        "validation_failed",
+        "Request validation failed",
+        extensions={"errors": _sanitize_validation_errors(exc.errors())},
     )
 
 
-async def _database_error_handler(_request: Request, exc: Exception) -> JSONResponse:
-    # Only the exception type is logged: SQLAlchemy messages carry SQL and bound values.
-    _log.error("database error while handling a request: %s", type(exc).__name__)
+_HTTP_ERROR_CODES = {
+    400: "bad_request",
+    401: "not_authenticated",
+    403: "forbidden",
+    404: "not_found",
+    405: "method_not_allowed",
+    413: "payload_too_large",
+    415: "unsupported_media_type",
+}
+
+
+async def _http_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """Framework errors (unknown route, wrong method, ...). ``exc.detail`` is not echoed."""
+    if not isinstance(exc, StarletteHTTPException):  # pragma: no cover
+        raise TypeError("handler registered for another exception type")
+    status = exc.status_code
     return problem_response(
-        503,
-        "database_unavailable",
-        "Database unavailable",
-        detail="The database could not be reached. Try again later.",
+        status,
+        _HTTP_ERROR_CODES.get(status, "http_error"),
+        HTTPStatus(status).phrase,
+        headers=exc.headers,
     )
+
+
+class InternalErrorMiddleware:
+    """Answer any unhandled exception with a 500 problem and log it with its traceback.
+
+    Starlette's own fallback (``ServerErrorMiddleware``) answers with plain text and
+    re-raises; this middleware sits inside it so the client always gets problem details.
+    If the response has already started, the exception is re-raised unchanged.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        started = False
+
+        async def tracking_send(message: Message) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracking_send)
+        except Exception as exc:
+            if started:
+                raise
+            _log.error("unhandled error while handling a request", exc_info=exc)
+            await _internal_error()(scope, receive, send)
 
 
 def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(ApiError, _api_error_handler)
-    app.add_exception_handler(SQLAlchemyError, _database_error_handler)
-    # asyncpg raises plain OSError (e.g. ConnectionRefusedError) when it cannot connect.
-    app.add_exception_handler(OSError, _database_error_handler)
+    app.add_exception_handler(DBAPIError, _dbapi_error_handler)
+    app.add_exception_handler(RequestValidationError, _validation_handler)
+    app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
+    app.add_middleware(InternalErrorMiddleware)

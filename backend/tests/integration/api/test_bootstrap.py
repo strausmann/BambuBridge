@@ -127,26 +127,60 @@ async def test_bootstrap_closed_while_an_admin_token_exists(
     _problem(await client.post(BASE, json=BODY, headers=GOOD), 403, "bootstrap_closed")
 
 
-@pytest.mark.parametrize("state", ["disabled", "expired", "read_scope", "owner_disabled"])
+@pytest.mark.parametrize("state", ["disabled", "expired", "read_scope"])
 async def test_bootstrap_reopens_without_a_usable_admin_token(
     client: httpx.AsyncClient, engine: AsyncEngine, state: str
 ):
+    # Reopen criterion: no enabled, unexpired token with scope admin.
     plaintext = await issue_token(engine, "read" if state == "read_scope" else "admin")
     values: dict[str, object] = {}
     if state == "disabled":
         values["enabled"] = False
     if state == "expired":
         values["expires_at"] = datetime.now(UTC) - timedelta(seconds=1)
-    async with make_session_factory(engine)() as session:
-        if values:
+    if values:
+        async with make_session_factory(engine)() as session:
             await session.execute(
                 update(ApiKey).where(ApiKey.prefix == plaintext[:16]).values(**values)
             )
-        if state == "owner_disabled":
-            await session.execute(update(User).values(enabled=False))
-        await session.commit()
+            await session.commit()
     r = await client.post(BASE, json=BODY, headers=GOOD)
     assert r.status_code == 201, r.text
+    # The new token really works.
+    assert (await client.get(BASE, headers={KEY_HEADER: r.json()["token"]})).status_code == 200
+
+
+async def test_bootstrap_stays_closed_when_admin_token_owner_is_disabled(
+    client: httpx.AsyncClient, engine: AsyncEngine, admin_token: str
+):
+    async with make_session_factory(engine)() as session:
+        await session.execute(update(User).values(enabled=False))
+        await session.commit()
+    _problem(await client.post(BASE, json=BODY, headers=GOOD), 403, "bootstrap_closed")
+
+
+async def test_bootstrap_refused_for_disabled_admin_user(
+    client: httpx.AsyncClient, engine: AsyncEngine
+):
+    # The admin user exists but is disabled and has no admin token: no dead token is issued.
+    async with make_session_factory(engine)() as session:
+        session.add(User(display_name="admin", role="admin", enabled=False))
+        await session.commit()
+    _problem(await client.post(BASE, json=BODY, headers=GOOD), 403, "bootstrap_owner_disabled")
+    assert await _count(engine) == 0
+
+
+async def test_bootstrap_refused_when_admin_user_lost_its_role(
+    client: httpx.AsyncClient, engine: AsyncEngine
+):
+    async with make_session_factory(engine)() as session:
+        session.add(User(display_name="admin", role="read"))
+        await session.commit()
+    _problem(await client.post(BASE, json=BODY, headers=GOOD), 403, "bootstrap_owner_not_admin")
+    assert await _count(engine) == 0
+    async with make_session_factory(engine)() as session:
+        names = (await session.scalars(select(User.display_name))).all()
+    assert names == ["admin"]
 
 
 async def test_token_header_wins_over_bootstrap_header(client: httpx.AsyncClient, read_token: str):

@@ -9,6 +9,7 @@ in memory only while a token is created or checked and is shown to the user once
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import re
 import secrets
@@ -73,6 +74,26 @@ async def verify_token(plaintext: str, hashed: str) -> bool:
     if ok:
         _verify_cache[key] = True
     return ok
+
+
+@functools.cache
+def _dummy_hash() -> str:
+    # A hash of a random value nobody knows; computed once, on first use.
+    return hash_token(generate_token()[0])
+
+
+def _dummy_check(plaintext: str) -> bool:
+    _checkpw(plaintext, _dummy_hash())
+    return False
+
+
+async def dummy_verify(plaintext: str) -> bool:
+    """Spend the same bcrypt work as ``verify_token`` and return ``False``.
+
+    Used for an unknown prefix, so the response time does not reveal whether a prefix
+    exists. Never cached.
+    """
+    return await asyncio.to_thread(_dummy_check, plaintext)
 
 
 def clear_verify_cache() -> None:
