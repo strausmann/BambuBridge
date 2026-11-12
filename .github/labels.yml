@@ -1,134 +1,261 @@
-# Label taxonomy — synced to GitHub (do NOT create labels in the UI; they get removed on sync).
-# type:* (what), area:* (where), status:* (lifecycle), priority:*, plus meta + hardware.
+# Label taxonomy — synced to GitHub by .github/workflows/labels.yml (do NOT create labels in the UI; they get removed on sync).
+# Aligned with strausmann/Label-Printer-Hub (colours and descriptions of shared labels are identical); BambuBridge-specific
+# area:* and hardware:* labels follow the LPH colour palette. Schema: https://github.com/EndBug/label-sync#config-files
 
-# --- type ---
+# ============================================================================
+# type — what kind of work is this?
+# ============================================================================
 - name: "type:bug"
   color: "d73a4a"
-  description: "Something is broken"
+  description: "Something isn't working"
+
 - name: "type:feature"
-  color: "0e8a16"
-  description: "New capability"
+  color: "a2eeef"
+  description: "New feature or enhancement"
+
 - name: "type:enhancement"
   color: "1d76db"
   description: "Improvement to existing behaviour"
+
 - name: "type:docs"
   color: "0075ca"
-  description: "Documentation / guidelines / ADRs"
+  description: "Documentation only"
+
 - name: "type:refactor"
-  color: "5319e7"
-  description: "Code change without behaviour change"
-- name: "type:test"
-  color: "bfd4f2"
-  description: "Tests"
-- name: "type:chore"
   color: "fef2c0"
-  description: "Tooling / maintenance"
+  description: "Code change without behaviour change"
+
+- name: "type:test"
+  color: "fbca04"
+  description: "Test additions or fixes"
+
+- name: "type:chore"
+  color: "cccccc"
+  description: "Tooling, deps, CI, housekeeping"
+
 - name: "type:security"
   color: "b60205"
   description: "Security-relevant"
-- name: "type:question"
-  color: "cc317c"
-  description: "Question / discussion"
 
-# --- area (subsystems; mirror .github/SCOPES.md) ---
-- name: "area:mqtt"
-  color: "c2e0c6"
-  description: "LAN/Cloud MQTT ingest"
-- name: "area:spoolman"
-  color: "c2e0c6"
-  description: "Spoolman sync / SpoolmanDB"
-- name: "area:db"
-  color: "c2e0c6"
-  description: "SQLite model / migrations"
-- name: "area:api"
-  color: "c2e0c6"
-  description: "FastAPI endpoints / auth"
-- name: "area:ui"
-  color: "c2e0c6"
-  description: "PWA / web frontend"
-- name: "area:presets"
-  color: "c2e0c6"
-  description: "Bambu preset generation"
-- name: "area:cloud"
-  color: "c2e0c6"
-  description: "Bambu Cloud import"
+- name: "type:question"
+  color: "d876e3"
+  description: "Question or discussion"
+
+# ============================================================================
+# area — where in the code (mirrors .github/SCOPES.md)
+# ============================================================================
 - name: "area:ams"
-  color: "c2e0c6"
+  color: "fbca04"
   description: "AMS / slot logic"
-- name: "area:esp32"
-  color: "c2e0c6"
-  description: "ESP32 slot selector"
-- name: "area:consumption"
-  color: "c2e0c6"
-  description: "Consumption / reconcile"
-- name: "area:tags"
-  color: "c2e0c6"
-  description: "RFID tag lifecycle"
-- name: "area:docker"
-  color: "c2e0c6"
-  description: "Docker / compose"
+
+- name: "area:api"
+  color: "0052cc"
+  description: "FastAPI endpoints / auth"
+
 - name: "area:ci"
-  color: "c2e0c6"
-  description: "CI / release tooling"
+  color: "ededed"
+  description: "GitHub Actions, releases, build pipeline"
+
+- name: "area:cloud"
+  color: "ffc107"
+  description: "Bambu Cloud import"
+
+- name: "area:consumption"
+  color: "f9d0c4"
+  description: "Consumption / reconcile"
+
+- name: "area:db"
+  color: "5319e7"
+  description: "SQLite model / migrations"
+
+- name: "area:docker"
+  color: "2496ed"
+  description: "Docker / compose"
+
 - name: "area:docs"
-  color: "c2e0c6"
+  color: "0075ca"
   description: "Documentation"
 
-# --- status ---
-- name: "status:triage"
-  color: "ededed"
-  description: "Needs triage"
-- name: "status:in-progress"
-  color: "fbca04"
-  description: "Being worked on"
+- name: "area:esp32"
+  color: "0e8a16"
+  description: "ESP32 slot selector"
+
+- name: "area:mqtt"
+  color: "1d76db"
+  description: "LAN/Cloud MQTT ingest"
+
+- name: "area:presets"
+  color: "8a2be2"
+  description: "Bambu preset generation"
+
+- name: "area:security"
+  color: "ee0701"
+  description: "Security-relevant changes"
+
+- name: "area:spoolman"
+  color: "bfd4f2"
+  description: "Spoolman sync / SpoolmanDB"
+
+- name: "area:tags"
+  color: "f0a3ff"
+  description: "RFID tag lifecycle"
+
+- name: "area:ui"
+  color: "c5def5"
+  description: "PWA / web frontend"
+
+# ============================================================================
+# status — lifecycle
+# ============================================================================
 - name: "status:blocked"
-  color: "d93f0b"
-  description: "Blocked by something else"
+  color: "b60205"
+  description: "Blocked on external dependency or decision"
+
+- name: "status:duplicate"
+  color: "cccccc"
+  description: "Duplicate of another issue/PR"
+
+- name: "status:in-progress"
+  color: "0e8a16"
+  description: "Someone is actively working on this"
+
 - name: "status:needs-info"
-  color: "d4c5f9"
-  description: "Waiting for more information"
+  color: "fbca04"
+  description: "Waiting for more information from reporter"
+
+- name: "status:needs-triage"
+  color: "ededed"
+  description: "Awaiting maintainer triage"
+  aliases: ['status:triage']
+
+- name: "status:ready-for-review"
+  color: "0e8a16"
+  description: "Ready for review"
+
 - name: "status:wontfix"
   color: "ffffff"
-  description: "Will not be worked on"
+  description: "Decided not to address"
 
-# --- priority ---
+# ============================================================================
+# priority
+# ============================================================================
 - name: "priority:critical"
   color: "b60205"
-  description: "Critical"
+  description: "Drop everything"
+
 - name: "priority:high"
   color: "d93f0b"
-  description: "High"
+  description: "Address soon"
+
 - name: "priority:medium"
   color: "fbca04"
-  description: "Medium"
+  description: "Normal priority"
+
 - name: "priority:low"
   color: "0e8a16"
-  description: "Low"
+  description: "Nice to have"
 
-# --- meta ---
+- name: "priority:backlog"
+  color: "c5def5"
+  description: "Backlog — kein aktiver Handlungsbedarf"
+
+# ============================================================================
+# hardware
+# ============================================================================
+- name: "hardware:ams"
+  color: "8a2be2"
+  description: "AMS hardware"
+
+- name: "hardware:bambu"
+  color: "8a2be2"
+  description: "Bambu printer / firmware behaviour"
+
+- name: "hardware:esp32"
+  color: "8a2be2"
+  description: "ESP32-2432S028 (CYD)"
+
+# ============================================================================
+# meta and Dependabot ecosystems
+# ============================================================================
 - name: "breaking-change"
   color: "b60205"
-  description: "Backwards-incompatible change"
-- name: "good-first-issue"
-  color: "7057ff"
-  description: "Good for newcomers"
-- name: "help-wanted"
-  color: "008672"
-  description: "Help wanted"
+  description: "Major version bump required"
+
 - name: "dependencies"
   color: "0366d6"
-  description: "Dependency updates"
-- name: "release-note"
-  color: "c5def5"
-  description: "Call out in release notes"
+  description: "Pull requests that update a dependency file"
 
-# --- hardware ---
-- name: "hardware:bambu"
-  color: "fad8c7"
-  description: "Bambu printer / firmware behaviour"
-- name: "hardware:ams"
-  color: "fad8c7"
-  description: "AMS hardware"
-- name: "hardware:esp32"
-  color: "fad8c7"
-  description: "ESP32-2432S028 (CYD)"
+- name: "docker"
+  color: "2496ed"
+  description: "Docker image dependencies"
+
+- name: "github-actions"
+  color: "2088ff"
+  description: "GitHub Actions workflow dependencies"
+
+- name: "good-first-issue"
+  color: "7057ff"
+  description: "Good for new contributors"
+
+- name: "help-wanted"
+  color: "008672"
+  description: "Extra attention needed"
+
+- name: "javascript"
+  color: "f1e05a"
+  description: "JavaScript/Node dependencies"
+
+- name: "python"
+  color: "3572a5"
+  description: "Python dependencies"
+
+- name: "release-note"
+  color: "0e8a16"
+  description: "Mention in release notes"
+
+- name: "superpowers:brainstorming"
+  color: "8a2be2"
+  description: "Konzept wurde mit superpowers:brainstorming geplant"
+
+# ============================================================================
+# legacy — GitHub default labels and released (unchanged; kept so the sync does not delete them; candidates for cleanup)
+# ============================================================================
+- name: "bug"
+  color: "d73a4a"
+  description: "Something isn't working"
+
+- name: "documentation"
+  color: "0075ca"
+  description: "Improvements or additions to documentation"
+
+- name: "duplicate"
+  color: "cfd3d7"
+  description: "This issue or pull request already exists"
+
+- name: "enhancement"
+  color: "a2eeef"
+  description: "New feature or request"
+
+- name: "good first issue"
+  color: "7057ff"
+  description: "Good for newcomers"
+
+- name: "help wanted"
+  color: "008672"
+  description: "Extra attention is needed"
+
+- name: "invalid"
+  color: "e4e669"
+  description: "This doesn't seem right"
+
+- name: "question"
+  color: "d876e3"
+  description: "Further information is requested"
+
+- name: "wontfix"
+  color: "ffffff"
+  description: "This will not be worked on"
+
+- name: "released"
+  color: "ededed"
+  description: ""

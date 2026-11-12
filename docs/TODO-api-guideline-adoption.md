@@ -1,7 +1,7 @@
 # Tracking: API-Guideline-Adoption
 
-> Ersatz für ein GitHub-Issue (Issues sind in diesem Repo deaktiviert). Sobald Issues in den
-> Repo-Settings aktiviert sind, kann dies 1:1 als Issue übernommen werden.
+> Checkliste zum GitHub-Issue [#28](https://github.com/strausmann/BambuBridge/issues/28) (F-01, Milestone 0.2.0).
+> Das Issue führt den Fortschritt; diese Datei bleibt als Detail-Checkliste bestehen.
 
 **Quelle der Wahrheit:** [`docs/api-guideline.md`](./api-guideline.md)
 

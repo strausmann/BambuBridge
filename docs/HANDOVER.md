@@ -122,7 +122,7 @@ künftige Standalone-Repo-Root.
 cp -r bambu-spoolman-bridge/* bambu-spoolman-bridge/.gitignore <neues-repo>/
 # (alternativ: git filter-repo / git subtree split auf den Ordner, um Historie zu behalten)
 ```
-Inhalt: `app/ web/ scripts/ docs/ analysis/ issues/ .github/ Dockerfile docker-compose.yml
+Inhalt: `app/ web/ scripts/ docs/ analysis/ .github/ Dockerfile docker-compose.yml
 requirements.txt config.example.yaml README.md LICENSE .gitignore`.
 
 **NICHT übernehmen:** `data/` (Config/DB/Secrets), Captures/Dumps, die Bambu-DLL, Tokens.

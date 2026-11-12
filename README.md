@@ -135,7 +135,6 @@ app/        FastAPI service (MQTT ingest, Spoolman client, SQLite state, cloud i
 web/        Tailwind PWA (onboarding, SpoolmanDB, preset generator, cloud import, NFC)
 scripts/    catalog builder, 3mf extractor, endpoint scanner, mitmproxy addon, redactor
 docs/       concept, API + database guidelines, capture runbook, capability matrix, HANDOVER
-issues/     backlog as Markdown (BR-xx review findings, F-xx features) — import via gh CLI
 analysis/   schema-only endpoint exchange (redacted; never raw flows/credentials)
 .github/    issue templates
 ```
