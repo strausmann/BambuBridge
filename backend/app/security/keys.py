@@ -25,10 +25,8 @@ def decode_secret_key(text: str, *, name: str) -> bytes:
     message = f"{name} must be 32 bytes as base64url text, 43 characters ({KEY_HELP})"
     if not _KEY_SHAPE.fullmatch(candidate):
         raise ValueError(message)
-    try:
-        raw = base64.urlsafe_b64decode(candidate.rstrip("=") + "=")
-    except ValueError as exc:  # binascii.Error is a ValueError
-        raise ValueError(message) from exc
+    # The shape check guarantees 43 URL-safe characters, which always decode.
+    raw = base64.urlsafe_b64decode(candidate.rstrip("=") + "=")
     if len(raw) != _KEY_BYTES or base64.urlsafe_b64encode(raw).rstrip(b"=") != candidate.rstrip(
         "="
     ).encode("ascii"):
