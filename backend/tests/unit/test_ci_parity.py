@@ -55,12 +55,12 @@ def _from_yaml(field: str) -> str:
     return str(_step(commitlint, "actions/setup-node")["with"]["node-version"])
 
 
-# field -> (workflow file, text of the real file, the same line with the key renamed)
+# field -> (workflow file, key as the workflow spells it, the key renamed)
 FIELDS = {
-    "python": ("ci.yml", "python-version:", "python_version:"),
-    "uv": ("ci.yml", '          version: "', '          uv-version: "'),
-    "postgres-image": ("ci.yml", "image: postgres:", "container: postgres:"),
-    "node": ("commitlint.yml", "node-version:", "node_version:"),
+    "python": ("ci.yml", "python-version", "python_version"),
+    "uv": ("ci.yml", "version", "uv-version"),
+    "postgres-image": ("ci.yml", "image", "container"),
+    "node": ("commitlint.yml", "node-version", "node_version"),
 }
 
 
@@ -78,15 +78,17 @@ def test_extraction_fails_and_names_the_field_when_the_key_is_renamed(field: str
     for source in WORKFLOWS.glob("*.yml"):
         text = source.read_text(encoding="utf-8")
         if source.name == file_name:
-            assert text.count(key) == 1, f"fixture assumption: one '{key}' in {file_name}"
-            text = text.replace(key, renamed)
+            # Every line whose key is exactly ``key``, whatever its indentation.
+            text, renamed_lines = re.subn(rf"(?m)^(\s*){key}:", rf"\g<1>{renamed}:", text)
+            assert renamed_lines >= 1, f"no '{key}:' line in {file_name}"
         (tmp_path / source.name).write_text(text, encoding="utf-8")
 
     result = _extract(field, tmp_path)
     assert result.returncode == 1
     assert result.stdout == ""
-    assert "cannot read the" in result.stderr
-    assert file_name in result.stderr
+    # The message names the key and the file, e.g. "cannot read the version of the … in ci.yml".
+    assert f"cannot read the {key} of the " in result.stderr
+    assert f" in {file_name}" in result.stderr
 
 
 def test_makefile_takes_every_version_from_the_script():

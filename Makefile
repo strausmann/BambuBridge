@@ -12,6 +12,9 @@ SHELL := /bin/sh
 # The tool versions come from the workflows in .github/workflows, the single source:
 # scripts/ci-versions.sh reads them, so a version bump there applies to "make ci" as well.
 # For an experiment, override one from the environment, e.g. PYTHON_VERSION=3.14.11 make ci.
+# The targets below need no version; they keep working when a workflow cannot be read.
+NO_VERSION_GOALS := help hooks ci-db-stop
+ifneq ($(filter-out $(NO_VERSION_GOALS),$(or $(MAKECMDGOALS),$(.DEFAULT_GOAL))),)
 PYTHON_VERSION ?= $(shell scripts/ci-versions.sh python)
 UV_VERSION     ?= $(shell scripts/ci-versions.sh uv)
 POSTGRES_IMAGE ?= $(shell scripts/ci-versions.sh postgres-image)
@@ -23,6 +26,7 @@ POSTGRES_IMAGE := $(POSTGRES_IMAGE)
 NODE_VERSION   := $(NODE_VERSION)
 ifeq ($(and $(PYTHON_VERSION),$(UV_VERSION),$(POSTGRES_IMAGE),$(NODE_VERSION)),)
 $(error cannot read the tool versions from .github/workflows - see the message above)
+endif
 endif
 
 PYTHON_IMAGE := python:$(PYTHON_VERSION)-slim-trixie
