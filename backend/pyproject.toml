@@ -1,0 +1,102 @@
+[project]
+name = "bambubridge"
+version = "0.0.0-dev"
+description = "BambuBridge backend"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi==0.162.5",
+    "uvicorn[standard]==0.54.0",
+    "sqlalchemy[asyncio]==2.1.8",
+    "alembic==1.20.1",
+    "pydantic==2.14.3",
+    "pydantic-settings==2.16.2",
+    "asyncpg==0.32.0",
+    "bcrypt==5.0.0",
+    "cryptography==50.0.2",
+    "httpx==0.28.1",
+    "cachetools==8.0.0",
+    "prometheus-client==0.26.0",
+    "python-multipart==0.0.33",
+]
+
+[dependency-groups]
+dev = [
+    "pytest==9.2.0",
+    "pytest-asyncio==1.4.1.post1",
+    "pytest-cov==7.1.0",
+    "ruff==0.17.4",
+    "mypy==2.4.1",
+    "respx==0.23.1",
+    "pip-licenses==5.5.5",
+]
+
+[project.scripts]
+bambubridge = "app.cli:main"
+
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["."]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",      # pycodestyle + pyflakes
+    "I",                # isort
+    "N",                # pep8-naming
+    "UP",               # pyupgrade
+    "B",                # bugbear
+    "A",                # builtins shadowing
+    "C4",               # comprehensions
+    "T20",              # flake8-print
+    "SIM",              # simplify
+    "ARG",              # unused args
+    "PTH",              # use pathlib
+    "RUF",              # ruff-specific
+    "S",                # bandit
+]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "ARG",   # pytest fixtures use unused args for dependency injection
+    "S101",  # assert is the pytest idiom
+    "S105",  # fake secrets in tests
+    "S106",
+]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+show_error_codes = true
+disallow_untyped_decorators = false   # FastAPI/pytest decorators
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = ["--strict-markers", "--strict-config", "-ra"]
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "\\.\\.\\.",
+]

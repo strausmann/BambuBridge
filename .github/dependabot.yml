@@ -1,0 +1,58 @@
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /backend
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(deps)
+    labels: [dependencies, python]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(deps)
+    labels: [dependencies, javascript]
+    ignore:
+      # typescript-eslint 8.72.2 requires typescript < 6.1.0.
+      - dependency-name: typescript
+        versions: [">=6.1.0"]
+      # eslint-plugin-jsx-a11y 6.10.2 supports at most ESLint 9.
+      - dependency-name: eslint
+        versions: [">=10.0.0"]
+      - dependency-name: "@eslint/js"
+        versions: [">=10.0.0"]
+
+  - package-ecosystem: npm
+    directory: /.github/release-tools
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(deps)
+    labels: [dependencies, javascript]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(deps)
+    labels: [dependencies, javascript]
+
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(deps)
+    labels: [dependencies, docker]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(deps)
+    labels: [dependencies, github-actions]

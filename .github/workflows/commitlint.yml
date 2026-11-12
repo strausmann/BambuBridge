@@ -2,16 +2,21 @@ name: Commit Lint
 
 on: pull_request
 
+permissions:
+  contents: read
+
 jobs:
   commitlint:
-    runs-on: ubuntu-latest
+    name: commitlint
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 'lts/*'
-      - run: npm install
+          node-version: 26
+      - name: Install tooling from the root lockfile
+        run: npm ci
       - name: Lint PR commits
-        run: npx commitlint --from "${{ github.event.pull_request.base.sha }}" --to "${{ github.event.pull_request.head.sha }}" --verbose
+        run: npx --no-install commitlint --from "${{ github.event.pull_request.base.sha }}" --to "${{ github.event.pull_request.head.sha }}" --verbose
