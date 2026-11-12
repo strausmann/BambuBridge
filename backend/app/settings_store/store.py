@@ -13,6 +13,7 @@ other instances (see :mod:`app.settings_store.listener`) reload after the commit
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import Callable, Collection, Iterable
@@ -236,7 +237,9 @@ class SettingsStore:
         """Validate, write and ``pg_notify`` in one transaction, then commit.
 
         ``None`` resets a plain setting to its default; ``None`` or ``""`` clears a secret.
-        All-or-nothing: an invalid value or a database error changes nothing.
+        All-or-nothing up to the commit: an invalid value or a database error before it
+        changes nothing. Once the commit has succeeded the write is durable and this method
+        does not raise because of what follows (see below).
 
         After the commit the written keys are re-read from the database and installed under
         the store's state lock, which the listener's reload shares. The database is the truth:
@@ -244,7 +247,10 @@ class SettingsStore:
         cache, never ours. Reads of the cache between the commit and this update may still see
         the previous value (eventual consistency within one process). A change is announced
         to subscribers once per process, by whichever of this call and the listener's reload
-        installs it first.
+        installs it first. If re-reading fails (for example the connection drops right after
+        the commit) the error is logged by type and swallowed: the write stands, and the
+        listener's reload, triggered by the NOTIFY of the commit, brings the cache in line.
+        The session is left without an open transaction either way.
         """
         unknown = sorted(k for k in values if k not in SETTINGS)
         if unknown:
@@ -315,12 +321,23 @@ class SettingsStore:
         # The database, not the values passed in, is the truth: another writer may have
         # committed the same keys after us. Re-read them under the state lock so that this
         # update cannot interleave with a listener reload or another writer's update.
-        async with self._state_lock:
-            before = self._snapshot()
-            await self._load_keys(session, clean)
-            changed = self._changed_since(before, clean)
-            if changed:
-                self._notify(changed)
+        # The write is durable now, so nothing below may make this call fail.
+        try:
+            async with self._state_lock:
+                before = self._snapshot()
+                await self._load_keys(session, clean)
+                changed = self._changed_since(before, clean)
+                if changed:
+                    self._notify(changed)
+        except Exception as exc:  # CancelledError is a BaseException and propagates
+            _log.warning(
+                "settings written but not re-read (%s); the reload will converge",
+                type(exc).__name__,
+            )
+        finally:
+            # End the read transaction: do not leave a pooled connection idle in transaction.
+            with contextlib.suppress(Exception):
+                await session.rollback()
 
 
 __all__ = [

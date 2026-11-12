@@ -492,3 +492,53 @@ async def test_unexpected_exception_in_a_notification_reload_is_contained_and_re
     finally:
         await listener.stop()
     assert "RuntimeError" in caplog.text and "secret-detail-in-message" not in caplog.text
+
+
+async def test_failing_post_commit_read_does_not_fail_the_write_and_the_reload_converges(
+    monkeypatch: pytest.MonkeyPatch,
+    store: SettingsStore,
+    engine: AsyncEngine,
+    db_session: AsyncSession,
+    session2: AsyncSession,
+    caplog: pytest.LogCaptureFixture,
+):
+    key = "retention.events_days"
+    committed = {"done": False}
+    real_commit, real_execute = db_session.commit, db_session.execute
+
+    async def commit() -> None:
+        await real_commit()
+        committed["done"] = True
+
+    async def execute(*args: Any, **kwargs: Any) -> Any:
+        result = await real_execute(*args, **kwargs)  # opens the read transaction ...
+        if committed["done"]:
+            raise ConnectionResetError("secret-detail-in-message")  # ... then the drop
+        return result
+
+    monkeypatch.setattr(db_session, "commit", commit)
+    monkeypatch.setattr(db_session, "execute", execute)
+    changes = Changes(store)
+    listener = SettingsListener(engine, store)
+    await listener.start()
+    try:
+        with caplog.at_level(logging.WARNING):
+            await store.set_many(db_session, {key: 44})  # returns normally: the write is durable
+        monkeypatch.undo()
+        assert not db_session.in_transaction()  # no idle-in-transaction connection left behind
+        probe = SettingsStore(store._box)
+        await probe.load(session2)
+        assert probe.get(key) == 44
+        # The NOTIFY from the commit makes the listener's reload converge the cache.
+        assert await changes.next(10) == {key}
+        assert store.get(key) == 44
+    finally:
+        await listener.stop()
+    assert "ConnectionResetError" in caplog.text and "secret-detail-in-message" not in caplog.text
+
+
+async def test_session_has_no_open_transaction_after_set_many(
+    store: SettingsStore, db_session: AsyncSession
+):
+    await store.set_many(db_session, {"retention.events_days": 3})
+    assert not db_session.in_transaction()
