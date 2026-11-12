@@ -37,7 +37,7 @@ from app.config import Settings
 from app.models.api_key import ApiKey
 from app.models.ui_session import UiSession
 from app.models.user import User
-from app.security.keys import decode_secret_key
+from app.security.keys import decode_secret_key, derive_subkey
 
 if TYPE_CHECKING:
     from app.auth.identity.base import Identity
@@ -62,7 +62,7 @@ def _now() -> datetime:
 
 @dataclass(frozen=True, slots=True)
 class SessionKeys:
-    """Keys derived from ``BAMBUBRIDGE_SECRET_KEY``; never the secret key itself."""
+    """HKDF sub-keys of ``BAMBUBRIDGE_SECRET_KEY`` (``derive_subkey``); never the key itself."""
 
     csrf: bytes
     binding: bytes
@@ -71,15 +71,13 @@ class SessionKeys:
         return "SessionKeys(<hidden>)"
 
 
-def _derive(master: bytes, label: str) -> bytes:
-    return hmac.new(master, b"bambubridge/" + label.encode() + b"/v1", hashlib.sha256).digest()
-
-
 def session_keys(settings: Settings) -> SessionKeys:
     master = decode_secret_key(
         settings.secret_key.get_secret_value(), name="BAMBUBRIDGE_SECRET_KEY"
     )
-    return SessionKeys(csrf=_derive(master, "csrf"), binding=_derive(master, "session-binding"))
+    return SessionKeys(
+        csrf=derive_subkey(master, "csrf"), binding=derive_subkey(master, "session-binding")
+    )
 
 
 def is_secure(settings: Settings) -> bool:

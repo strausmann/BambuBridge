@@ -466,3 +466,13 @@ async def test_token_sign_ins_never_evict_sessions_of_another_credential(
     assert sum(row.revoked_at is None for row in token_rows) == ui_sessions.MAX_ACTIVE_SESSIONS
     sso_rows = [row for row in rows if row.api_key_id is None]
     assert [row.revoked_at for row in sso_rows] == [None]
+
+
+def test_session_keys_are_hkdf_sub_keys_of_the_secret_key(settings: Settings):
+    from app.security.keys import decode_secret_key, derive_subkey
+
+    master = decode_secret_key(settings.secret_key.get_secret_value(), name="K")
+    keys = ui_sessions.session_keys(settings)
+    assert keys.csrf == derive_subkey(master, "csrf")
+    assert keys.binding == derive_subkey(master, "session-binding")
+    assert len({keys.csrf, keys.binding, master, derive_subkey(master, "secret-box")}) == 4

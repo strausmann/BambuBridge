@@ -19,6 +19,9 @@ The container entrypoint runs `alembic upgrade head` before it starts the server
 ## Rotating the secret key
 
 Secrets in the database (`app_settings.secret_token`) are sealed with `BAMBUBRIDGE_SECRET_KEY`.
+The key is a master key and is never used directly: AES-GCM for stored secrets, the CSRF tokens
+and the session binding each use their own sub-key derived with HKDF-SHA256. The key id stored
+next to a sealed secret identifies the master key, so rotation works on the master key alone.
 To change the key:
 
 1. **Stop the server.** A running server holds the old key; after the rotation it would report
