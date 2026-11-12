@@ -9,26 +9,26 @@ next months in place; :class:`PartitionMaintenance` runs it at startup and every
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, time
 
 from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.events.daily import DailyJob, next_run_at
 from app.repositories.events import EVENTS_LOCK_NAMESPACE, set_local_lock_timeout
 
 _log = logging.getLogger(__name__)
 
 # Parent tables partitioned by month on a timestamptz column. Fixed names from this module
 # only: they are put into DDL, which cannot take bind parameters.
-PARTITIONED_TABLES: tuple[str, ...] = ("events",)
+PARTITIONED_TABLES: tuple[str, ...] = ("events", "communication_log")
 
 # Serialises concurrent runs (several server processes starting at once) per transaction:
-# second key of the two-key advisory lock in the namespace of the event core.
-_PARTITIONS_LOCK_KEY = 1
+# second key of the two-key advisory lock in the namespace of the event core. Retention
+# takes the same lock before it drops partitions.
+PARTITIONS_LOCK_KEY = 1
 
 # ``CREATE TABLE ... PARTITION OF`` needs the parent table exclusively. While it waits for a
 # transaction that still uses the table, every new reader and writer queues behind it, so
@@ -52,7 +52,6 @@ _PARTITION_STATE = text(
 
 DAILY_RUN_AT = time(0, 5, tzinfo=UTC)
 _START_TIMEOUT_SECONDS = 5.0
-_MAX_SLEEP_SECONDS = 3600.0
 
 
 def partition_name(table: str, year: int, month: int) -> str:
@@ -95,7 +94,7 @@ async def ensure_partitions(
     )
     await session.execute(
         text("SELECT pg_advisory_xact_lock(:namespace, :key)"),
-        {"namespace": EVENTS_LOCK_NAMESPACE, "key": _PARTITIONS_LOCK_KEY},
+        {"namespace": EVENTS_LOCK_NAMESPACE, "key": PARTITIONS_LOCK_KEY},
     )
     created: list[str] = []
     for table in PARTITIONED_TABLES:
@@ -125,25 +124,14 @@ async def ensure_partitions(
 
 def next_daily_run(now: datetime) -> datetime:
     """The next 00:05 UTC strictly after ``now``."""
-    now = now.astimezone(UTC)
-    today = datetime.combine(now.date(), DAILY_RUN_AT)
-    return today if now < today else today + timedelta(days=1)
+    return next_run_at(now, DAILY_RUN_AT)
 
 
-def _describe(exc: BaseException) -> str:
-    """Class and SQLSTATE only: the driver text can carry values or a connection string."""
-    if isinstance(exc, DBAPIError):
-        code = getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
-        return f"{type(exc).__name__}, SQLSTATE {code or 'unknown'}"
-    return type(exc).__name__
-
-
-class PartitionMaintenance:
+class PartitionMaintenance(DailyJob):
     """Background task: ensure the partitions at startup and daily at 00:05 UTC.
 
-    A failed run (database away) is logged by type and repeated after ``retry_seconds``
-    until it succeeds; the task itself never ends on an error. ``clock`` and ``sleep`` can
-    be replaced in tests.
+    ``start`` returns after the first run, or after a short grace period when the database
+    is slow or away. See :class:`app.events.daily.DailyJob` for failures and retries.
     """
 
     def __init__(
@@ -154,58 +142,20 @@ class PartitionMaintenance:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         retry_seconds: float = 60.0,
     ) -> None:
+        super().__init__(
+            label="partition maintenance",
+            log=_log,
+            run_at=DAILY_RUN_AT,
+            clock=clock,
+            sleep=sleep,
+            retry_seconds=retry_seconds,
+            start_timeout_seconds=_START_TIMEOUT_SECONDS,
+        )
         self._sessions = sessions
-        self._clock = clock
-        self._sleep = sleep
-        self._retry_seconds = retry_seconds
-        self._task: asyncio.Task[None] | None = None
-        self._first_run_done = asyncio.Event()
 
-    async def start(self) -> None:
-        """Start the task; returns after the first run, or after a short grace period."""
-        if self._task is not None:
-            return
-        self._task = asyncio.create_task(self._run(), name="partition-maintenance")
-        with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(self._first_run_done.wait(), timeout=_START_TIMEOUT_SECONDS)
-
-    async def stop(self) -> None:
-        task, self._task = self._task, None
-        if task is not None:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-            except Exception as exc:
-                # The task had already died. Shutdown goes on (the caller still has to stop
-                # the listener and dispose of the engine), so this is logged, by type only.
-                _log.error("partition maintenance task ended unexpectedly (%s)", type(exc).__name__)
-        self._first_run_done.clear()
-
-    async def run_once(self) -> bool:
-        """Ensure the partitions now; ``False`` (and a log line) when that failed."""
-        try:
-            async with self._sessions() as session:
-                created = await ensure_partitions(session, self._clock())
-                await session.commit()
-        except Exception as exc:
-            # ``CancelledError`` is a BaseException and still propagates.
-            _log.error("partition maintenance failed (%s)", _describe(exc))
-            return False
+    async def _work(self) -> None:
+        async with self._sessions() as session:
+            created = await ensure_partitions(session, self._clock())
+            await session.commit()
         if created:
             _log.info("created partitions: %s", ", ".join(created))
-        return True
-
-    async def _run(self) -> None:
-        while True:
-            ok = await self.run_once()
-            self._first_run_done.set()
-            if not ok:
-                await self._sleep(self._retry_seconds)
-                continue
-            due = next_daily_run(self._clock())
-            # Sleep in bounded steps and re-read the clock: a suspended host or a clock
-            # change must not shift the run by the time that was missed.
-            while (remaining := (due - self._clock()).total_seconds()) > 0:
-                await self._sleep(min(remaining, _MAX_SLEEP_SECONDS))

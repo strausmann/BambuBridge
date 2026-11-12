@@ -157,7 +157,8 @@ was committed. `emit` does not commit; the caller does.
   a small `limit`.
   Keep transactions short (claim, commit, process, complete or fail, commit): while one is
   open, no new monthly partition can be created.
-- **Partitions:** `events` is partitioned by month (`events_y2026m12`). The server creates
+- **Partitions:** `events` and `communication_log` are partitioned by month
+  (`events_y2026m12`, `communication_log_y2026m12`). The server creates
   the partitions for the current and the next two months at startup and every day at
   00:05 UTC. There is no default partition. Creating one needs the table exclusively for a
   moment; if a long transaction still uses it, the server gives up after 3 seconds and
@@ -166,6 +167,63 @@ was committed. `emit` does not commit; the caller does.
   run and leaves that month out until the object is removed. Such a run still counts as
   successful: for now the log line (`cannot create partition ...`) is the only place where
   this shows, it is not part of `/readiness` yet.
+
+## Communication log
+
+What a provider instance sends and receives is written to `communication_log` by
+`CommunicationRecorder.record` (`app/events/communication.py`), and only by it. It adds one
+row to the caller's transaction and does not commit. A database error (for example a missing
+partition) aborts that transaction, so record in a short transaction of its own.
+
+Every stored part (address, headers, both bodies, the error text) goes through three steps,
+in this order:
+
+1. **Make it storable.** NUL characters are removed and surrogate code points replaced by
+   U+FFFD; nothing a peer sends makes the log fail. A body given as bytes that is not UTF-8
+   text, or contains a NUL byte, is stored as `<binary N bytes>`.
+2. **Mask** (`app/security/masking.py`); `***` takes the place of
+   - the value of a header, JSON field, query or form parameter named `authorization`,
+     `cookie`, `set-cookie` or `x-bambubridge-key`, or whose name contains `token`,
+     `secret`, `passw`, `pwd`, `key`, `auth` (not `author`), `cookie`, `credential`,
+     `session` or `signature`, in any case;
+   - JSON fields the provider schema marks with `"x-secret": true`
+     (`secret_paths_from_schema`), wherever a field path ends with the marked path;
+   - every occurrence of a known secret value of 8 characters or more, also percent-encoded,
+     as base64 of the whole value and JSON-escaped;
+   - the password in `scheme://user:password@host` and the credential after `Bearer` or
+     `Basic`.
+3. **Cut.** Each body is stored up to 8192 bytes of UTF-8 (never cut inside a character),
+   the address up to 2048 characters, the error up to 2000, at most 100 headers with values
+   up to 2048 characters. Any cut sets `truncated`.
+
+Masking comes before cutting: a secret across the 8192-byte limit would otherwise be stored
+as a fragment that no rule recognises. Only the first 262144 characters of a text are
+looked at; that first cut never goes through a known secret.
+
+The limits of masking: it prefers hiding too much (a field called `monkey` is masked), it
+cannot find a secret that has neither a telling name, nor a schema mark, nor a known value,
+and it does not recognise a known value that was transformed in another way (hashed,
+base64 as part of a longer value, encoded twice). A provider has to pass all the secrets of
+its instance as `known_secrets`. `record` writes nothing to the application log.
+
+## Retention
+
+Events are kept for `retention.events_days` (default 90), communication log entries for
+`retention.communication_days` (default 30); both are runtime settings (1 to 3650). The
+server applies them at startup and every day at 00:15 UTC, and reads the two values from
+the database for every run, so a change needs no restart.
+
+A run deletes the rows older than the period in the month the cut-off falls into and drops
+the monthly partitions that lie entirely before it. Outbox deliveries of events older than
+the period are deleted with them, except pending ones a worker holds under a lease that has
+not run out; those go with a later run. Dropping a partition needs the table exclusively for
+a moment: as for creating one, the server gives up after 3 seconds if a long transaction
+still uses the table, logs `retention failed (...)` and tries again a minute later. Rows
+that were already deleted stay deleted. Only partitions with the server's own names are
+dropped; a partition attached under another name is left alone.
+
+A shorter period takes effect with the next run and cannot be undone: what is older is
+removed.
 
 ## Health checks
 

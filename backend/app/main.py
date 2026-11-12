@@ -26,6 +26,7 @@ from app.config import Settings, get_settings
 from app.db.engine import make_engine
 from app.db.session import connected, make_session_factory
 from app.events.partitions import PartitionMaintenance
+from app.events.retention import RetentionMaintenance
 from app.events.service import EventService
 from app.repositories import api_keys as api_keys_repo
 from app.security.secret_box import secret_box_from_settings
@@ -86,11 +87,20 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Monthly partitions of the event tables: now, and every day at 00:05 UTC.
     partition_maintenance = PartitionMaintenance(app.state.session_factory)
     app.state.partition_maintenance = partition_maintenance
+    # Retention of events and the communication log: now (in the background), and every day
+    # at 00:15 UTC. It reads its periods from the database itself, not from the store's cache.
+    retention_maintenance = RetentionMaintenance(
+        app.state.session_factory, app.state.settings_store
+    )
+    app.state.retention_maintenance = retention_maintenance
     try:
         await listener.start()
         await partition_maintenance.start()
+        await retention_maintenance.start()
         yield
     finally:
+        await retention_maintenance.stop()
+        app.state.retention_maintenance = None
         await partition_maintenance.stop()
         app.state.partition_maintenance = None
         await listener.stop()
@@ -114,6 +124,7 @@ def create_app(settings: Settings, *, web_dist_dir: Path | None = None) -> FastA
     app.state.settings_listener = None
     app.state.event_service = EventService(app.state.settings_store)
     app.state.partition_maintenance = None
+    app.state.retention_maintenance = None
     app.state.session_keys = ui_sessions.session_keys(settings)
     # Per process (see app.auth.rate_limit): requests per token, failed checks per prefix and
     # per client address, sign-in attempts and failed bootstrap keys per client address.

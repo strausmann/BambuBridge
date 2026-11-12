@@ -32,14 +32,20 @@ async def _partitions(session: AsyncSession, parent: str = "events") -> set[str]
     return set(rows.all())
 
 
+def _both(*names: str) -> list[str]:
+    """The ``events`` partitions named, followed by those of the communication log."""
+    return [*names, *(name.replace("events_", "communication_log_", 1) for name in names)]
+
+
 async def _drop(session: AsyncSession, *names: str) -> None:
-    for name in names:
+    """Drop the named ``events`` partitions and their communication log counterparts."""
+    for name in dict.fromkeys(_both(*names)):
         await session.execute(text(f'DROP TABLE IF EXISTS "{name}"'))
     await session.commit()
 
 
-def test_only_events_is_partitioned_for_now():
-    assert PARTITIONED_TABLES == ("events",)
+def test_events_and_the_communication_log_are_partitioned():
+    assert PARTITIONED_TABLES == ("events", "communication_log")
 
 
 async def test_partitions_ensured_ahead(db_session: AsyncSession):
@@ -49,6 +55,11 @@ async def test_partitions_ensured_ahead(db_session: AsyncSession):
     assert {"events_y2026m12", "events_y2027m01", "events_y2027m02"} <= await _partitions(
         db_session
     )
+    assert {
+        "communication_log_y2026m12",
+        "communication_log_y2027m01",
+        "communication_log_y2027m02",
+    } <= await _partitions(db_session, "communication_log")
 
 
 async def test_ensure_partitions_returns_what_it_created_and_is_idempotent(
@@ -58,14 +69,14 @@ async def test_ensure_partitions_returns_what_it_created_and_is_idempotent(
     await _drop(db_session, *names)
     now = datetime(2031, 11, 30, 23, 59, tzinfo=UTC)
 
-    assert await ensure_partitions(db_session, now) == names[:3]
+    assert await ensure_partitions(db_session, now) == _both(*names[:3])
     assert await ensure_partitions(db_session, now) == []
-    assert await ensure_partitions(db_session, now, months_ahead=3) == names[3:]
+    assert await ensure_partitions(db_session, now, months_ahead=3) == _both(*names[3:])
     await db_session.commit()
     assert set(names) <= await _partitions(db_session)
 
     await _drop(db_session, *names)
-    assert await ensure_partitions(db_session, now, months_ahead=0) == names[:1]
+    assert await ensure_partitions(db_session, now, months_ahead=0) == _both(*names[:1])
     await db_session.rollback()  # the caller owns the transaction: nothing was committed
     assert not set(names) & await _partitions(db_session)
 
@@ -78,7 +89,7 @@ async def test_ensure_partitions_uses_utc_months(db_session: AsyncSession):
     created = await ensure_partitions(db_session, now, months_ahead=0)
     await db_session.commit()
 
-    assert created == ["events_y2033m12"]
+    assert created == _both("events_y2033m12")
     await _drop(db_session, "events_y2033m12")
 
 
@@ -175,7 +186,7 @@ async def test_concurrent_ensure_partitions_create_each_partition_once(
 
     results = await asyncio.wait_for(asyncio.gather(one(), one(), one()), timeout=10)
 
-    assert sorted(name for created in results for name in created) == names
+    assert sorted(name for created in results for name in created) == sorted(_both(*names))
     assert set(names) <= await _partitions(db_session)
     await _drop(db_session, *names)
 
@@ -191,7 +202,7 @@ async def test_ensure_partitions_does_not_wait_for_the_bootstrap_lock(
         ensure_partitions(session2, datetime(2037, 1, 5, tzinfo=UTC), months_ahead=0), timeout=3
     )
 
-    assert created == ["events_y2037m01"]
+    assert created == _both("events_y2037m01")
     await session2.rollback()
     await db_session.rollback()
 
@@ -240,7 +251,7 @@ async def test_ensure_partitions_leaves_the_callers_lock_timeout_alone(db_sessio
 
     assert await ensure_partitions(
         db_session, datetime(2039, 1, 5, tzinfo=UTC), months_ahead=0
-    ) == ["events_y2039m01"]
+    ) == _both("events_y2039m01")
 
     assert (await db_session.execute(text("SHOW lock_timeout"))).scalar_one() == before
     await db_session.rollback()
@@ -290,7 +301,12 @@ async def test_ensure_partitions_reports_a_foreign_object_under_a_partition_name
             await db_session.commit()
 
         # The months around it are served; the taken name is reported, not silently accepted.
-        assert created == ["events_y2041m01", "events_y2041m03"]
+        # The communication log has all three: the taken name is not one of its partitions.
+        assert created == [
+            "events_y2041m01",
+            "events_y2041m03",
+            *_both("events_y2041m01", "events_y2041m02", "events_y2041m03")[3:],
+        ]
         assert await _partitions(db_session) >= {"events_y2041m01", "events_y2041m03"}
         assert "events_y2041m02" not in await _partitions(db_session)
         messages = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
