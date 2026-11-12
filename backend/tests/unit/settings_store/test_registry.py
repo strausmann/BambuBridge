@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import pytest
 
+import app.auth.identity  # noqa: F401 - registers the providers the default names
 from app.settings_store.registry import (
     SETTINGS,
     SSO_USER_HEADERS,
     InvalidSettingValueError,
     SettingDef,
+    allowed_choices,
+    set_choices_source,
     validate_value,
 )
 from app.settings_store.store import SettingsStore
@@ -22,6 +25,7 @@ def test_registry_matches_the_specified_defaults_and_bounds():
         "sso.trust_header": ("str", "X-Pangolin-Token", None, None),
         "sso.trust_token": ("secret", "", 32, None),
         "auth.sign_in_limit_per_minute": ("int", 10, 1, 600),
+        "auth.identity_providers": ("choices", ["pangolin_header"], None, None),
         "retention.events_days": ("int", 90, 1, 3650),
         "retention.communication_days": ("int", 30, 1, 3650),
         "events.dedup_window_seconds": ("int", 600, 0, 86400),
@@ -108,3 +112,32 @@ def test_the_url_binding_guard_does_fire_for_a_url_setting():
     # Counter-check of the guard above: with a url setting present it reports it.
     with_url = {**SETTINGS, "x.url": URL}
     assert _url_settings_without_binding(with_url) == ["x.url"]
+
+
+def test_choices_validated_against_the_current_source():
+    d = SettingDef("x.list", "choices", [], "x")
+    with pytest.raises(InvalidSettingValueError):
+        validate_value(d, ["a"])  # no source: nothing is allowed
+    assert validate_value(d, []) == []
+    allowed = {"a", "b"}
+    set_choices_source("x.list", lambda: sorted(allowed))
+    assert validate_value(d, ["b", "a"]) == ["b", "a"]
+    assert allowed_choices(d) == ("a", "b")
+    allowed.add("c")  # registered later: valid without a restart
+    assert validate_value(d, ["c"]) == ["c"]
+
+
+@pytest.mark.parametrize("bad", ["a", ["a", "a"], [1], ["zzz"], ["a"] * 33, None, {"a": 1}])
+def test_choices_rejects(bad: object):
+    d = SettingDef("x.list2", "choices", [], "x")
+    set_choices_source("x.list2", lambda: ["a"])
+    with pytest.raises(InvalidSettingValueError) as e:
+        validate_value(d, bad)
+    assert "zzz" not in str(e.value)
+
+
+def test_identity_providers_choices_are_the_registered_kinds():
+    from app.auth.identity import registry
+
+    assert allowed_choices(SETTINGS["auth.identity_providers"]) == registry.kinds()
+    assert "pangolin_header" in registry.kinds()

@@ -20,6 +20,7 @@ from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import Select, delete, select, text
 from sqlalchemy.dialects.postgresql import insert
@@ -34,6 +35,7 @@ from app.settings_store.registry import (
     SettingsError,
     SettingType,
     UnknownSettingError,
+    allowed_choices,
     validate_value,
 )
 
@@ -107,11 +109,15 @@ class SettingsStore:
         return d
 
     def get(self, key: str) -> Any:
-        """Effective value of a plain setting (stored value or default)."""
+        """Effective value of a plain setting (stored value or default).
+
+        A list value is returned as a copy, so a caller cannot change the cache or the default.
+        """
         d = self._definition(key)
         if d.type == "secret":
             raise TypeError(f"{key} is a secret; read it with secret()")
-        return self._values.get(key, d.default)
+        value = self._values.get(key, d.default)
+        return list(value) if isinstance(value, list) else value
 
     def secret(self, key: str) -> str | None:
         """Plaintext of a secret; ``None`` if unset, empty or undecryptable."""
@@ -135,7 +141,7 @@ class SettingsStore:
                     undecryptable=key in self._undecryptable,
                     min=d.min,
                     max=d.max,
-                    choices=d.choices,
+                    choices=allowed_choices(d) if d.type in ("choice", "choices") else None,
                 )
             )
         return views
@@ -244,8 +250,12 @@ class SettingsStore:
 
     # -- writing ------------------------------------------------------------
 
-    async def set_many(self, session: AsyncSession, values: dict[str, Any]) -> None:
+    async def set_many(
+        self, session: AsyncSession, values: dict[str, Any], *, updated_by: UUID | None = None
+    ) -> None:
         """Validate, write and ``pg_notify`` in one transaction, then commit.
+
+        ``updated_by`` (the acting user, if known) is recorded on every written row.
 
         ``None`` resets a plain setting to its default; ``None`` or ``""`` clears a secret.
         All-or-nothing up to the commit: an invalid value or a database error before it
@@ -290,6 +300,7 @@ class SettingsStore:
                         "secret_token": sealed[key].token,
                         "secret_key_id": sealed[key].key_id,
                         "updated_at": now,
+                        "updated_by": updated_by,
                     }
                 )
             else:
@@ -300,6 +311,7 @@ class SettingsStore:
                         "secret_token": None,
                         "secret_key_id": None,
                         "updated_at": now,
+                        "updated_by": updated_by,
                     }
                 )
 
@@ -316,6 +328,7 @@ class SettingsStore:
                             "secret_token": stmt.excluded.secret_token,
                             "secret_key_id": stmt.excluded.secret_key_id,
                             "updated_at": stmt.excluded.updated_at,
+                            "updated_by": stmt.excluded.updated_by,
                         },
                     )
                 )

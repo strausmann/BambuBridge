@@ -1,8 +1,12 @@
 """Request authentication: ``require_scope`` and the bootstrap path.
 
 Order in ``require_scope``: API token header ``X-BambuBridge-Key`` -> browser session
-cookie (added in a later task) -> 401. The token header is deliberately not
-``Authorization``, so a reverse proxy's basic-auth bypass can sit next to it.
+cookie -> 401. The token header is deliberately not ``Authorization``, so a reverse
+proxy's basic-auth bypass can sit next to it. SSO headers never authenticate an API call
+directly: they only open a session (``POST /api/v1/auth/session``, ``GET /auth/continue``).
+
+A session request with a state-changing method must come from the public origin and carry
+the session's CSRF token (``app.auth.csrf``); token requests are exempt.
 
 A token's effective scope is the lower of its own scope and its owner's role; a disabled
 owner makes all of their tokens invalid.
@@ -19,7 +23,7 @@ import hmac
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Annotated, Literal, NoReturn, cast
+from typing import Annotated, Any, Literal, NoReturn, cast
 from uuid import UUID
 
 from fastapi import Depends, Request, Security
@@ -27,6 +31,8 @@ from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import ApiError
+from app.auth import csrf
+from app.auth import sessions as ui_sessions
 from app.auth.rate_limit import SlidingWindowRateLimiter
 from app.auth.scopes import Scope, lower_scope, satisfies
 from app.auth.tokens import (
@@ -75,6 +81,8 @@ class AuthContext:
     """Who is calling and with which effective scope.
 
     ``user_id`` is set for tokens and sessions; ``None`` only for the bootstrap call.
+    ``key_id`` is the token (also of a session opened with a token), ``session_id`` the
+    browser session.
     """
 
     kind: Literal["token", "session", "bootstrap"]
@@ -82,6 +90,7 @@ class AuthContext:
     user_id: UUID | None
     key_id: UUID | None
     user: str | None
+    session_id: UUID | None = None
 
 
 def _unauthorized(error_code: str, title: str) -> ApiError:
@@ -154,12 +163,7 @@ async def authenticate_token(
         await session.commit()
     effective = lower_scope(cast(Scope, key.scope), cast(Scope, owner.role))
     if not satisfies(effective, need):
-        raise ApiError(
-            403,
-            "insufficient_scope",
-            "Insufficient scope",
-            detail=f"This operation needs the scope '{need}'.",
-        )
+        raise _insufficient_scope(need)
     return AuthContext(
         kind="token", scope=effective, user_id=owner.id, key_id=key.id, user=owner.display_name
     )
@@ -167,6 +171,81 @@ async def authenticate_token(
 
 def _not_authenticated() -> ApiError:
     return _unauthorized("not_authenticated", "Authentication required")
+
+
+def _insufficient_scope(need: Scope) -> ApiError:
+    return ApiError(
+        403,
+        "insufficient_scope",
+        "Insufficient scope",
+        detail=f"This operation needs the scope '{need}'.",
+    )
+
+
+def session_cookie(request: Request) -> str | None:
+    """The browser session token from the cookie, if it has the right shape."""
+    settings: Settings = request.app.state.settings
+    return ui_sessions.session_token_from(request.cookies, settings)
+
+
+def has_credentials(request: Request, key: str | None) -> bool:
+    return bool(key) or session_cookie(request) is not None
+
+
+async def authenticate_session(
+    request: Request, session: AsyncSession, token: str, need: Scope
+) -> AuthContext:
+    """Check the browser session ``token`` (cookie) and return its context."""
+    settings: Settings = request.app.state.settings
+    valid = await ui_sessions.load_valid(
+        session, token, request.app.state.settings_store, request.app.state.session_keys
+    )
+    if valid is None:
+        raise _unauthorized("invalid_session", "Session expired or invalid")
+    if csrf.is_unsafe(request):
+        csrf.check_origin(request, ui_sessions.public_origin(settings))
+        csrf.check_token(request, csrf.derive_token(request.app.state.session_keys.csrf, token))
+    if valid.api_key is not None:
+        # A session opened with a token shares the token's request limit.
+        limiter: SlidingWindowRateLimiter = request.app.state.rate_limiter
+        allowed, retry_after = limiter.hit(
+            valid.api_key.id, limit=valid.api_key.rate_limit_per_minute
+        )
+        if not allowed:
+            raise _rate_limited(retry_after)
+    if not satisfies(valid.scope, need):
+        raise _insufficient_scope(need)
+    return AuthContext(
+        kind="session",
+        scope=valid.scope,
+        user_id=valid.user.id,
+        key_id=valid.row.api_key_id,
+        user=valid.user.display_name,
+        session_id=valid.row.id,
+    )
+
+
+async def authenticate_request(
+    request: Request, session: AsyncSession, key: str | None, need: Scope
+) -> AuthContext:
+    """Token header, then session cookie, then 401."""
+    if key:
+        return await authenticate_token(request, session, key, need)
+    token = session_cookie(request)
+    if token is not None:
+        return await authenticate_session(request, session, token, need)
+    raise _not_authenticated()
+
+
+def mark_scope[F](dependency: F, need: Scope) -> F:
+    """Mark ``dependency`` as a scope guard for ``need`` (checked by the OpenAPI gate)."""
+    setattr(dependency, SCOPE_MARKER, need)
+    return dependency
+
+
+def key_security(need: Scope) -> Any:
+    """The token header as a FastAPI security dependency declaring ``need``."""
+    return Security(_key_header, scopes=[need])
 
 
 def require_scope(need: Scope) -> Callable[..., Awaitable[AuthContext]]:
@@ -177,10 +256,7 @@ def require_scope(need: Scope) -> Callable[..., Awaitable[AuthContext]]:
         session: SessionDep,
         key: Annotated[str | None, Security(_key_header, scopes=[need])] = None,
     ) -> AuthContext:
-        if key:
-            return await authenticate_token(request, session, key, need)
-        # Seam for the browser session (cookie) path; until then no header means 401.
-        raise _not_authenticated()
+        return await authenticate_request(request, session, key, need)
 
     setattr(dependency, SCOPE_MARKER, need)
     return dependency
@@ -212,8 +288,7 @@ async def require_admin_or_bootstrap(
         return await authenticate_token(request, session, key, "admin")
     if bootstrap:
         return check_bootstrap_key(request.app.state.settings, bootstrap)
-    # Seam for the browser session (cookie) path; until then 401.
-    raise _not_authenticated()
+    return await authenticate_request(request, session, None, "admin")
 
 
 setattr(require_admin_or_bootstrap, SCOPE_MARKER, "admin")

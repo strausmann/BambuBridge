@@ -146,7 +146,7 @@ async def test_user_header_outside_choices_rejected(store: SettingsStore, db_ses
     with pytest.raises(InvalidSettingValueError) as e:
         await store.set_many(db_session, {"sso.user_header": "X-Forwarded-User"})
     assert e.value.keys == ["sso.user_header"]
-    assert e.value.code == "invalid_value"
+    assert e.value.code == "invalid_setting_value"
     assert store.get("sso.user_header") == "Remote-User"
 
 

@@ -7,15 +7,17 @@ means "not set".
 
 from __future__ import annotations
 
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-SettingType = Literal["str", "int", "bool", "url", "secret", "choice"]
+SettingType = Literal["str", "int", "bool", "url", "secret", "choice", "choices"]
 
 _MAX_TEXT = 256
 _MAX_URL = 2048
 _MAX_SECRET = 4096
+_MAX_CHOICES = 32
 
 # Pangolin's badger only removes ``Remote-*`` request headers before it sets its own, so
 # any other header name could be forged by the client.
@@ -37,7 +39,7 @@ class UnknownSettingError(SettingsError):
 
 
 class InvalidSettingValueError(SettingsError):
-    code = "invalid_value"
+    code = "invalid_setting_value"
 
 
 @dataclass(frozen=True)
@@ -51,12 +53,34 @@ class SettingDef:
     choices: tuple[str, ...] | None = None
 
 
+# Allowed elements of a ``choices`` setting, by key. Filled at runtime by the module that
+# owns the elements (``auth.identity_providers``: ``app.auth.identity.registry``), so a kind
+# registered later becomes valid without a change here. A key without a source allows
+# nothing but the empty list.
+_CHOICE_SOURCES: dict[str, Callable[[], Collection[str]]] = {}
+
+
+def set_choices_source(key: str, source: Callable[[], Collection[str]]) -> None:
+    """Name the function that lists the allowed elements of the ``choices`` setting ``key``."""
+    _CHOICE_SOURCES[key] = source
+
+
+def allowed_choices(d: SettingDef) -> tuple[str, ...]:
+    """Currently allowed values: fixed for ``choice``, from the source for ``choices``."""
+    if d.type == "choices":
+        source = _CHOICE_SOURCES.get(d.key)
+        return tuple(source()) if source is not None else ()
+    return d.choices or ()
+
+
 _DEFS: list[SettingDef] = [
     SettingDef("sso.user_header", "choice", "Remote-User", "sso", choices=SSO_USER_HEADERS),
     SettingDef("sso.trust_header", "str", "X-Pangolin-Token", "sso"),
     # Empty (default) switches SSO off.
     SettingDef("sso.trust_token", "secret", "", "sso", min=32),
     SettingDef("auth.sign_in_limit_per_minute", "int", 10, "auth", min=1, max=600),
+    # Sign-in providers asked in this order; [] switches header sign-in off.
+    SettingDef("auth.identity_providers", "choices", ["pangolin_header"], "auth"),
     SettingDef("retention.events_days", "int", 90, "retention", min=1, max=3650),
     SettingDef("retention.communication_days", "int", 30, "retention", min=1, max=3650),
     SettingDef("events.dedup_window_seconds", "int", 600, "events", min=0, max=86400),
@@ -78,6 +102,8 @@ def validate_value(d: SettingDef, value: Any) -> Any:
         if not isinstance(value, bool):
             raise bad("expected a boolean")
         return value
+    if d.type == "choices":
+        return _validate_choices(d, value, bad)
     if d.type == "int":
         if isinstance(value, bool) or not isinstance(value, int):
             raise bad("expected an integer")
@@ -103,6 +129,20 @@ def validate_value(d: SettingDef, value: Any) -> Any:
     if len(text) > _MAX_TEXT:
         raise bad("too long")
     return text
+
+
+def _validate_choices(d: SettingDef, value: Any, bad: Any) -> list[str]:
+    """A list of distinct allowed strings, order kept. The message never names an element."""
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise bad("expected a list of strings")
+    if len(value) > _MAX_CHOICES:
+        raise bad("too many entries")
+    if len(set(value)) != len(value):
+        raise bad("entries must be distinct")
+    allowed = set(allowed_choices(d))
+    if any(v not in allowed for v in value):
+        raise bad("contains a value that is not registered")
+    return list(value)
 
 
 def _validate_url(text: str, bad: Any) -> str:
