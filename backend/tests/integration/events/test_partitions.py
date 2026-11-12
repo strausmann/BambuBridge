@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.util import CommandError
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -15,6 +17,7 @@ from app.events import partitions
 from app.events.partitions import PARTITIONED_TABLES, ensure_partitions
 from app.events.service import EventService
 from app.models.event import Event
+from app.repositories import events as events_repo
 from tests.integration.events.conftest import counts, emit
 
 
@@ -142,6 +145,20 @@ async def test_alembic_check_ignores_the_child_partitions(
     await asyncio.to_thread(command.check, alembic_config)
 
 
+async def test_alembic_check_reports_a_table_that_only_looks_like_a_partition(
+    db_session: AsyncSession, alembic_config: Config
+):
+    # Full-width digits: "\d" without re.ASCII took this for a monthly partition.
+    lookalike = "events_y\uff12\uff10\uff12\uff16m\uff11\uff12"
+    await db_session.execute(text(f'CREATE TABLE "{lookalike}" (id integer)'))
+    await db_session.commit()
+    try:
+        with pytest.raises(CommandError, match="New upgrade operations detected"):
+            await asyncio.to_thread(command.check, alembic_config)
+    finally:
+        await _drop(db_session, lookalike)
+
+
 async def test_concurrent_ensure_partitions_create_each_partition_once(
     db_session: AsyncSession, sessions: async_sessionmaker[AsyncSession]
 ):
@@ -227,3 +244,98 @@ async def test_ensure_partitions_leaves_the_callers_lock_timeout_alone(db_sessio
 
     assert (await db_session.execute(text("SHOW lock_timeout"))).scalar_one() == before
     await db_session.rollback()
+
+
+@pytest.mark.parametrize(
+    "squatter",
+    [
+        'CREATE TABLE "events_y2041m02" (id integer)',
+        'CREATE VIEW "events_y2041m02" AS SELECT 1 AS id',
+        'CREATE SEQUENCE "events_y2041m02"',
+        # A partition, but of another table.
+        'CREATE TABLE "events_y2041m02" PARTITION OF other_parent '
+        "FOR VALUES FROM ('2041-02-01 00:00:00+00') TO ('2041-03-01 00:00:00+00')",
+    ],
+    ids=["table", "view", "sequence", "foreign-partition"],
+)
+async def test_ensure_partitions_reports_a_foreign_object_under_a_partition_name(
+    squatter: str, db_session: AsyncSession, caplog: pytest.LogCaptureFixture
+):
+    names = ["events_y2041m01", "events_y2041m02", "events_y2041m03"]
+
+    async def cleanup() -> None:
+        await db_session.rollback()
+        kind = await db_session.scalar(
+            text("SELECT relkind::text FROM pg_class WHERE oid = to_regclass('events_y2041m02')")
+        )
+        what = {"v": "VIEW", "S": "SEQUENCE"}.get(kind or "", "TABLE")
+        await db_session.execute(text(f'DROP {what} IF EXISTS "events_y2041m02"'))
+        await db_session.execute(text("DROP TABLE IF EXISTS other_parent"))
+        await db_session.commit()
+        await _drop(db_session, *names)
+
+    await cleanup()
+    try:
+        await db_session.execute(
+            text(
+                "CREATE TABLE other_parent (occurred_at timestamptz NOT NULL) "
+                "PARTITION BY RANGE (occurred_at)"
+            )
+        )
+        await db_session.execute(text(squatter))
+        await db_session.commit()
+
+        with caplog.at_level(logging.ERROR, logger="app.events.partitions"):
+            created = await ensure_partitions(db_session, datetime(2041, 1, 10, tzinfo=UTC))
+            await db_session.commit()
+
+        # The months around it are served; the taken name is reported, not silently accepted.
+        assert created == ["events_y2041m01", "events_y2041m03"]
+        assert await _partitions(db_session) >= {"events_y2041m01", "events_y2041m03"}
+        assert "events_y2041m02" not in await _partitions(db_session)
+        messages = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+        assert messages == [
+            "cannot create partition events_y2041m02: the name belongs to another object"
+        ]
+    finally:
+        await cleanup()
+
+
+async def test_ensure_partitions_gives_up_when_another_run_holds_the_partition_lock(
+    db_session: AsyncSession, session2: AsyncSession, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(partitions, "DDL_LOCK_TIMEOUT_SECONDS", 0.4)
+    await db_session.execute(
+        text("SELECT pg_advisory_xact_lock(:namespace, 1)"),
+        {"namespace": events_repo.EVENTS_LOCK_NAMESPACE},
+    )
+
+    try:
+        with pytest.raises(DBAPIError) as exc:
+            await asyncio.wait_for(
+                ensure_partitions(session2, datetime.now(UTC), months_ahead=0), timeout=5
+            )
+    except TimeoutError:
+        pytest.fail("ensure_partitions waited for the partition lock without a bound")
+    finally:
+        await session2.rollback()
+        await db_session.rollback()
+    assert getattr(exc.value.orig, "sqlstate", None) == "55P03"  # lock_not_available
+
+
+async def test_ensure_partitions_restores_the_lock_timeout_when_nothing_is_missing(
+    db_session: AsyncSession,
+):
+    await db_session.execute(text("SET LOCAL lock_timeout = '1234ms'"))
+    assert await ensure_partitions(db_session, datetime.now(UTC)) == []
+    assert (await db_session.execute(text("SHOW lock_timeout"))).scalar_one() == "1234ms"
+
+
+async def test_set_local_lock_timeout_returns_the_value_it_replaced(db_session: AsyncSession):
+    await db_session.execute(text("SET LOCAL lock_timeout = '1234ms'"))
+    assert await events_repo.set_local_lock_timeout(db_session, "250ms") == "1234ms"
+    assert await events_repo.set_local_lock_timeout(db_session, "1234ms") == "250ms"
+    assert (await db_session.execute(text("SHOW lock_timeout"))).scalar_one() == "1234ms"
+    await db_session.rollback()
+    # SET LOCAL: gone with the transaction.
+    assert (await db_session.execute(text("SHOW lock_timeout"))).scalar_one() == "0"

@@ -18,7 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.repositories.events import EVENTS_LOCK_NAMESPACE
+from app.repositories.events import EVENTS_LOCK_NAMESPACE, set_local_lock_timeout
 
 _log = logging.getLogger(__name__)
 
@@ -33,8 +33,22 @@ _PARTITIONS_LOCK_KEY = 1
 # ``CREATE TABLE ... PARTITION OF`` needs the parent table exclusively. While it waits for a
 # transaction that still uses the table, every new reader and writer queues behind it, so
 # the wait is bounded: after this time the statement fails with SQLSTATE 55P03 and the
-# missing partitions are created by a later run.
+# missing partitions are created by a later run. The same bound holds for the wait for
+# another run (the advisory lock).
 DDL_LOCK_TIMEOUT_SECONDS = 3.0
+
+# NULL (no row): the name is free. true: an ordinary table that is a partition of the
+# parent. false: anything else that carries the name.
+_PARTITION_STATE = text(
+    """
+    SELECT c.relkind = 'r' AND EXISTS (
+        SELECT 1 FROM pg_inherits AS i
+        WHERE i.inhrelid = c.oid AND i.inhparent = to_regclass(:parent)
+    )
+    FROM pg_class AS c
+    WHERE c.oid = to_regclass(:name)
+    """
+)
 
 DAILY_RUN_AT = time(0, 5, tzinfo=UTC)
 _START_TIMEOUT_SECONDS = 5.0
@@ -59,33 +73,42 @@ async def ensure_partitions(
     empty list when all were there. Existing partitions are not touched, and no lock on the
     parent table is taken when nothing is missing. The caller commits.
 
-    Creating a partition waits at most ``DDL_LOCK_TIMEOUT_SECONDS`` for the parent table;
-    if it is still in use then, the database error (SQLSTATE 55P03) is raised and the
-    caller's transaction has to be rolled back. The caller's own ``lock_timeout`` is back in
-    place when the function returns.
+    A name counts as present only when it is an ordinary table and a partition of the parent.
+    If anything else carries the name (a table of its own, a view, a partition of another
+    table), the partition cannot be created: that is logged as an error on every run and the
+    month is left out, while the other months are still served. Rows of that month are
+    refused by the database until the object is removed.
+
+    Every wait is bounded by ``DDL_LOCK_TIMEOUT_SECONDS``: for another run of this function
+    and, when a partition is created, for the parent table. If the time runs out, the
+    database error (SQLSTATE 55P03) is raised and the caller's transaction has to be rolled
+    back. The caller's own ``lock_timeout`` is back in place when the function returns.
     """
     if not isinstance(now, datetime) or now.utcoffset() is None:
         raise ValueError("now must be a timezone-aware datetime")
     if months_ahead < 0:
         raise ValueError("months_ahead must not be negative")
     now = now.astimezone(UTC)
+    # Before the advisory lock: its wait is bounded as well.
+    previous_timeout = await set_local_lock_timeout(
+        session, f"{int(DDL_LOCK_TIMEOUT_SECONDS * 1000)}ms"
+    )
     await session.execute(
         text("SELECT pg_advisory_xact_lock(:namespace, :key)"),
         {"namespace": EVENTS_LOCK_NAMESPACE, "key": _PARTITIONS_LOCK_KEY},
     )
     created: list[str] = []
-    previous_timeout: str | None = None
     for table in PARTITIONED_TABLES:
         for year, month0 in _months(now, months_ahead):
             name = partition_name(table, year, month0 + 1)
-            exists = await session.scalar(text("SELECT to_regclass(:name)"), {"name": name})
-            if exists is not None:
+            state = await session.scalar(_PARTITION_STATE, {"name": name, "parent": table})
+            if state is True:
                 continue
-            if previous_timeout is None:
-                previous_timeout = await session.scalar(
-                    text("SELECT current_setting('lock_timeout')")
-                )
-                await _set_lock_timeout(session, f"{int(DDL_LOCK_TIMEOUT_SECONDS * 1000)}ms")
+            if state is not None:
+                # The name is built from the fixed table list and integers, nothing else
+                # about the foreign object is logged.
+                _log.error("cannot create partition %s: the name belongs to another object", name)
+                continue
             next_year, next_month0 = divmod(year * 12 + month0 + 1, 12)
             # Identifiers and bounds are built from the fixed table list and integers.
             await session.execute(
@@ -96,14 +119,8 @@ async def ensure_partitions(
                 )
             )
             created.append(name)
-    if previous_timeout is not None:
-        await _set_lock_timeout(session, previous_timeout)
+    await set_local_lock_timeout(session, previous_timeout)
     return created
-
-
-async def _set_lock_timeout(session: AsyncSession, value: str) -> None:
-    """``SET LOCAL lock_timeout``: for the rest of the caller's transaction only."""
-    await session.execute(text("SELECT set_config('lock_timeout', :value, true)"), {"value": value})
 
 
 def next_daily_run(now: datetime) -> datetime:

@@ -25,7 +25,7 @@ target_metadata = Base.metadata
 # Monthly child partitions (``events_y2026m12``) are created at runtime by
 # ``app.events.partitions`` and are not models. Only they are left out of the comparison;
 # the partitioned parent tables are models and are compared like any other table.
-PARTITION_CHILD = re.compile(r"^(events|communication_log)_y\d{4}m\d{2}$")
+PARTITION_CHILD = re.compile(r"^(events|communication_log)_y\d{4}m\d{2}$", re.ASCII)
 
 
 def include_object(

@@ -120,23 +120,52 @@ was committed. `emit` does not commit; the caller does.
 
 - **Type names** follow `(account|inventory|integration|display).<subject>.<action>` in
   lower case, for example `integration.demo.tick`. Other names are rejected.
-- **Duplicates:** with a `dedup_key`, a second event of the same source with the same key
-  inside `events.dedup_window_seconds` (runtime setting, default 600, `0` switches it off)
-  is dropped and `emit` returns `None`.
+- **Input checks:** `emit` refuses, with a `ValueError` and before it sends anything to the
+  database, what PostgreSQL would refuse or what is beyond the limits: a payload that is not
+  a dict of JSON values, a type name of more than 200 characters, a `schema_version`
+  outside 1 to 2147483647, a NUL or surrogate character in any string, `NaN` or infinite
+  numbers, more than 32 levels of nesting, more than 64 KiB of JSON text; a `dedup_key` that
+  is empty, longer than 200 characters or holds such a character; a source or correlation id
+  that is not a `UUID` (the text form is not taken). The caller's transaction stays usable,
+  and the messages never quote a value. Because the database never sees such input, no
+  fragment of a payload ends up in the PostgreSQL server log through a parse error.
+- **Duplicates:** with a `dedup_key`, a second event of the same source and the same type
+  with the same key inside `events.dedup_window_seconds` (runtime setting, default 600, `0`
+  switches it off) is dropped and `emit` returns `None`. The window starts at the earlier
+  event. A transaction that stays open for longer than the window after its `emit` therefore
+  lets a duplicate through that waited for it.
 - **Order per source:** `emit` holds an advisory lock on the source until the caller's
-  transaction ends, so the events of one source are stored in commit order. Keep such
-  transactions short.
-- **Delivery:** subscribers take their deliveries with `outbox.claim` (`FOR UPDATE SKIP
-  LOCKED`, so several workers never get the same one), then call `outbox.complete` or
-  `outbox.fail`. A failed delivery is retried after 2, 4, 8 ... seconds and is set to
-  `failed` after the tenth attempt.
-  Keep the claim transaction short (claim a batch, hand it on, commit): while it is open,
-  no new monthly partition can be created.
+  transaction ends, so the events of one source are stored in commit order. Emit late in
+  the transaction and commit soon after: a second `emit` for the same source waits for the
+  first one, for at most 5 seconds. Then it raises `SourceBusyError`, and its transaction
+  has to be rolled back.
+- **Delivery:** a worker takes deliveries with `outbox.claim(session, subscriber, worker_id)`
+  (`FOR UPDATE SKIP LOCKED`, at most 1000 per call) and commits. From then on the batch is
+  leased to that worker for 5 minutes and no other claim returns it. The worker processes
+  the batch, calls `outbox.complete` or `outbox.fail` with its worker id, and commits again.
+  Both change only deliveries the worker still holds, so a late result cannot overwrite
+  the result of a worker that took the delivery over. A failed delivery is retried after 2,
+  4, 8 ... seconds. A lease that runs out without a result (the worker died) counts as an
+  attempt as well, and the delivery goes to the next claim. After the tenth attempt a
+  delivery is set to `failed`. A worker that dies inside `claim` or before that first commit
+  leaves no lease and is not counted.
+  Delivery is **at least once**: a worker that dies after its side effect and before the
+  commit of `complete` makes the next worker run the handler again, so handlers must be
+  idempotent. A lease is not renewed, on purpose. Size a batch so that it is finished well
+  inside the 5 minutes: what is left after that is taken over by another worker of the same
+  subscriber, runs twice and counts an attempt. With slow handlers or a small container use
+  a small `limit`.
+  Keep transactions short (claim, commit, process, complete or fail, commit): while one is
+  open, no new monthly partition can be created.
 - **Partitions:** `events` is partitioned by month (`events_y2026m12`). The server creates
   the partitions for the current and the next two months at startup and every day at
   00:05 UTC. There is no default partition. Creating one needs the table exclusively for a
   moment; if a long transaction still uses it, the server gives up after 3 seconds and
-  tries again a minute later, so writers are never held up for longer than that.
+  tries again a minute later, so writers are never held up for longer than that. If
+  another object already carries the name of a partition, the server logs an error on every
+  run and leaves that month out until the object is removed. Such a run still counts as
+  successful: for now the log line (`cannot create partition ...`) is the only place where
+  this shows, it is not part of `/readiness` yet.
 
 ## Health checks
 
