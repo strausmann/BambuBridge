@@ -176,7 +176,10 @@ def test_pnpm_and_playwright_versions_equal_what_package_json_holds():
     playwright = _extract_from_package("playwright", PACKAGE_JSON)
     assert pnpm.returncode == 0, pnpm.stderr
     assert playwright.returncode == 0, playwright.stderr
-    assert f"pnpm@{pnpm.stdout.strip()}" == package["packageManager"]
+    sha512 = _extract_from_package("pnpm-sha512", PACKAGE_JSON)
+    assert sha512.returncode == 0, sha512.stderr
+    assert re.fullmatch(r"[0-9a-f]{128}", sha512.stdout.strip())
+    assert f"pnpm@{pnpm.stdout.strip()}+sha512.{sha512.stdout.strip()}" == package["packageManager"]
     assert playwright.stdout.strip() == package["devDependencies"]["@playwright/test"]
 
 
@@ -184,6 +187,10 @@ def test_pnpm_and_playwright_versions_equal_what_package_json_holds():
     ("field", "old", "new"),
     [
         ("pnpm", '"packageManager": "pnpm@', '"packageManager": "yarn@'),
+        # A version without its hash is not accepted: pnpm is installed only after the check.
+        ("pnpm", "+sha512.", "+sha256."),
+        ("pnpm-sha512", "+sha512.", "+sha512.0"),
+        ("pnpm-sha512", "+sha512.", "+sha1."),
         ("playwright", '"@playwright/test": "', '"@playwright/test": "^'),
     ],
 )
@@ -202,7 +209,7 @@ def test_extraction_fails_when_package_json_no_longer_pins_the_version(
 
 
 def test_makefile_takes_the_web_versions_from_the_script():
-    for field in ("pnpm", "playwright"):
+    for field in ("pnpm", "pnpm-sha512", "playwright"):
         assert f"$(shell scripts/ci-versions.sh {field})" in MAKEFILE, field
     assert re.search(r"(playwright|pnpm)[:@]v?\d", MAKEFILE) is None
 
@@ -228,3 +235,71 @@ def test_make_ci_web_runs_the_commands_of_the_web_job():
     assert [sync, *fast, *test] == in_ci
     # "make web-fast" is the fast steps plus the unit tests, taken from the same block.
     assert _make_define("WEB_FAST_ALL") == ["$(WEB_FAST_STEPS)", "pnpm test"]
+
+
+def test_pnpm_is_installed_only_from_the_checked_tarball_and_without_scripts():
+    # Every "npm install -g" of the Makefile goes through pnpm_install: pack, compare the
+    # SHA-512 with the pinned one, then install that file with --ignore-scripts.
+    installs = [
+        line
+        for line in MAKEFILE.splitlines()
+        if "npm install -g" in line and not line.startswith("#")
+    ]
+    assert len(installs) == 1, installs
+    assert "--ignore-scripts" in installs[0]
+    assert '"$$d/pnpm-$(PNPM_VERSION).tgz"' in installs[0]
+    recipe = MAKEFILE[MAKEFILE.index("pnpm_install =") : MAKEFILE.index(installs[0])]
+    assert 'echo "$(PNPM_SHA512)  pnpm-$(PNPM_VERSION).tgz" | sha512sum -c -' in recipe
+    assert MAKEFILE.count("$(call pnpm_install,") == 2
+    assert "npm ci --ignore-scripts" in MAKEFILE
+    commitlint_runs = [
+        s["run"] for s in _load("commitlint.yml")["jobs"]["commitlint"]["steps"] if "run" in s
+    ]
+    assert "npm ci --ignore-scripts" in commitlint_runs
+    assert "npm ci" not in commitlint_runs
+
+
+def test_containers_cannot_write_git_hooks_and_share_no_host_ipc():
+    run = re.search(r"(?m)^DOCKER_RUN := (.*\\\n.*)$", MAKEFILE)
+    assert run is not None
+    assert '-v "$(CURDIR)/.git":/w/.git:ro' in run.group(1)
+    assert '-v "$(CURDIR)/.husky":/w/.husky:ro' in run.group(1)
+    # Every container is started through DOCKER_RUN.
+    assert MAKEFILE.count("docker run") == MAKEFILE.count(
+        "DOCKER_RUN := docker run"
+    ) + MAKEFILE.count("docker run -d --rm --name $(CI_DB_NAME)")
+    assert "--ipc=host" not in MAKEFILE
+    assert "--shm-size=1g" in MAKEFILE
+
+
+@pytest.mark.parametrize(
+    ("field", "file_name", "line", "bad"),
+    [
+        ("python", "ci.yml", 'python-version: "{v}"', "3.14; touch /tmp/x"),
+        ("python", "ci.yml", 'python-version: "{v}"', "$(id)"),
+        ("uv", "ci.yml", '          version: "{v}"', "0.13.7`id`"),
+        ("postgres-image", "ci.yml", "image: {v}", "postgres:18&&id"),
+        ("node", "commitlint.yml", 'node-version: "{v}"', "26|id"),
+    ],
+)
+def test_a_value_with_a_character_outside_the_allowed_set_is_refused(
+    field: str, file_name: str, line: str, bad: str, tmp_path: Path
+):
+    current = _from_yaml(field)
+    for source in WORKFLOWS.glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == file_name:
+            assert line.format(v=current) in text
+            text = text.replace(line.format(v=current), line.format(v=bad))
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    result = _extract(field, tmp_path)
+    assert result.returncode == 1, result.stdout
+    assert result.stdout == ""
+    assert "refusing the " in result.stderr or "cannot read the " in result.stderr
+    assert f" in {file_name}" in result.stderr
+
+
+def test_every_real_value_passes_the_character_check():
+    for field in FIELDS:
+        assert re.fullmatch(r"[0-9A-Za-z.:_/@-]+", _extract(field).stdout.strip()), field

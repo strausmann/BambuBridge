@@ -22,6 +22,7 @@ UV_VERSION     ?= $(shell scripts/ci-versions.sh uv)
 POSTGRES_IMAGE ?= $(shell scripts/ci-versions.sh postgres-image)
 NODE_VERSION   ?= $(shell scripts/ci-versions.sh node)
 PNPM_VERSION   ?= $(shell scripts/ci-versions.sh pnpm)
+PNPM_SHA512    ?= $(shell scripts/ci-versions.sh pnpm-sha512)
 PLAYWRIGHT_VERSION ?= $(shell scripts/ci-versions.sh playwright)
 # Evaluate once, and stop when a value could not be read (the script has said which one).
 PYTHON_VERSION := $(PYTHON_VERSION)
@@ -29,8 +30,9 @@ UV_VERSION     := $(UV_VERSION)
 POSTGRES_IMAGE := $(POSTGRES_IMAGE)
 NODE_VERSION   := $(NODE_VERSION)
 PNPM_VERSION   := $(PNPM_VERSION)
+PNPM_SHA512    := $(PNPM_SHA512)
 PLAYWRIGHT_VERSION := $(PLAYWRIGHT_VERSION)
-ifeq ($(and $(PYTHON_VERSION),$(UV_VERSION),$(POSTGRES_IMAGE),$(NODE_VERSION),$(PNPM_VERSION),$(PLAYWRIGHT_VERSION)),)
+ifeq ($(and $(PYTHON_VERSION),$(UV_VERSION),$(POSTGRES_IMAGE),$(NODE_VERSION),$(PNPM_VERSION),$(PNPM_SHA512),$(PLAYWRIGHT_VERSION)),)
 $(error cannot read the tool versions from .github/workflows - see the message above)
 endif
 endif
@@ -48,7 +50,8 @@ PLAYWRIGHT_IMAGE := mcr.microsoft.com/playwright:v$(PLAYWRIGHT_VERSION)-noble
 CI_PY_IMAGE := bambubridge-ci-python:$(PYTHON_VERSION)-uv$(UV_VERSION)
 # Job "web" needs node, pnpm, the browsers and the backend environment in one place: the
 # Playwright image plus the pinned node, pnpm, uv and Python. Built locally, tagged with all five.
-CI_WEB_IMAGE := bambubridge-ci-web:pw$(PLAYWRIGHT_VERSION)-node$(NODE_VERSION)-pnpm$(PNPM_VERSION)-py$(PYTHON_VERSION)-uv$(UV_VERSION)
+# "-r2" is the revision of the image recipe (target ci-web-image); raise it when the recipe changes.
+CI_WEB_IMAGE := bambubridge-ci-web:pw$(PLAYWRIGHT_VERSION)-node$(NODE_VERSION)-pnpm$(PNPM_VERSION)-py$(PYTHON_VERSION)-uv$(UV_VERSION)-r2
 CI_NETWORK  := bambubridge-ci
 CI_DB_NAME  := bambubridge-ci-postgres
 CI_DB_URL   := postgresql+asyncpg://postgres:test@$(CI_DB_NAME):5432/postgres
@@ -114,7 +117,16 @@ COMMITLINT_RANGES ?= origin/main..HEAD
 
 # Caches live in the gitignored .cache/ of this clone: uv downloads, the virtual
 # environment (kept apart from a backend/.venv made on the host) and the npm cache.
-DOCKER_RUN := docker run --rm --init -i -u $(shell id -u):$(shell id -g) -e HOME=/tmp -v "$(CURDIR)":/w
+# The clone is mounted writable (caches, node_modules, build output), but .git and .husky are
+# read-only: code running in a container must not be able to plant a hook that later runs on
+# the host.
+DOCKER_RUN := docker run --rm --init -i -u $(shell id -u):$(shell id -g) -e HOME=/tmp -v "$(CURDIR)":/w \
+	-v "$(CURDIR)/.git":/w/.git:ro -v "$(CURDIR)/.husky":/w/.husky:ro
+# pnpm from the registry, checked against the SHA-512 pinned in frontend/package.json before it
+# is installed, without running install scripts. $(1): extra arguments for "npm install -g".
+pnpm_install = d=$$(mktemp -d) && cd "$$d" && npm pack pnpm@$(PNPM_VERSION) --silent >/dev/null \
+	&& echo "$(PNPM_SHA512)  pnpm-$(PNPM_VERSION).tgz" | sha512sum -c - >/dev/null \
+	&& npm install -g --ignore-scripts $(1) "$$d/pnpm-$(PNPM_VERSION).tgz"
 PY_RUN = $(DOCKER_RUN) -w /w/backend \
 	-e UV_CACHE_DIR=/w/.cache/uv -e UV_PROJECT_ENVIRONMENT=/w/.cache/venv \
 	-e UV_PYTHON_DOWNLOADS=never $(PY_RUN_EXTRA) $(CI_PY_IMAGE)
@@ -126,7 +138,7 @@ WEB_ENV := -w /w/frontend -e HOME=/w/.cache/home -e npm_config_update_notifier=f
 PNPM_DIR := .cache/pnpm-$(PNPM_VERSION)
 WEB_FAST_RUN := $(DOCKER_RUN) $(WEB_ENV) -e npm_config_cache=/w/.cache/npm \
 	-e PATH=/w/$(PNPM_DIR)/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin $(NODE_IMAGE)
-WEB_RUN = $(DOCKER_RUN) $(WEB_ENV) --ipc=host --network $(CI_NETWORK) \
+WEB_RUN = $(DOCKER_RUN) $(WEB_ENV) --shm-size=1g --network $(CI_NETWORK) \
 	-e BAMBUBRIDGE_TEST_DATABASE_URL=$(CI_DB_URL) \
 	-e UV_CACHE_DIR=/w/.cache/uv -e UV_PROJECT_ENVIRONMENT=/w/.cache/venv-web \
 	-e UV_PYTHON_DOWNLOADS=never $(CI_WEB_IMAGE)
@@ -163,13 +175,13 @@ ci-web-image:
 			'COPY --from=node /usr/local/bin/node /usr/local/bin/node' \
 			'ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python' \
 			'RUN uv python install $(PYTHON_VERSION) && chmod -R a+rX /opt/uv-python \' \
-			'    && npm install -g pnpm@$(PNPM_VERSION) && node --version && pnpm --version' \
+			'    && $(subst $$$$,$$,$(call pnpm_install,)) && node --version && pnpm --version' \
 			| docker build -q -t $(CI_WEB_IMAGE) -
 
 # pnpm for "make web-fast", in the plain node image: installed once per version into .cache.
 $(PNPM_DIR)/bin/pnpm:
 	@mkdir -p .cache/home
-	$(NODE_RUN) npm install -g --prefix /w/$(PNPM_DIR) pnpm@$(PNPM_VERSION)
+	$(NODE_RUN) sh -ec '$(call pnpm_install,--prefix /w/$(PNPM_DIR))'
 
 node_modules/.package-lock.json: package.json package-lock.json
 	@mkdir -p .cache

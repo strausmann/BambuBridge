@@ -75,7 +75,13 @@ make ci-db-stop # stop the test Postgres
   (`scripts/ci-versions.sh`), so a version bump in a workflow applies to `make ci` without a second
   edit. To try another version, override it for one call: `PYTHON_VERSION=… make ci` (also
   `UV_VERSION`, `POSTGRES_IMAGE`, `NODE_VERSION`). pnpm and Playwright are pinned in
-  `frontend/package.json` and read from there the same way. The commands of the `backend` and `web`
+  `frontend/package.json` and read from there the same way. `packageManager` carries the SHA-512
+  of the pnpm tarball; the `Makefile` installs pnpm only after comparing the download with it, and
+  without install scripts. When you update pnpm, update the hash with it
+  (`npm view pnpm@<version> dist.integrity`, as hex). Values read from the workflows may only
+  hold `0-9 A-Z a-z . : _ / @ -`.
+- **Containers cannot touch your hooks.** Every container mounts the clone writable for caches and
+  build output, but `.git` and `.husky` read-only. The commands of the `backend` and `web`
   jobs are repeated in the `Makefile`; `backend/tests/unit/test_ci_parity.py` fails when they differ from the workflow or
   when a version can no longer be read from it.
 - **Test database.** `make ci` starts the container `bambubridge-ci-postgres` on first use and leaves
