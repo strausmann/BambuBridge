@@ -1,0 +1,164 @@
+/*
+ * BambuBridge Design-Tokens (Markenentwurf 2026-11-12)
+ * Aufbau wie Label Printer Hub / Kept: Skalen (@theme), Rollen (@theme inline), Light/Dark.
+ * Quelle der Wahrheit für Farben. Siehe docs/brand/README.md.
+ */
+/* BambuBridge: Skalen (primitiv) */
+@theme {
+  --color-primary-50: #EDF9FF;
+  --color-primary-100: #D9F1FF;
+  --color-primary-200: #B5E4FE;
+  --color-primary-300: #83D1F9;
+  --color-primary-400: #4FB9EB;
+  --color-primary-500: #1BA0D5;
+  --color-primary-600: #0087BA;
+  --color-primary-700: #006E99;
+  --color-primary-800: #00597B;
+  --color-primary-900: #05445E;
+  --color-primary-950: #042939;
+
+  --color-accent-50: #FFF2F8;
+  --color-accent-100: #FFE3EF;
+  --color-accent-200: #FFCAE1;
+  --color-accent-300: #FDA8CD;
+  --color-accent-400: #F183B6;
+  --color-accent-500: #DD639E;
+  --color-accent-600: #C34786;
+  --color-accent-700: #A1376E;
+  --color-accent-800: #812F58;
+  --color-accent-900: #622644;
+  --color-accent-950: #3C1628;
+
+  --color-neutral-50: #F3F7FB;
+  --color-neutral-100: #E9EDF1;
+  --color-neutral-200: #D6DDE6;
+  --color-neutral-300: #BFC7CF;
+  --color-neutral-400: #A6ADB5;
+  --color-neutral-500: #8D959C;
+  --color-neutral-600: #767D84;
+  --color-neutral-700: #5F656D;
+  --color-neutral-800: #4B5259;
+  --color-neutral-900: #393F46;
+  --color-neutral-950: #20262C;
+  --font-sans: "Space Grotesk", "Inter", system-ui, sans-serif;
+  --radius-r1: 6px;
+  --radius-r2: 10px;
+  --radius-r3: 14px;
+}
+
+/* semantische Rollen: lesen die Variablen unten (Light/Dark) */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-sunken: var(--sunken);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-ink: var(--primary-ink);
+  --color-primary-soft: var(--primary-soft);
+  --color-link: var(--link);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+}
+
+/* Light ist Standard, Dark folgt dem System; data-theme überschreibt beides */
+:root {
+  color-scheme: light;
+  --bg:#F3F7FB;
+  --surface:#FBFEFF;
+  --sunken:#E9EDF1;
+  --line:#D6DDE6;
+  --line-strong:#767D84;
+  --ink:#20262C;
+  --ink-2:#4B5259;
+  --ink-3:#5F656D;
+  --primary:#006E99;
+  --primary-hover:#00597B;
+  --primary-ink:#FFFFFF;
+  --primary-soft:#D9F1FF;
+  --link:#006E99;
+  --accent:#A1376E;
+  --accent-hover:#812F58;
+  --accent-ink:#FFFFFF;
+  --accent-soft:#FFE3EF;
+  --ok:#00704E;
+  --ok-soft:#DAF6E9;
+  --warn:#8C5007;
+  --warn-soft:#FFE9D4;
+  --bad:#B02B27;
+  --bad-soft:#FFE7E4;
+  --info:#006E99;
+  --info-soft:#D9F1FF;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg:#0D1218;
+    --surface:#161C23;
+    --sunken:#1E252C;
+    --line:#2A3138;
+    --line-strong:#6C7680;
+    --ink:#F0F4F7;
+    --ink-2:#C3C8CE;
+    --ink-3:#9FA5AC;
+    --primary:#4FB9EB;
+    --primary-hover:#83D1F9;
+    --primary-ink:#042939;
+    --primary-soft:#0B3547;
+    --link:#83D1F9;
+    --accent:#F183B6;
+    --accent-hover:#FDA8CD;
+    --accent-ink:#3C1628;
+    --accent-soft:#4C1E34;
+    --ok:#5ED8A9;
+    --ok-soft:#103627;
+    --warn:#FCB26F;
+    --warn-soft:#442910;
+    --bad:#FF958A;
+    --bad-soft:#4A231F;
+    --info:#83D1F9;
+    --info-soft:#0B3547;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg:#0D1218;
+  --surface:#161C23;
+  --sunken:#1E252C;
+  --line:#2A3138;
+  --line-strong:#6C7680;
+  --ink:#F0F4F7;
+  --ink-2:#C3C8CE;
+  --ink-3:#9FA5AC;
+  --primary:#4FB9EB;
+  --primary-hover:#83D1F9;
+  --primary-ink:#042939;
+  --primary-soft:#0B3547;
+  --link:#83D1F9;
+  --accent:#F183B6;
+  --accent-hover:#FDA8CD;
+  --accent-ink:#3C1628;
+  --accent-soft:#4C1E34;
+  --ok:#5ED8A9;
+  --ok-soft:#103627;
+  --warn:#FCB26F;
+  --warn-soft:#442910;
+  --bad:#FF958A;
+  --bad-soft:#4A231F;
+  --info:#83D1F9;
+  --info-soft:#0B3547;
+}

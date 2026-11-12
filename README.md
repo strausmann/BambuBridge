@@ -14,6 +14,7 @@ hook.
 > text, so any external viewer (e.g. Hangar) is purely additive.
 
 > Design rationale and decisions: [`docs/bambu-spoolman-bridge-concept.md`](docs/bambu-spoolman-bridge-concept.md)
+> Logo and colours: [`docs/brand/`](docs/brand/README.md)
 > Cloud-API analysis (optional enrichment): [`docs/filament-cloud-api-analysis-spec.md`](docs/filament-cloud-api-analysis-spec.md)
 
 ## Status

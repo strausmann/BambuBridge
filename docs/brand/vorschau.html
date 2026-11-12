@@ -1,0 +1,460 @@
+<title>BambuBridge Markenentwurf</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Idee: eine Bauzeichnung der Marke. Kühles Schieferpapier, ein Brückenblau, ein Filament-Rosé als einziger Akzent. */
+:root{
+  --bg:#F3F7FB;
+  --surface:#FBFEFF;
+  --sunken:#E9EDF1;
+  --line:#D6DDE6;
+  --line-strong:#767D84;
+  --ink:#20262C;
+  --ink-2:#4B5259;
+  --ink-3:#5F656D;
+  --primary:#006E99;
+  --primary-hover:#00597B;
+  --primary-ink:#FFFFFF;
+  --primary-soft:#D9F1FF;
+  --link:#006E99;
+  --accent:#A1376E;
+  --accent-hover:#812F58;
+  --accent-ink:#FFFFFF;
+  --accent-soft:#FFE3EF;
+  --ok:#00704E;
+  --ok-soft:#DAF6E9;
+  --warn:#8C5007;
+  --warn-soft:#FFE9D4;
+  --bad:#B02B27;
+  --bad-soft:#FFE7E4;
+  --info:#006E99;
+  --info-soft:#D9F1FF;
+  --font-head:"Space Grotesk","Inter",system-ui,sans-serif;--font-body:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;--font-code:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0D1218;
+  --surface:#161C23;
+  --sunken:#1E252C;
+  --line:#2A3138;
+  --line-strong:#6C7680;
+  --ink:#F0F4F7;
+  --ink-2:#C3C8CE;
+  --ink-3:#9FA5AC;
+  --primary:#4FB9EB;
+  --primary-hover:#83D1F9;
+  --primary-ink:#042939;
+  --primary-soft:#0B3547;
+  --link:#83D1F9;
+  --accent:#F183B6;
+  --accent-hover:#FDA8CD;
+  --accent-ink:#3C1628;
+  --accent-soft:#4C1E34;
+  --ok:#5ED8A9;
+  --ok-soft:#103627;
+  --warn:#FCB26F;
+  --warn-soft:#442910;
+  --bad:#FF958A;
+  --bad-soft:#4A231F;
+  --info:#83D1F9;
+  --info-soft:#0B3547;
+  color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0D1218;
+  --surface:#161C23;
+  --sunken:#1E252C;
+  --line:#2A3138;
+  --line-strong:#6C7680;
+  --ink:#F0F4F7;
+  --ink-2:#C3C8CE;
+  --ink-3:#9FA5AC;
+  --primary:#4FB9EB;
+  --primary-hover:#83D1F9;
+  --primary-ink:#042939;
+  --primary-soft:#0B3547;
+  --link:#83D1F9;
+  --accent:#F183B6;
+  --accent-hover:#FDA8CD;
+  --accent-ink:#3C1628;
+  --accent-soft:#4C1E34;
+  --ok:#5ED8A9;
+  --ok-soft:#103627;
+  --warn:#FCB26F;
+  --warn-soft:#442910;
+  --bad:#FF958A;
+  --bad-soft:#4A231F;
+  --info:#83D1F9;
+  --info-soft:#0B3547;
+  color-scheme:dark}
+.t-light{color-scheme:light;
+  --bg:#F3F7FB;
+  --surface:#FBFEFF;
+  --sunken:#E9EDF1;
+  --line:#D6DDE6;
+  --line-strong:#767D84;
+  --ink:#20262C;
+  --ink-2:#4B5259;
+  --ink-3:#5F656D;
+  --primary:#006E99;
+  --primary-hover:#00597B;
+  --primary-ink:#FFFFFF;
+  --primary-soft:#D9F1FF;
+  --link:#006E99;
+  --accent:#A1376E;
+  --accent-hover:#812F58;
+  --accent-ink:#FFFFFF;
+  --accent-soft:#FFE3EF;
+  --ok:#00704E;
+  --ok-soft:#DAF6E9;
+  --warn:#8C5007;
+  --warn-soft:#FFE9D4;
+  --bad:#B02B27;
+  --bad-soft:#FFE7E4;
+  --info:#006E99;
+  --info-soft:#D9F1FF;
+}
+.t-dark{color-scheme:dark;
+  --bg:#0D1218;
+  --surface:#161C23;
+  --sunken:#1E252C;
+  --line:#2A3138;
+  --line-strong:#6C7680;
+  --ink:#F0F4F7;
+  --ink-2:#C3C8CE;
+  --ink-3:#9FA5AC;
+  --primary:#4FB9EB;
+  --primary-hover:#83D1F9;
+  --primary-ink:#042939;
+  --primary-soft:#0B3547;
+  --link:#83D1F9;
+  --accent:#F183B6;
+  --accent-hover:#FDA8CD;
+  --accent-ink:#3C1628;
+  --accent-soft:#4C1E34;
+  --ok:#5ED8A9;
+  --ok-soft:#103627;
+  --warn:#FCB26F;
+  --warn-soft:#442910;
+  --bad:#FF958A;
+  --bad-soft:#4A231F;
+  --info:#83D1F9;
+  --info-soft:#0B3547;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:16px;line-height:1.6;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0}
+.wrap{max-width:1160px;margin:0 auto;padding-block:48px 96px}
+h1,h2,h3{font-family:var(--font-head);text-wrap:balance;line-height:1.1;margin:0}
+h1{font-size:clamp(40px,7vw,76px);letter-spacing:-.03em;font-weight:700}
+h2{font-size:clamp(28px,4vw,40px);letter-spacing:-.02em;font-weight:600;margin-top:96px}
+h3{font-size:20px;font-weight:600;letter-spacing:-.01em}
+p{margin:0}
+.lead{max-width:62ch;margin-top:20px;font-size:18px;color:var(--ink-2)}
+.sub{max-width:68ch;color:var(--ink-2);margin-top:12px}
+a{color:var(--link)}
+a:focus-visible,button:focus-visible,input:focus-visible,pre:focus-visible,summary:focus-visible{outline:3px solid var(--link);outline-offset:2px;border-radius:4px}
+.head{display:flex;gap:24px;align-items:center;flex-wrap:wrap;margin-bottom:40px}
+.head img{height:48px;width:auto;max-width:100%}
+.toc{display:flex;gap:8px;flex-wrap:wrap;margin-top:28px;padding:0;list-style:none}
+.toc a{display:inline-block;padding:8px 14px;border-radius:999px;background:var(--sunken);color:var(--ink);text-decoration:none;font-weight:500;font-size:14px;transition:background .15s}
+.toc a:hover{background:var(--primary-soft)}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:12px;margin-top:40px}
+.fact{background:var(--surface);border-radius:14px;padding:18px 20px}
+.fact b{display:block;font-family:var(--font-head);font-size:28px;letter-spacing:-.02em;color:var(--link);line-height:1.1}
+.fact span{color:var(--ink-2);font-size:14px}
+.logos{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,500px),1fr));gap:20px;margin-top:32px}
+.logo-card{background:var(--sunken);border-radius:18px;padding:24px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.idea{color:var(--ink-2);font-size:15px}
+.pane{border-radius:12px;padding:20px;background:var(--bg);color:var(--ink);min-width:0}
+.lab{font-size:13px;color:var(--ink-3);margin-bottom:12px}
+.lockup{display:block;width:min(100%,380px);height:auto}
+.sizes{display:flex;align-items:flex-end;gap:14px;margin-top:18px;flex-wrap:wrap}
+.sizes img.m{display:block}
+.cap{font-size:13px;color:var(--ink-3)}
+.files{font-size:13px;color:var(--ink-3)}
+code{font-family:var(--font-code);font-size:.88em}
+.ramps{display:grid;gap:28px;margin-top:32px}
+.ramp h3{margin-bottom:10px;font-size:16px}
+.ramp ol{display:grid;grid-template-columns:repeat(11,minmax(0,1fr));gap:0;list-style:none;margin:0;padding:0;border-radius:12px;overflow:hidden}
+.ramp li{padding:36px 8px 10px;font-size:12px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.ramp li b{font-family:var(--font-head);font-size:14px}
+.ramp li span{font-family:var(--font-code);font-size:10.5px;overflow-wrap:anywhere}
+@media(max-width:720px){.ramp ol{grid-template-columns:repeat(4,minmax(0,1fr))}.ramp li{padding-top:22px}}
+.pair{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:16px;margin-top:32px}
+.panel{background:var(--bg);color:var(--ink);border-radius:18px;padding:24px;min-width:0;display:flex;flex-direction:column;gap:16px}
+.panel>.ptitle{font-size:13px;color:var(--ink-3)}
+.card{background:var(--surface);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px}
+.card .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:13px;font-weight:500;line-height:1.5}
+.b-ok{background:var(--ok-soft);color:var(--ok)}.b-warn{background:var(--warn-soft);color:var(--warn)}.b-bad{background:var(--bad-soft);color:var(--bad)}.b-info{background:var(--info-soft);color:var(--info)}.b-acc{background:var(--accent-soft);color:var(--accent)}
+.meter{height:10px;border-radius:999px;background:var(--sunken);overflow:hidden}
+.meter i{display:block;height:100%;width:64%;background:var(--primary);border-radius:999px}
+.btns{display:flex;gap:10px;flex-wrap:wrap}
+.btn{font:600 15px var(--font-body);min-height:44px;padding:0 18px;border-radius:10px;border:0;cursor:pointer;transition:background .15s,transform .12s cubic-bezier(.23,1,.32,1)}
+.btn:active{transform:scale(.97)}
+.btn-p{background:var(--primary);color:var(--primary-ink)}.btn-p:hover{background:var(--primary-hover)}
+.btn-a{background:var(--accent);color:var(--accent-ink)}.btn-a:hover{background:var(--accent-hover)}
+.btn-s{background:var(--surface);color:var(--ink);box-shadow:inset 0 0 0 1.5px var(--line-strong)}.btn-s:hover{background:var(--sunken)}
+.fld label{display:block;font-size:14px;font-weight:500;margin-bottom:6px}
+.fld input{width:100%;min-height:44px;padding:0 12px;border-radius:10px;border:1.5px solid var(--line-strong);background:var(--surface);color:var(--ink);font:16px var(--font-body)}
+.fld small{display:block;margin-top:6px;color:var(--ink-3);font-size:13px}
+.rule{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:14px;background:var(--sunken);border-radius:10px;padding:12px 14px}
+.rule b{color:var(--ink-3);font-weight:500}
+.tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,520px),1fr));gap:20px;margin-top:28px}
+.tw{overflow-x:auto;min-width:0;background:var(--surface);border-radius:14px;padding:6px 0}
+table{border-collapse:collapse;width:100%;font-size:14px}
+caption{text-align:left;font-family:var(--font-head);font-weight:600;font-size:16px;padding:14px 16px 8px}
+th{text-align:left;font-weight:500;color:var(--ink-3);padding:8px 16px;font-size:13px}
+td{padding:9px 16px;vertical-align:middle}
+tr+tr td{border-top:1px solid var(--line)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.chip{display:inline-block;min-width:44px;text-align:center;border-radius:8px;padding:2px 8px;font-weight:700;box-shadow:inset 0 0 0 1px var(--line)}
+.pass{font-size:12px;font-weight:600;color:var(--ok);background:var(--ok-soft);border-radius:999px;padding:2px 9px}
+.dot{display:inline-block;width:14px;height:14px;border-radius:50%;margin-right:8px;vertical-align:-2px;box-shadow:inset 0 0 0 1px var(--line-strong)}
+tr.ref td{font-weight:600;background:var(--sunken)}
+.code{position:relative;margin-top:28px}
+pre{margin:0;background:var(--sunken);border-radius:14px;padding:20px;overflow:auto;max-height:520px;font:13px/1.55 var(--font-code);color:var(--ink)}
+.copy{position:absolute;top:10px;right:10px;min-height:44px}
+.notes{display:grid;gap:12px;margin-top:28px;max-width:78ch}
+.note{background:var(--surface);border-radius:14px;padding:16px 20px;color:var(--ink-2)}
+.note b{color:var(--ink)}
+.src li{margin:6px 0;overflow-wrap:anywhere}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+<div class="wrap">
+<header>
+  <h1>Marken&shy;entwurf für die BambuBridge</h1>
+  <p class="lead">Vier Logo-Vorschläge und ein Farbset im Aufbau von Label Printer Hub und Kept: Token-Namen, Stufen, Light und Dark, semantische Rollen. Die Farben sind eigenständig: kühles Brückenblau statt Amber, ein Rosé als Akzent, Schieferpapier statt warmem Papier.</p>
+  <ul class="toc"><li><a href="#logos">Logos</a></li><li><a href="#farben">Farben</a></li><li><a href="#kontrast">Kontraste</a></li><li><a href="#abstand">Abstand zu Bambu</a></li><li><a href="#tailwind">Tailwind-Block</a></li><li><a href="#hinweise">Hinweise</a></li></ul>
+  <div class="facts">
+    <div class="fact"><b>49</b><span>ΔE2000 zwischen Primärfarbe und Bambu-Grün (Primär 700)</span></div>
+    <div class="fact"><b>87°</b><span>Farbtonabstand (OKLCH-Hue) zu Bambu-Grün, Primär 700</span></div>
+    <div class="fact"><b>4.9:1</b><span>niedrigster geprüfter Textkontrast in beiden Themes (AA verlangt 4.5)</span></div>
+  </div>
+</header>
+
+<h2 id="logos">Vier Logo-Vorschläge</h2>
+<p class="sub">Jede Variante zeigt Wortbildmarke und Bildzeichen auf hellem und dunklem Grund, dazu das Bildzeichen in 64, 32 und 16 Pixeln. Die Wortmarke ist in Kleinbuchstaben aus Linien gezeichnet (keine Schriftdatei nötig), neutral und ohne Anklang an das Bambu-Lab-Logo.</p>
+<div class="logos"><article class="logo-card"><h3>Bogen</h3><p class="idea">Ein Brückenbogen über einer Fahrbahn, an beiden Enden ein Knoten. Links der Drucker, rechts die Spulenverwaltung: das Bildzeichen erklärt die Aufgabe in einem Strich. Ruhig, groß lesbar und auch bei 16 px noch als Bogen erkennbar.</p><div class="pane t-light"><p class="lab">Heller Hintergrund</p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0MDcgNjQiIHdpZHRoPSI0MDciIGhlaWdodD0iNjQiIHJvbGU9ImltZyIgYXJpYS1sYWJlbD0iQmFtYnVCcmlkZ2UgTG9nbyBCb2dlbiI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMwMDZFOTkiLz48ZyBmaWxsPSJub25lIiBzdHJva2U9IiNGRkZGRkYiIHN0cm9rZS13aWR0aD0iNC41IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0xMCA0NEg1NCIvPjxwYXRoIGQ9Ik0xNCA0NEExOCAyNCAwIDAgMSA1MCA0NCIvPjwvZz48Y2lyY2xlIGN4PSIxNCIgY3k9IjQ0IiByPSI2IiBmaWxsPSIjRkZDQUUxIi8+PGNpcmNsZSBjeD0iNTAiIGN5PSI0NCIgcj0iNiIgZmlsbD0iI0ZGQ0FFMSIvPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDgwIDApIj48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwIDIxLjAwKSBzY2FsZSgyLjIpIiBmaWxsPSJub25lIiBzdHJva2Utd2lkdGg9IjEuOSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLjk1IDApIj48ZyBzdHJva2U9IiMyMDI2MkMiPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDAuMDAgMCkiIGQ9Ik0wIC01VjEwIE0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTQuNjAgMCkiIGQ9Ik0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIE0xMCAwVjEwIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMjkuMjAgMCkiIGQ9Ik0wIDBWMTAgTTAgNUEzLjUgNSAwIDAgMSA3IDVWMTAgTTcgNUEzLjUgNSAwIDAgMSAxNCA1VjEwIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDcuODAgMCkiIGQ9Ik0wIC01VjEwIE0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNjIuNDAgMCkiIGQ9Ik0wIDBWNUE1IDUgMCAwIDAgMTAgNSBNMTAgMFYxMCIvPjwvZz48ZyBzdHJva2U9IiMwMDZFOTkiPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDc3LjAwIDApIiBkPSJNMCAtNVYxMCBNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDkxLjYwIDApIiBkPSJNMCAwVjEwIE0wIDVBNSA1IDAgMCAxIDUgMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEwMi4yMCAwKSIgZD0iTTAgMFYxMCBNMCAtNC4yaC4wMSIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEwNi44MCAwKSIgZD0iTTEwIDVBNSA1IDAgMSAwIDAgNUE1IDUgMCAxIDAgMTAgNVogTTEwIC01VjEwIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIxLjQwIDApIiBkPSJNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiBNMTAgMFYxMEMxMCAxMy41IDggMTUgNSAxNUMzIDE1IDEuNSAxNC4yIC44IDEzIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTM2LjAwIDApIiBkPSJNMCA1SDEwQTUgNSAwIDEgMCA4LjU0IDguNTQiLz48L2c+PC9nPjwvZz48L2c+PC9zdmc+" alt="BambuBridge Wortbildmarke Bogen" class="lockup">
+<div class="sizes"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIEJvZ2VuIj48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzAwNkU5OSIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0ZGRkZGRiIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTEwIDQ0SDU0Ii8+PHBhdGggZD0iTTE0IDQ0QTE4IDI0IDAgMCAxIDUwIDQ0Ii8+PC9nPjxjaXJjbGUgY3g9IjE0IiBjeT0iNDQiIHI9IjYiIGZpbGw9IiNGRkNBRTEiLz48Y2lyY2xlIGN4PSI1MCIgY3k9IjQ0IiByPSI2IiBmaWxsPSIjRkZDQUUxIi8+PC9zdmc+" alt="Bildzeichen Bogen 64 Pixel" width="64" height="64" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIEJvZ2VuIj48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzAwNkU5OSIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0ZGRkZGRiIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTEwIDQ0SDU0Ii8+PHBhdGggZD0iTTE0IDQ0QTE4IDI0IDAgMCAxIDUwIDQ0Ii8+PC9nPjxjaXJjbGUgY3g9IjE0IiBjeT0iNDQiIHI9IjYiIGZpbGw9IiNGRkNBRTEiLz48Y2lyY2xlIGN4PSI1MCIgY3k9IjQ0IiByPSI2IiBmaWxsPSIjRkZDQUUxIi8+PC9zdmc+" alt="Bildzeichen Bogen 32 Pixel" width="32" height="32" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIEJvZ2VuIj48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzAwNkU5OSIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0ZGRkZGRiIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTEwIDQ0SDU0Ii8+PHBhdGggZD0iTTE0IDQ0QTE4IDI0IDAgMCAxIDUwIDQ0Ii8+PC9nPjxjaXJjbGUgY3g9IjE0IiBjeT0iNDQiIHI9IjYiIGZpbGw9IiNGRkNBRTEiLz48Y2lyY2xlIGN4PSI1MCIgY3k9IjQ0IiByPSI2IiBmaWxsPSIjRkZDQUUxIi8+PC9zdmc+" alt="Bildzeichen Bogen 16 Pixel" width="16" height="16" class="m"><span class="cap">64 / 32 / 16 px</span></div></div><div class="pane t-dark"><p class="lab">Dunkler Hintergrund</p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0MDcgNjQiIHdpZHRoPSI0MDciIGhlaWdodD0iNjQiIHJvbGU9ImltZyIgYXJpYS1sYWJlbD0iQmFtYnVCcmlkZ2UgTG9nbyBCb2dlbiI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiM0RkI5RUIiLz48ZyBmaWxsPSJub25lIiBzdHJva2U9IiMwNDI5MzkiIHN0cm9rZS13aWR0aD0iNC41IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0xMCA0NEg1NCIvPjxwYXRoIGQ9Ik0xNCA0NEExOCAyNCAwIDAgMSA1MCA0NCIvPjwvZz48Y2lyY2xlIGN4PSIxNCIgY3k9IjQ0IiByPSI2IiBmaWxsPSIjNjIyNjQ0Ii8+PGNpcmNsZSBjeD0iNTAiIGN5PSI0NCIgcj0iNiIgZmlsbD0iIzYyMjY0NCIvPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDgwIDApIj48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwIDIxLjAwKSBzY2FsZSgyLjIpIiBmaWxsPSJub25lIiBzdHJva2Utd2lkdGg9IjEuOSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLjk1IDApIj48ZyBzdHJva2U9IiNGM0Y3RkIiPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDAuMDAgMCkiIGQ9Ik0wIC01VjEwIE0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTQuNjAgMCkiIGQ9Ik0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIE0xMCAwVjEwIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMjkuMjAgMCkiIGQ9Ik0wIDBWMTAgTTAgNUEzLjUgNSAwIDAgMSA3IDVWMTAgTTcgNUEzLjUgNSAwIDAgMSAxNCA1VjEwIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDcuODAgMCkiIGQ9Ik0wIC01VjEwIE0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNjIuNDAgMCkiIGQ9Ik0wIDBWNUE1IDUgMCAwIDAgMTAgNSBNMTAgMFYxMCIvPjwvZz48ZyBzdHJva2U9IiM4M0QxRjkiPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDc3LjAwIDApIiBkPSJNMCAtNVYxMCBNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDkxLjYwIDApIiBkPSJNMCAwVjEwIE0wIDVBNSA1IDAgMCAxIDUgMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEwMi4yMCAwKSIgZD0iTTAgMFYxMCBNMCAtNC4yaC4wMSIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEwNi44MCAwKSIgZD0iTTEwIDVBNSA1IDAgMSAwIDAgNUE1IDUgMCAxIDAgMTAgNVogTTEwIC01VjEwIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIxLjQwIDApIiBkPSJNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiBNMTAgMFYxMEMxMCAxMy41IDggMTUgNSAxNUMzIDE1IDEuNSAxNC4yIC44IDEzIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTM2LjAwIDApIiBkPSJNMCA1SDEwQTUgNSAwIDEgMCA4LjU0IDguNTQiLz48L2c+PC9nPjwvZz48L2c+PC9zdmc+" alt="BambuBridge Wortbildmarke Bogen" class="lockup">
+<div class="sizes"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIEJvZ2VuIj48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzRGQjlFQiIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzA0MjkzOSIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTEwIDQ0SDU0Ii8+PHBhdGggZD0iTTE0IDQ0QTE4IDI0IDAgMCAxIDUwIDQ0Ii8+PC9nPjxjaXJjbGUgY3g9IjE0IiBjeT0iNDQiIHI9IjYiIGZpbGw9IiM2MjI2NDQiLz48Y2lyY2xlIGN4PSI1MCIgY3k9IjQ0IiByPSI2IiBmaWxsPSIjNjIyNjQ0Ii8+PC9zdmc+" alt="Bildzeichen Bogen 64 Pixel" width="64" height="64" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIEJvZ2VuIj48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzRGQjlFQiIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzA0MjkzOSIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTEwIDQ0SDU0Ii8+PHBhdGggZD0iTTE0IDQ0QTE4IDI0IDAgMCAxIDUwIDQ0Ii8+PC9nPjxjaXJjbGUgY3g9IjE0IiBjeT0iNDQiIHI9IjYiIGZpbGw9IiM2MjI2NDQiLz48Y2lyY2xlIGN4PSI1MCIgY3k9IjQ0IiByPSI2IiBmaWxsPSIjNjIyNjQ0Ii8+PC9zdmc+" alt="Bildzeichen Bogen 32 Pixel" width="32" height="32" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIEJvZ2VuIj48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzRGQjlFQiIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzA0MjkzOSIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PHBhdGggZD0iTTEwIDQ0SDU0Ii8+PHBhdGggZD0iTTE0IDQ0QTE4IDI0IDAgMCAxIDUwIDQ0Ii8+PC9nPjxjaXJjbGUgY3g9IjE0IiBjeT0iNDQiIHI9IjYiIGZpbGw9IiM2MjI2NDQiLz48Y2lyY2xlIGN4PSI1MCIgY3k9IjQ0IiByPSI2IiBmaWxsPSIjNjIyNjQ0Ii8+PC9zdmc+" alt="Bildzeichen Bogen 16 Pixel" width="16" height="16" class="m"><span class="cap">64 / 32 / 16 px</span></div></div><p class="files">Dateien: <code>logos/01-bogen-{light,dark}-{lockup,mark}.svg</code></p></article><article class="logo-card"><h3>Spule zum Etikett</h3><p class="idea">Das Filament verlässt die Spule, spannt sich als Bogen über die Lücke und endet im Etikett. Zeigt den Kern der Integrationen (Spule, Regelwerk, Etikettendruck) als eine Linie. Am detailreichsten, deshalb als Favicon die schwächste Variante.</p><div class="pane t-light"><p class="lab">Heller Hintergrund</p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0MDcgNjQiIHdpZHRoPSI0MDciIGhlaWdodD0iNjQiIHJvbGU9ImltZyIgYXJpYS1sYWJlbD0iQmFtYnVCcmlkZ2UgTG9nbyBTcHVsZSB6dW0gRXRpa2V0dCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMwMDZFOTkiLz48ZyBmaWxsPSJub25lIiBzdHJva2U9IiNGRkZGRkYiIHN0cm9rZS13aWR0aD0iNC41IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxjaXJjbGUgY3g9IjIxIiBjeT0iNDAiIHI9IjEwLjUiLz48cGF0aCBkPSJNMjEgMjkuNUMyMSAxMSA1MCA5IDUwIDI0Ii8+PHJlY3QgeD0iNDAiIHk9IjI0IiB3aWR0aD0iMTgiIGhlaWdodD0iMjciIHJ4PSI0LjUiLz48cGF0aCBkPSJNNDUuNSA0Mkg1Mi41IiBzdHJva2Utd2lkdGg9IjMuMiIvPjwvZz48Y2lyY2xlIGN4PSI0OSIgY3k9IjMyLjUiIHI9IjIuNiIgZmlsbD0iI0ZGQ0FFMSIvPjxnPjxjaXJjbGUgY3g9IjIxIiBjeT0iNDAiIHI9IjMuNiIgZmlsbD0iI0ZGQ0FFMSIvPjwvZz48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg4MCAwKSI+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMCAyMS4wMCkgc2NhbGUoMi4yKSIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjkiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMC45NSAwKSI+PGcgc3Ryb2tlPSIjMjAyNjJDIj48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLjAwIDApIiBkPSJNMCAtNVYxMCBNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE0LjYwIDApIiBkPSJNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiBNMTAgMFYxMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDI5LjIwIDApIiBkPSJNMCAwVjEwIE0wIDVBMy41IDUgMCAwIDEgNyA1VjEwIE03IDVBMy41IDUgMCAwIDEgMTQgNVYxMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQ3LjgwIDApIiBkPSJNMCAtNVYxMCBNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDYyLjQwIDApIiBkPSJNMCAwVjVBNSA1IDAgMCAwIDEwIDUgTTEwIDBWMTAiLz48L2c+PGcgc3Ryb2tlPSIjMDA2RTk5Ij48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSg3Ny4wMCAwKSIgZD0iTTAgLTVWMTAgTTEwIDVBNSA1IDAgMSAwIDAgNUE1IDUgMCAxIDAgMTAgNVoiLz48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5MS42MCAwKSIgZD0iTTAgMFYxMCBNMCA1QTUgNSAwIDAgMSA1IDAiLz48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMDIuMjAgMCkiIGQ9Ik0wIDBWMTAgTTAgLTQuMmguMDEiLz48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMDYuODAgMCkiIGQ9Ik0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIE0xMCAtNVYxMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEyMS40MCAwKSIgZD0iTTEwIDVBNSA1IDAgMSAwIDAgNUE1IDUgMCAxIDAgMTAgNVogTTEwIDBWMTBDMTAgMTMuNSA4IDE1IDUgMTVDMyAxNSAxLjUgMTQuMiAuOCAxMyIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEzNi4wMCAwKSIgZD0iTTAgNUgxMEE1IDUgMCAxIDAgOC41NCA4LjU0Ii8+PC9nPjwvZz48L2c+PC9nPjwvc3ZnPg==" alt="BambuBridge Wortbildmarke Spule zum Etikett" class="lockup">
+<div class="sizes"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIFNwdWxlIHp1bSBFdGlrZXR0Ij48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzAwNkU5OSIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0ZGRkZGRiIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGNpcmNsZSBjeD0iMjEiIGN5PSI0MCIgcj0iMTAuNSIvPjxwYXRoIGQ9Ik0yMSAyOS41QzIxIDExIDUwIDkgNTAgMjQiLz48cmVjdCB4PSI0MCIgeT0iMjQiIHdpZHRoPSIxOCIgaGVpZ2h0PSIyNyIgcng9IjQuNSIvPjxwYXRoIGQ9Ik00NS41IDQySDUyLjUiIHN0cm9rZS13aWR0aD0iMy4yIi8+PC9nPjxjaXJjbGUgY3g9IjQ5IiBjeT0iMzIuNSIgcj0iMi42IiBmaWxsPSIjRkZDQUUxIi8+PGc+PGNpcmNsZSBjeD0iMjEiIGN5PSI0MCIgcj0iMy42IiBmaWxsPSIjRkZDQUUxIi8+PC9nPjwvc3ZnPg==" alt="Bildzeichen Spule zum Etikett 64 Pixel" width="64" height="64" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIFNwdWxlIHp1bSBFdGlrZXR0Ij48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzAwNkU5OSIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0ZGRkZGRiIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGNpcmNsZSBjeD0iMjEiIGN5PSI0MCIgcj0iMTAuNSIvPjxwYXRoIGQ9Ik0yMSAyOS41QzIxIDExIDUwIDkgNTAgMjQiLz48cmVjdCB4PSI0MCIgeT0iMjQiIHdpZHRoPSIxOCIgaGVpZ2h0PSIyNyIgcng9IjQuNSIvPjxwYXRoIGQ9Ik00NS41IDQySDUyLjUiIHN0cm9rZS13aWR0aD0iMy4yIi8+PC9nPjxjaXJjbGUgY3g9IjQ5IiBjeT0iMzIuNSIgcj0iMi42IiBmaWxsPSIjRkZDQUUxIi8+PGc+PGNpcmNsZSBjeD0iMjEiIGN5PSI0MCIgcj0iMy42IiBmaWxsPSIjRkZDQUUxIi8+PC9nPjwvc3ZnPg==" alt="Bildzeichen Spule zum Etikett 32 Pixel" width="32" height="32" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIFNwdWxlIHp1bSBFdGlrZXR0Ij48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzAwNkU5OSIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0ZGRkZGRiIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGNpcmNsZSBjeD0iMjEiIGN5PSI0MCIgcj0iMTAuNSIvPjxwYXRoIGQ9Ik0yMSAyOS41QzIxIDExIDUwIDkgNTAgMjQiLz48cmVjdCB4PSI0MCIgeT0iMjQiIHdpZHRoPSIxOCIgaGVpZ2h0PSIyNyIgcng9IjQuNSIvPjxwYXRoIGQ9Ik00NS41IDQySDUyLjUiIHN0cm9rZS13aWR0aD0iMy4yIi8+PC9nPjxjaXJjbGUgY3g9IjQ5IiBjeT0iMzIuNSIgcj0iMi42IiBmaWxsPSIjRkZDQUUxIi8+PGc+PGNpcmNsZSBjeD0iMjEiIGN5PSI0MCIgcj0iMy42IiBmaWxsPSIjRkZDQUUxIi8+PC9nPjwvc3ZnPg==" alt="Bildzeichen Spule zum Etikett 16 Pixel" width="16" height="16" class="m"><span class="cap">64 / 32 / 16 px</span></div></div><div class="pane t-dark"><p class="lab">Dunkler Hintergrund</p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0MDcgNjQiIHdpZHRoPSI0MDciIGhlaWdodD0iNjQiIHJvbGU9ImltZyIgYXJpYS1sYWJlbD0iQmFtYnVCcmlkZ2UgTG9nbyBTcHVsZSB6dW0gRXRpa2V0dCI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiM0RkI5RUIiLz48ZyBmaWxsPSJub25lIiBzdHJva2U9IiMwNDI5MzkiIHN0cm9rZS13aWR0aD0iNC41IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxjaXJjbGUgY3g9IjIxIiBjeT0iNDAiIHI9IjEwLjUiLz48cGF0aCBkPSJNMjEgMjkuNUMyMSAxMSA1MCA5IDUwIDI0Ii8+PHJlY3QgeD0iNDAiIHk9IjI0IiB3aWR0aD0iMTgiIGhlaWdodD0iMjciIHJ4PSI0LjUiLz48cGF0aCBkPSJNNDUuNSA0Mkg1Mi41IiBzdHJva2Utd2lkdGg9IjMuMiIvPjwvZz48Y2lyY2xlIGN4PSI0OSIgY3k9IjMyLjUiIHI9IjIuNiIgZmlsbD0iIzYyMjY0NCIvPjxnPjxjaXJjbGUgY3g9IjIxIiBjeT0iNDAiIHI9IjMuNiIgZmlsbD0iIzYyMjY0NCIvPjwvZz48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg4MCAwKSI+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMCAyMS4wMCkgc2NhbGUoMi4yKSIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjkiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMC45NSAwKSI+PGcgc3Ryb2tlPSIjRjNGN0ZCIj48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLjAwIDApIiBkPSJNMCAtNVYxMCBNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE0LjYwIDApIiBkPSJNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiBNMTAgMFYxMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDI5LjIwIDApIiBkPSJNMCAwVjEwIE0wIDVBMy41IDUgMCAwIDEgNyA1VjEwIE03IDVBMy41IDUgMCAwIDEgMTQgNVYxMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQ3LjgwIDApIiBkPSJNMCAtNVYxMCBNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDYyLjQwIDApIiBkPSJNMCAwVjVBNSA1IDAgMCAwIDEwIDUgTTEwIDBWMTAiLz48L2c+PGcgc3Ryb2tlPSIjODNEMUY5Ij48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSg3Ny4wMCAwKSIgZD0iTTAgLTVWMTAgTTEwIDVBNSA1IDAgMSAwIDAgNUE1IDUgMCAxIDAgMTAgNVoiLz48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5MS42MCAwKSIgZD0iTTAgMFYxMCBNMCA1QTUgNSAwIDAgMSA1IDAiLz48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMDIuMjAgMCkiIGQ9Ik0wIDBWMTAgTTAgLTQuMmguMDEiLz48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMDYuODAgMCkiIGQ9Ik0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIE0xMCAtNVYxMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEyMS40MCAwKSIgZD0iTTEwIDVBNSA1IDAgMSAwIDAgNUE1IDUgMCAxIDAgMTAgNVogTTEwIDBWMTBDMTAgMTMuNSA4IDE1IDUgMTVDMyAxNSAxLjUgMTQuMiAuOCAxMyIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEzNi4wMCAwKSIgZD0iTTAgNUgxMEE1IDUgMCAxIDAgOC41NCA4LjU0Ii8+PC9nPjwvZz48L2c+PC9nPjwvc3ZnPg==" alt="BambuBridge Wortbildmarke Spule zum Etikett" class="lockup">
+<div class="sizes"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIFNwdWxlIHp1bSBFdGlrZXR0Ij48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzRGQjlFQiIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzA0MjkzOSIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGNpcmNsZSBjeD0iMjEiIGN5PSI0MCIgcj0iMTAuNSIvPjxwYXRoIGQ9Ik0yMSAyOS41QzIxIDExIDUwIDkgNTAgMjQiLz48cmVjdCB4PSI0MCIgeT0iMjQiIHdpZHRoPSIxOCIgaGVpZ2h0PSIyNyIgcng9IjQuNSIvPjxwYXRoIGQ9Ik00NS41IDQySDUyLjUiIHN0cm9rZS13aWR0aD0iMy4yIi8+PC9nPjxjaXJjbGUgY3g9IjQ5IiBjeT0iMzIuNSIgcj0iMi42IiBmaWxsPSIjNjIyNjQ0Ii8+PGc+PGNpcmNsZSBjeD0iMjEiIGN5PSI0MCIgcj0iMy42IiBmaWxsPSIjNjIyNjQ0Ii8+PC9nPjwvc3ZnPg==" alt="Bildzeichen Spule zum Etikett 64 Pixel" width="64" height="64" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIFNwdWxlIHp1bSBFdGlrZXR0Ij48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzRGQjlFQiIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzA0MjkzOSIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGNpcmNsZSBjeD0iMjEiIGN5PSI0MCIgcj0iMTAuNSIvPjxwYXRoIGQ9Ik0yMSAyOS41QzIxIDExIDUwIDkgNTAgMjQiLz48cmVjdCB4PSI0MCIgeT0iMjQiIHdpZHRoPSIxOCIgaGVpZ2h0PSIyNyIgcng9IjQuNSIvPjxwYXRoIGQ9Ik00NS41IDQySDUyLjUiIHN0cm9rZS13aWR0aD0iMy4yIi8+PC9nPjxjaXJjbGUgY3g9IjQ5IiBjeT0iMzIuNSIgcj0iMi42IiBmaWxsPSIjNjIyNjQ0Ii8+PGc+PGNpcmNsZSBjeD0iMjEiIGN5PSI0MCIgcj0iMy42IiBmaWxsPSIjNjIyNjQ0Ii8+PC9nPjwvc3ZnPg==" alt="Bildzeichen Spule zum Etikett 32 Pixel" width="32" height="32" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIFNwdWxlIHp1bSBFdGlrZXR0Ij48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzRGQjlFQiIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzA0MjkzOSIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGNpcmNsZSBjeD0iMjEiIGN5PSI0MCIgcj0iMTAuNSIvPjxwYXRoIGQ9Ik0yMSAyOS41QzIxIDExIDUwIDkgNTAgMjQiLz48cmVjdCB4PSI0MCIgeT0iMjQiIHdpZHRoPSIxOCIgaGVpZ2h0PSIyNyIgcng9IjQuNSIvPjxwYXRoIGQ9Ik00NS41IDQySDUyLjUiIHN0cm9rZS13aWR0aD0iMy4yIi8+PC9nPjxjaXJjbGUgY3g9IjQ5IiBjeT0iMzIuNSIgcj0iMi42IiBmaWxsPSIjNjIyNjQ0Ii8+PGc+PGNpcmNsZSBjeD0iMjEiIGN5PSI0MCIgcj0iMy42IiBmaWxsPSIjNjIyNjQ0Ii8+PC9nPjwvc3ZnPg==" alt="Bildzeichen Spule zum Etikett 16 Pixel" width="16" height="16" class="m"><span class="cap">64 / 32 / 16 px</span></div></div><p class="files">Dateien: <code>logos/02-spule-etikett-{light,dark}-{lockup,mark}.svg</code></p></article><article class="logo-card"><h3>Drehscheibe</h3><p class="idea">Eine Spulennabe in der Mitte, vier Knoten rundherum: Drucker, Spoolman, Etikettendruck, Webhooks. Die Drehscheibe steht für das Regelwerk, das alles verteilt. Die kompakteste Form und die tragfähigste als App-Icon.</p><div class="pane t-light"><p class="lab">Heller Hintergrund</p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0MDcgNjQiIHdpZHRoPSI0MDciIGhlaWdodD0iNjQiIHJvbGU9ImltZyIgYXJpYS1sYWJlbD0iQmFtYnVCcmlkZ2UgTG9nbyBEcmVoc2NoZWliZSI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiMwMDZFOTkiLz48ZyBmaWxsPSJub25lIiBzdHJva2U9IiNGRkZGRkYiIHN0cm9rZS13aWR0aD0iNC41IiBzdHJva2UtbGluZWNhcD0icm91bmQiPjxwYXRoIGQ9Ik0zMiAzMkwzMi4wMCAxMi4wME0zMiAzMkw1Mi4wMCAzMi4wME0zMiAzMkwzMi4wMCA1Mi4wME0zMiAzMkwxMi4wMCAzMi4wMCIvPjxjaXJjbGUgY3g9IjMyIiBjeT0iMzIiIHI9IjguNSIgZmlsbD0iIzAwNkU5OSIvPjwvZz48Y2lyY2xlIGN4PSIzMi4wMCIgY3k9IjEyLjAwIiByPSI1LjYiIGZpbGw9IiNGRkNBRTEiLz48Y2lyY2xlIGN4PSI1Mi4wMCIgY3k9IjMyLjAwIiByPSI1LjYiIGZpbGw9IiNGRkZGRkYiLz48Y2lyY2xlIGN4PSIzMi4wMCIgY3k9IjUyLjAwIiByPSI1LjYiIGZpbGw9IiNGRkZGRkYiLz48Y2lyY2xlIGN4PSIxMi4wMCIgY3k9IjMyLjAwIiByPSI1LjYiIGZpbGw9IiNGRkZGRkYiLz48Y2lyY2xlIGN4PSIzMiIgY3k9IjMyIiByPSIyLjgiIGZpbGw9IiNGRkNBRTEiLz48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg4MCAwKSI+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMCAyMS4wMCkgc2NhbGUoMi4yKSIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjkiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMC45NSAwKSI+PGcgc3Ryb2tlPSIjMjAyNjJDIj48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLjAwIDApIiBkPSJNMCAtNVYxMCBNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE0LjYwIDApIiBkPSJNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiBNMTAgMFYxMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDI5LjIwIDApIiBkPSJNMCAwVjEwIE0wIDVBMy41IDUgMCAwIDEgNyA1VjEwIE03IDVBMy41IDUgMCAwIDEgMTQgNVYxMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQ3LjgwIDApIiBkPSJNMCAtNVYxMCBNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDYyLjQwIDApIiBkPSJNMCAwVjVBNSA1IDAgMCAwIDEwIDUgTTEwIDBWMTAiLz48L2c+PGcgc3Ryb2tlPSIjMDA2RTk5Ij48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSg3Ny4wMCAwKSIgZD0iTTAgLTVWMTAgTTEwIDVBNSA1IDAgMSAwIDAgNUE1IDUgMCAxIDAgMTAgNVoiLz48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5MS42MCAwKSIgZD0iTTAgMFYxMCBNMCA1QTUgNSAwIDAgMSA1IDAiLz48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMDIuMjAgMCkiIGQ9Ik0wIDBWMTAgTTAgLTQuMmguMDEiLz48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMDYuODAgMCkiIGQ9Ik0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIE0xMCAtNVYxMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEyMS40MCAwKSIgZD0iTTEwIDVBNSA1IDAgMSAwIDAgNUE1IDUgMCAxIDAgMTAgNVogTTEwIDBWMTBDMTAgMTMuNSA4IDE1IDUgMTVDMyAxNSAxLjUgMTQuMiAuOCAxMyIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEzNi4wMCAwKSIgZD0iTTAgNUgxMEE1IDUgMCAxIDAgOC41NCA4LjU0Ii8+PC9nPjwvZz48L2c+PC9nPjwvc3ZnPg==" alt="BambuBridge Wortbildmarke Drehscheibe" class="lockup">
+<div class="sizes"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIERyZWhzY2hlaWJlIj48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzAwNkU5OSIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0ZGRkZGRiIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCI+PHBhdGggZD0iTTMyIDMyTDMyLjAwIDEyLjAwTTMyIDMyTDUyLjAwIDMyLjAwTTMyIDMyTDMyLjAwIDUyLjAwTTMyIDMyTDEyLjAwIDMyLjAwIi8+PGNpcmNsZSBjeD0iMzIiIGN5PSIzMiIgcj0iOC41IiBmaWxsPSIjMDA2RTk5Ii8+PC9nPjxjaXJjbGUgY3g9IjMyLjAwIiBjeT0iMTIuMDAiIHI9IjUuNiIgZmlsbD0iI0ZGQ0FFMSIvPjxjaXJjbGUgY3g9IjUyLjAwIiBjeT0iMzIuMDAiIHI9IjUuNiIgZmlsbD0iI0ZGRkZGRiIvPjxjaXJjbGUgY3g9IjMyLjAwIiBjeT0iNTIuMDAiIHI9IjUuNiIgZmlsbD0iI0ZGRkZGRiIvPjxjaXJjbGUgY3g9IjEyLjAwIiBjeT0iMzIuMDAiIHI9IjUuNiIgZmlsbD0iI0ZGRkZGRiIvPjxjaXJjbGUgY3g9IjMyIiBjeT0iMzIiIHI9IjIuOCIgZmlsbD0iI0ZGQ0FFMSIvPjwvc3ZnPg==" alt="Bildzeichen Drehscheibe 64 Pixel" width="64" height="64" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIERyZWhzY2hlaWJlIj48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzAwNkU5OSIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0ZGRkZGRiIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCI+PHBhdGggZD0iTTMyIDMyTDMyLjAwIDEyLjAwTTMyIDMyTDUyLjAwIDMyLjAwTTMyIDMyTDMyLjAwIDUyLjAwTTMyIDMyTDEyLjAwIDMyLjAwIi8+PGNpcmNsZSBjeD0iMzIiIGN5PSIzMiIgcj0iOC41IiBmaWxsPSIjMDA2RTk5Ii8+PC9nPjxjaXJjbGUgY3g9IjMyLjAwIiBjeT0iMTIuMDAiIHI9IjUuNiIgZmlsbD0iI0ZGQ0FFMSIvPjxjaXJjbGUgY3g9IjUyLjAwIiBjeT0iMzIuMDAiIHI9IjUuNiIgZmlsbD0iI0ZGRkZGRiIvPjxjaXJjbGUgY3g9IjMyLjAwIiBjeT0iNTIuMDAiIHI9IjUuNiIgZmlsbD0iI0ZGRkZGRiIvPjxjaXJjbGUgY3g9IjEyLjAwIiBjeT0iMzIuMDAiIHI9IjUuNiIgZmlsbD0iI0ZGRkZGRiIvPjxjaXJjbGUgY3g9IjMyIiBjeT0iMzIiIHI9IjIuOCIgZmlsbD0iI0ZGQ0FFMSIvPjwvc3ZnPg==" alt="Bildzeichen Drehscheibe 32 Pixel" width="32" height="32" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIERyZWhzY2hlaWJlIj48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzAwNkU5OSIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0ZGRkZGRiIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCI+PHBhdGggZD0iTTMyIDMyTDMyLjAwIDEyLjAwTTMyIDMyTDUyLjAwIDMyLjAwTTMyIDMyTDMyLjAwIDUyLjAwTTMyIDMyTDEyLjAwIDMyLjAwIi8+PGNpcmNsZSBjeD0iMzIiIGN5PSIzMiIgcj0iOC41IiBmaWxsPSIjMDA2RTk5Ii8+PC9nPjxjaXJjbGUgY3g9IjMyLjAwIiBjeT0iMTIuMDAiIHI9IjUuNiIgZmlsbD0iI0ZGQ0FFMSIvPjxjaXJjbGUgY3g9IjUyLjAwIiBjeT0iMzIuMDAiIHI9IjUuNiIgZmlsbD0iI0ZGRkZGRiIvPjxjaXJjbGUgY3g9IjMyLjAwIiBjeT0iNTIuMDAiIHI9IjUuNiIgZmlsbD0iI0ZGRkZGRiIvPjxjaXJjbGUgY3g9IjEyLjAwIiBjeT0iMzIuMDAiIHI9IjUuNiIgZmlsbD0iI0ZGRkZGRiIvPjxjaXJjbGUgY3g9IjMyIiBjeT0iMzIiIHI9IjIuOCIgZmlsbD0iI0ZGQ0FFMSIvPjwvc3ZnPg==" alt="Bildzeichen Drehscheibe 16 Pixel" width="16" height="16" class="m"><span class="cap">64 / 32 / 16 px</span></div></div><div class="pane t-dark"><p class="lab">Dunkler Hintergrund</p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0MDcgNjQiIHdpZHRoPSI0MDciIGhlaWdodD0iNjQiIHJvbGU9ImltZyIgYXJpYS1sYWJlbD0iQmFtYnVCcmlkZ2UgTG9nbyBEcmVoc2NoZWliZSI+PHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTQiIGZpbGw9IiM0RkI5RUIiLz48ZyBmaWxsPSJub25lIiBzdHJva2U9IiMwNDI5MzkiIHN0cm9rZS13aWR0aD0iNC41IiBzdHJva2UtbGluZWNhcD0icm91bmQiPjxwYXRoIGQ9Ik0zMiAzMkwzMi4wMCAxMi4wME0zMiAzMkw1Mi4wMCAzMi4wME0zMiAzMkwzMi4wMCA1Mi4wME0zMiAzMkwxMi4wMCAzMi4wMCIvPjxjaXJjbGUgY3g9IjMyIiBjeT0iMzIiIHI9IjguNSIgZmlsbD0iIzRGQjlFQiIvPjwvZz48Y2lyY2xlIGN4PSIzMi4wMCIgY3k9IjEyLjAwIiByPSI1LjYiIGZpbGw9IiM2MjI2NDQiLz48Y2lyY2xlIGN4PSI1Mi4wMCIgY3k9IjMyLjAwIiByPSI1LjYiIGZpbGw9IiMwNDI5MzkiLz48Y2lyY2xlIGN4PSIzMi4wMCIgY3k9IjUyLjAwIiByPSI1LjYiIGZpbGw9IiMwNDI5MzkiLz48Y2lyY2xlIGN4PSIxMi4wMCIgY3k9IjMyLjAwIiByPSI1LjYiIGZpbGw9IiMwNDI5MzkiLz48Y2lyY2xlIGN4PSIzMiIgY3k9IjMyIiByPSIyLjgiIGZpbGw9IiM2MjI2NDQiLz48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg4MCAwKSI+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMCAyMS4wMCkgc2NhbGUoMi4yKSIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIxLjkiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMC45NSAwKSI+PGcgc3Ryb2tlPSIjRjNGN0ZCIj48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLjAwIDApIiBkPSJNMCAtNVYxMCBNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDE0LjYwIDApIiBkPSJNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiBNMTAgMFYxMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDI5LjIwIDApIiBkPSJNMCAwVjEwIE0wIDVBMy41IDUgMCAwIDEgNyA1VjEwIE03IDVBMy41IDUgMCAwIDEgMTQgNVYxMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDQ3LjgwIDApIiBkPSJNMCAtNVYxMCBNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDYyLjQwIDApIiBkPSJNMCAwVjVBNSA1IDAgMCAwIDEwIDUgTTEwIDBWMTAiLz48L2c+PGcgc3Ryb2tlPSIjODNEMUY5Ij48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSg3Ny4wMCAwKSIgZD0iTTAgLTVWMTAgTTEwIDVBNSA1IDAgMSAwIDAgNUE1IDUgMCAxIDAgMTAgNVoiLz48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSg5MS42MCAwKSIgZD0iTTAgMFYxMCBNMCA1QTUgNSAwIDAgMSA1IDAiLz48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMDIuMjAgMCkiIGQ9Ik0wIDBWMTAgTTAgLTQuMmguMDEiLz48cGF0aCB0cmFuc2Zvcm09InRyYW5zbGF0ZSgxMDYuODAgMCkiIGQ9Ik0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIE0xMCAtNVYxMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEyMS40MCAwKSIgZD0iTTEwIDVBNSA1IDAgMSAwIDAgNUE1IDUgMCAxIDAgMTAgNVogTTEwIDBWMTBDMTAgMTMuNSA4IDE1IDUgMTVDMyAxNSAxLjUgMTQuMiAuOCAxMyIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEzNi4wMCAwKSIgZD0iTTAgNUgxMEE1IDUgMCAxIDAgOC41NCA4LjU0Ii8+PC9nPjwvZz48L2c+PC9nPjwvc3ZnPg==" alt="BambuBridge Wortbildmarke Drehscheibe" class="lockup">
+<div class="sizes"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIERyZWhzY2hlaWJlIj48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzRGQjlFQiIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzA0MjkzOSIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCI+PHBhdGggZD0iTTMyIDMyTDMyLjAwIDEyLjAwTTMyIDMyTDUyLjAwIDMyLjAwTTMyIDMyTDMyLjAwIDUyLjAwTTMyIDMyTDEyLjAwIDMyLjAwIi8+PGNpcmNsZSBjeD0iMzIiIGN5PSIzMiIgcj0iOC41IiBmaWxsPSIjNEZCOUVCIi8+PC9nPjxjaXJjbGUgY3g9IjMyLjAwIiBjeT0iMTIuMDAiIHI9IjUuNiIgZmlsbD0iIzYyMjY0NCIvPjxjaXJjbGUgY3g9IjUyLjAwIiBjeT0iMzIuMDAiIHI9IjUuNiIgZmlsbD0iIzA0MjkzOSIvPjxjaXJjbGUgY3g9IjMyLjAwIiBjeT0iNTIuMDAiIHI9IjUuNiIgZmlsbD0iIzA0MjkzOSIvPjxjaXJjbGUgY3g9IjEyLjAwIiBjeT0iMzIuMDAiIHI9IjUuNiIgZmlsbD0iIzA0MjkzOSIvPjxjaXJjbGUgY3g9IjMyIiBjeT0iMzIiIHI9IjIuOCIgZmlsbD0iIzYyMjY0NCIvPjwvc3ZnPg==" alt="Bildzeichen Drehscheibe 64 Pixel" width="64" height="64" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIERyZWhzY2hlaWJlIj48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzRGQjlFQiIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzA0MjkzOSIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCI+PHBhdGggZD0iTTMyIDMyTDMyLjAwIDEyLjAwTTMyIDMyTDUyLjAwIDMyLjAwTTMyIDMyTDMyLjAwIDUyLjAwTTMyIDMyTDEyLjAwIDMyLjAwIi8+PGNpcmNsZSBjeD0iMzIiIGN5PSIzMiIgcj0iOC41IiBmaWxsPSIjNEZCOUVCIi8+PC9nPjxjaXJjbGUgY3g9IjMyLjAwIiBjeT0iMTIuMDAiIHI9IjUuNiIgZmlsbD0iIzYyMjY0NCIvPjxjaXJjbGUgY3g9IjUyLjAwIiBjeT0iMzIuMDAiIHI9IjUuNiIgZmlsbD0iIzA0MjkzOSIvPjxjaXJjbGUgY3g9IjMyLjAwIiBjeT0iNTIuMDAiIHI9IjUuNiIgZmlsbD0iIzA0MjkzOSIvPjxjaXJjbGUgY3g9IjEyLjAwIiBjeT0iMzIuMDAiIHI9IjUuNiIgZmlsbD0iIzA0MjkzOSIvPjxjaXJjbGUgY3g9IjMyIiBjeT0iMzIiIHI9IjIuOCIgZmlsbD0iIzYyMjY0NCIvPjwvc3ZnPg==" alt="Bildzeichen Drehscheibe 32 Pixel" width="32" height="32" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIERyZWhzY2hlaWJlIj48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzRGQjlFQiIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzA0MjkzOSIgc3Ryb2tlLXdpZHRoPSI0LjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCI+PHBhdGggZD0iTTMyIDMyTDMyLjAwIDEyLjAwTTMyIDMyTDUyLjAwIDMyLjAwTTMyIDMyTDMyLjAwIDUyLjAwTTMyIDMyTDEyLjAwIDMyLjAwIi8+PGNpcmNsZSBjeD0iMzIiIGN5PSIzMiIgcj0iOC41IiBmaWxsPSIjNEZCOUVCIi8+PC9nPjxjaXJjbGUgY3g9IjMyLjAwIiBjeT0iMTIuMDAiIHI9IjUuNiIgZmlsbD0iIzYyMjY0NCIvPjxjaXJjbGUgY3g9IjUyLjAwIiBjeT0iMzIuMDAiIHI9IjUuNiIgZmlsbD0iIzA0MjkzOSIvPjxjaXJjbGUgY3g9IjMyLjAwIiBjeT0iNTIuMDAiIHI9IjUuNiIgZmlsbD0iIzA0MjkzOSIvPjxjaXJjbGUgY3g9IjEyLjAwIiBjeT0iMzIuMDAiIHI9IjUuNiIgZmlsbD0iIzA0MjkzOSIvPjxjaXJjbGUgY3g9IjMyIiBjeT0iMzIiIHI9IjIuOCIgZmlsbD0iIzYyMjY0NCIvPjwvc3ZnPg==" alt="Bildzeichen Drehscheibe 16 Pixel" width="16" height="16" class="m"><span class="cap">64 / 32 / 16 px</span></div></div><p class="files">Dateien: <code>logos/03-drehscheibe-{light,dark}-{lockup,mark}.svg</code></p></article><article class="logo-card"><h3>Glieder</h3><p class="idea">Zwei ineinandergreifende Ringe, wie zwei Kettenglieder: zwei Systeme, die verbunden sind. Die Brücke steckt im Verb, nicht im Bauwerk. Am abstraktesten, braucht ab 24 px die dicke Strichvariante.</p><div class="pane t-light"><p class="lab">Heller Hintergrund</p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0MDcgNjQiIHdpZHRoPSI0MDciIGhlaWdodD0iNjQiIHJvbGU9ImltZyIgYXJpYS1sYWJlbD0iQmFtYnVCcmlkZ2UgTG9nbyBHbGllZGVyIj48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzAwNkU5OSIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCI+PGNpcmNsZSBjeD0iNDIiIGN5PSIzMiIgcj0iMTQuNSIgc3Ryb2tlPSIjRkZDQUUxIiBzdHJva2Utd2lkdGg9IjQuNSIvPjxjaXJjbGUgY3g9IjIyIiBjeT0iMzIiIHI9IjE0LjUiIHN0cm9rZT0iI0ZGRkZGRiIgc3Ryb2tlLXdpZHRoPSI0LjUiLz48cGF0aCBkPSJNMjUuMDEgMTcuODJBMTQuNSAxNC41IDAgMCAxIDM0LjgwIDI1LjE5IiBzdHJva2U9IiMwMDZFOTkiIHN0cm9rZS13aWR0aD0iNy45Ii8+PHBhdGggZD0iTTI1LjAxIDE3LjgyQTE0LjUgMTQuNSAwIDAgMSAzNC44MCAyNS4xOSIgc3Ryb2tlPSIjRkZGRkZGIiBzdHJva2Utd2lkdGg9IjQuNSIvPjxwYXRoIGQ9Ik0zOC45OSA0Ni4xOEExNC41IDE0LjUgMCAwIDEgMjkuMjAgMzguODEiIHN0cm9rZT0iIzAwNkU5OSIgc3Ryb2tlLXdpZHRoPSI3LjkiLz48cGF0aCBkPSJNMzguOTkgNDYuMThBMTQuNSAxNC41IDAgMCAxIDI5LjIwIDM4LjgxIiBzdHJva2U9IiNGRkNBRTEiIHN0cm9rZS13aWR0aD0iNC41Ii8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDgwIDApIj48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwIDIxLjAwKSBzY2FsZSgyLjIpIiBmaWxsPSJub25lIiBzdHJva2Utd2lkdGg9IjEuOSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLjk1IDApIj48ZyBzdHJva2U9IiMyMDI2MkMiPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDAuMDAgMCkiIGQ9Ik0wIC01VjEwIE0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTQuNjAgMCkiIGQ9Ik0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIE0xMCAwVjEwIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMjkuMjAgMCkiIGQ9Ik0wIDBWMTAgTTAgNUEzLjUgNSAwIDAgMSA3IDVWMTAgTTcgNUEzLjUgNSAwIDAgMSAxNCA1VjEwIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDcuODAgMCkiIGQ9Ik0wIC01VjEwIE0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNjIuNDAgMCkiIGQ9Ik0wIDBWNUE1IDUgMCAwIDAgMTAgNSBNMTAgMFYxMCIvPjwvZz48ZyBzdHJva2U9IiMwMDZFOTkiPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDc3LjAwIDApIiBkPSJNMCAtNVYxMCBNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDkxLjYwIDApIiBkPSJNMCAwVjEwIE0wIDVBNSA1IDAgMCAxIDUgMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEwMi4yMCAwKSIgZD0iTTAgMFYxMCBNMCAtNC4yaC4wMSIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEwNi44MCAwKSIgZD0iTTEwIDVBNSA1IDAgMSAwIDAgNUE1IDUgMCAxIDAgMTAgNVogTTEwIC01VjEwIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIxLjQwIDApIiBkPSJNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiBNMTAgMFYxMEMxMCAxMy41IDggMTUgNSAxNUMzIDE1IDEuNSAxNC4yIC44IDEzIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTM2LjAwIDApIiBkPSJNMCA1SDEwQTUgNSAwIDEgMCA4LjU0IDguNTQiLz48L2c+PC9nPjwvZz48L2c+PC9zdmc+" alt="BambuBridge Wortbildmarke Glieder" class="lockup">
+<div class="sizes"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIEdsaWVkZXIiPjxyZWN0IHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgcng9IjE0IiBmaWxsPSIjMDA2RTk5Ii8+PGcgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIj48Y2lyY2xlIGN4PSI0MiIgY3k9IjMyIiByPSIxNC41IiBzdHJva2U9IiNGRkNBRTEiIHN0cm9rZS13aWR0aD0iNC41Ii8+PGNpcmNsZSBjeD0iMjIiIGN5PSIzMiIgcj0iMTQuNSIgc3Ryb2tlPSIjRkZGRkZGIiBzdHJva2Utd2lkdGg9IjQuNSIvPjxwYXRoIGQ9Ik0yNS4wMSAxNy44MkExNC41IDE0LjUgMCAwIDEgMzQuODAgMjUuMTkiIHN0cm9rZT0iIzAwNkU5OSIgc3Ryb2tlLXdpZHRoPSI3LjkiLz48cGF0aCBkPSJNMjUuMDEgMTcuODJBMTQuNSAxNC41IDAgMCAxIDM0LjgwIDI1LjE5IiBzdHJva2U9IiNGRkZGRkYiIHN0cm9rZS13aWR0aD0iNC41Ii8+PHBhdGggZD0iTTM4Ljk5IDQ2LjE4QTE0LjUgMTQuNSAwIDAgMSAyOS4yMCAzOC44MSIgc3Ryb2tlPSIjMDA2RTk5IiBzdHJva2Utd2lkdGg9IjcuOSIvPjxwYXRoIGQ9Ik0zOC45OSA0Ni4xOEExNC41IDE0LjUgMCAwIDEgMjkuMjAgMzguODEiIHN0cm9rZT0iI0ZGQ0FFMSIgc3Ryb2tlLXdpZHRoPSI0LjUiLz48L2c+PC9zdmc+" alt="Bildzeichen Glieder 64 Pixel" width="64" height="64" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIEdsaWVkZXIiPjxyZWN0IHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgcng9IjE0IiBmaWxsPSIjMDA2RTk5Ii8+PGcgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIj48Y2lyY2xlIGN4PSI0MiIgY3k9IjMyIiByPSIxNC41IiBzdHJva2U9IiNGRkNBRTEiIHN0cm9rZS13aWR0aD0iNC41Ii8+PGNpcmNsZSBjeD0iMjIiIGN5PSIzMiIgcj0iMTQuNSIgc3Ryb2tlPSIjRkZGRkZGIiBzdHJva2Utd2lkdGg9IjQuNSIvPjxwYXRoIGQ9Ik0yNS4wMSAxNy44MkExNC41IDE0LjUgMCAwIDEgMzQuODAgMjUuMTkiIHN0cm9rZT0iIzAwNkU5OSIgc3Ryb2tlLXdpZHRoPSI3LjkiLz48cGF0aCBkPSJNMjUuMDEgMTcuODJBMTQuNSAxNC41IDAgMCAxIDM0LjgwIDI1LjE5IiBzdHJva2U9IiNGRkZGRkYiIHN0cm9rZS13aWR0aD0iNC41Ii8+PHBhdGggZD0iTTM4Ljk5IDQ2LjE4QTE0LjUgMTQuNSAwIDAgMSAyOS4yMCAzOC44MSIgc3Ryb2tlPSIjMDA2RTk5IiBzdHJva2Utd2lkdGg9IjcuOSIvPjxwYXRoIGQ9Ik0zOC45OSA0Ni4xOEExNC41IDE0LjUgMCAwIDEgMjkuMjAgMzguODEiIHN0cm9rZT0iI0ZGQ0FFMSIgc3Ryb2tlLXdpZHRoPSI0LjUiLz48L2c+PC9zdmc+" alt="Bildzeichen Glieder 32 Pixel" width="32" height="32" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIEdsaWVkZXIiPjxyZWN0IHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgcng9IjE0IiBmaWxsPSIjMDA2RTk5Ii8+PGcgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIj48Y2lyY2xlIGN4PSI0MiIgY3k9IjMyIiByPSIxNC41IiBzdHJva2U9IiNGRkNBRTEiIHN0cm9rZS13aWR0aD0iNC41Ii8+PGNpcmNsZSBjeD0iMjIiIGN5PSIzMiIgcj0iMTQuNSIgc3Ryb2tlPSIjRkZGRkZGIiBzdHJva2Utd2lkdGg9IjQuNSIvPjxwYXRoIGQ9Ik0yNS4wMSAxNy44MkExNC41IDE0LjUgMCAwIDEgMzQuODAgMjUuMTkiIHN0cm9rZT0iIzAwNkU5OSIgc3Ryb2tlLXdpZHRoPSI3LjkiLz48cGF0aCBkPSJNMjUuMDEgMTcuODJBMTQuNSAxNC41IDAgMCAxIDM0LjgwIDI1LjE5IiBzdHJva2U9IiNGRkZGRkYiIHN0cm9rZS13aWR0aD0iNC41Ii8+PHBhdGggZD0iTTM4Ljk5IDQ2LjE4QTE0LjUgMTQuNSAwIDAgMSAyOS4yMCAzOC44MSIgc3Ryb2tlPSIjMDA2RTk5IiBzdHJva2Utd2lkdGg9IjcuOSIvPjxwYXRoIGQ9Ik0zOC45OSA0Ni4xOEExNC41IDE0LjUgMCAwIDEgMjkuMjAgMzguODEiIHN0cm9rZT0iI0ZGQ0FFMSIgc3Ryb2tlLXdpZHRoPSI0LjUiLz48L2c+PC9zdmc+" alt="Bildzeichen Glieder 16 Pixel" width="16" height="16" class="m"><span class="cap">64 / 32 / 16 px</span></div></div><div class="pane t-dark"><p class="lab">Dunkler Hintergrund</p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0MDcgNjQiIHdpZHRoPSI0MDciIGhlaWdodD0iNjQiIHJvbGU9ImltZyIgYXJpYS1sYWJlbD0iQmFtYnVCcmlkZ2UgTG9nbyBHbGllZGVyIj48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxNCIgZmlsbD0iIzRGQjlFQiIvPjxnIGZpbGw9Im5vbmUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCI+PGNpcmNsZSBjeD0iNDIiIGN5PSIzMiIgcj0iMTQuNSIgc3Ryb2tlPSIjNjIyNjQ0IiBzdHJva2Utd2lkdGg9IjQuNSIvPjxjaXJjbGUgY3g9IjIyIiBjeT0iMzIiIHI9IjE0LjUiIHN0cm9rZT0iIzA0MjkzOSIgc3Ryb2tlLXdpZHRoPSI0LjUiLz48cGF0aCBkPSJNMjUuMDEgMTcuODJBMTQuNSAxNC41IDAgMCAxIDM0LjgwIDI1LjE5IiBzdHJva2U9IiM0RkI5RUIiIHN0cm9rZS13aWR0aD0iNy45Ii8+PHBhdGggZD0iTTI1LjAxIDE3LjgyQTE0LjUgMTQuNSAwIDAgMSAzNC44MCAyNS4xOSIgc3Ryb2tlPSIjMDQyOTM5IiBzdHJva2Utd2lkdGg9IjQuNSIvPjxwYXRoIGQ9Ik0zOC45OSA0Ni4xOEExNC41IDE0LjUgMCAwIDEgMjkuMjAgMzguODEiIHN0cm9rZT0iIzRGQjlFQiIgc3Ryb2tlLXdpZHRoPSI3LjkiLz48cGF0aCBkPSJNMzguOTkgNDYuMThBMTQuNSAxNC41IDAgMCAxIDI5LjIwIDM4LjgxIiBzdHJva2U9IiM2MjI2NDQiIHN0cm9rZS13aWR0aD0iNC41Ii8+PC9nPjxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDgwIDApIj48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwIDIxLjAwKSBzY2FsZSgyLjIpIiBmaWxsPSJub25lIiBzdHJva2Utd2lkdGg9IjEuOSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSgwLjk1IDApIj48ZyBzdHJva2U9IiNGM0Y3RkIiPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDAuMDAgMCkiIGQ9Ik0wIC01VjEwIE0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTQuNjAgMCkiIGQ9Ik0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIE0xMCAwVjEwIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMjkuMjAgMCkiIGQ9Ik0wIDBWMTAgTTAgNUEzLjUgNSAwIDAgMSA3IDVWMTAgTTcgNUEzLjUgNSAwIDAgMSAxNCA1VjEwIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDcuODAgMCkiIGQ9Ik0wIC01VjEwIE0xMCA1QTUgNSAwIDEgMCAwIDVBNSA1IDAgMSAwIDEwIDVaIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNjIuNDAgMCkiIGQ9Ik0wIDBWNUE1IDUgMCAwIDAgMTAgNSBNMTAgMFYxMCIvPjwvZz48ZyBzdHJva2U9IiM4M0QxRjkiPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDc3LjAwIDApIiBkPSJNMCAtNVYxMCBNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDkxLjYwIDApIiBkPSJNMCAwVjEwIE0wIDVBNSA1IDAgMCAxIDUgMCIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEwMi4yMCAwKSIgZD0iTTAgMFYxMCBNMCAtNC4yaC4wMSIvPjxwYXRoIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEwNi44MCAwKSIgZD0iTTEwIDVBNSA1IDAgMSAwIDAgNUE1IDUgMCAxIDAgMTAgNVogTTEwIC01VjEwIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTIxLjQwIDApIiBkPSJNMTAgNUE1IDUgMCAxIDAgMCA1QTUgNSAwIDEgMCAxMCA1WiBNMTAgMFYxMEMxMCAxMy41IDggMTUgNSAxNUMzIDE1IDEuNSAxNC4yIC44IDEzIi8+PHBhdGggdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTM2LjAwIDApIiBkPSJNMCA1SDEwQTUgNSAwIDEgMCA4LjU0IDguNTQiLz48L2c+PC9nPjwvZz48L2c+PC9zdmc+" alt="BambuBridge Wortbildmarke Glieder" class="lockup">
+<div class="sizes"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIEdsaWVkZXIiPjxyZWN0IHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgcng9IjE0IiBmaWxsPSIjNEZCOUVCIi8+PGcgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIj48Y2lyY2xlIGN4PSI0MiIgY3k9IjMyIiByPSIxNC41IiBzdHJva2U9IiM2MjI2NDQiIHN0cm9rZS13aWR0aD0iNC41Ii8+PGNpcmNsZSBjeD0iMjIiIGN5PSIzMiIgcj0iMTQuNSIgc3Ryb2tlPSIjMDQyOTM5IiBzdHJva2Utd2lkdGg9IjQuNSIvPjxwYXRoIGQ9Ik0yNS4wMSAxNy44MkExNC41IDE0LjUgMCAwIDEgMzQuODAgMjUuMTkiIHN0cm9rZT0iIzRGQjlFQiIgc3Ryb2tlLXdpZHRoPSI3LjkiLz48cGF0aCBkPSJNMjUuMDEgMTcuODJBMTQuNSAxNC41IDAgMCAxIDM0LjgwIDI1LjE5IiBzdHJva2U9IiMwNDI5MzkiIHN0cm9rZS13aWR0aD0iNC41Ii8+PHBhdGggZD0iTTM4Ljk5IDQ2LjE4QTE0LjUgMTQuNSAwIDAgMSAyOS4yMCAzOC44MSIgc3Ryb2tlPSIjNEZCOUVCIiBzdHJva2Utd2lkdGg9IjcuOSIvPjxwYXRoIGQ9Ik0zOC45OSA0Ni4xOEExNC41IDE0LjUgMCAwIDEgMjkuMjAgMzguODEiIHN0cm9rZT0iIzYyMjY0NCIgc3Ryb2tlLXdpZHRoPSI0LjUiLz48L2c+PC9zdmc+" alt="Bildzeichen Glieder 64 Pixel" width="64" height="64" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIEdsaWVkZXIiPjxyZWN0IHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgcng9IjE0IiBmaWxsPSIjNEZCOUVCIi8+PGcgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIj48Y2lyY2xlIGN4PSI0MiIgY3k9IjMyIiByPSIxNC41IiBzdHJva2U9IiM2MjI2NDQiIHN0cm9rZS13aWR0aD0iNC41Ii8+PGNpcmNsZSBjeD0iMjIiIGN5PSIzMiIgcj0iMTQuNSIgc3Ryb2tlPSIjMDQyOTM5IiBzdHJva2Utd2lkdGg9IjQuNSIvPjxwYXRoIGQ9Ik0yNS4wMSAxNy44MkExNC41IDE0LjUgMCAwIDEgMzQuODAgMjUuMTkiIHN0cm9rZT0iIzRGQjlFQiIgc3Ryb2tlLXdpZHRoPSI3LjkiLz48cGF0aCBkPSJNMjUuMDEgMTcuODJBMTQuNSAxNC41IDAgMCAxIDM0LjgwIDI1LjE5IiBzdHJva2U9IiMwNDI5MzkiIHN0cm9rZS13aWR0aD0iNC41Ii8+PHBhdGggZD0iTTM4Ljk5IDQ2LjE4QTE0LjUgMTQuNSAwIDAgMSAyOS4yMCAzOC44MSIgc3Ryb2tlPSIjNEZCOUVCIiBzdHJva2Utd2lkdGg9IjcuOSIvPjxwYXRoIGQ9Ik0zOC45OSA0Ni4xOEExNC41IDE0LjUgMCAwIDEgMjkuMjAgMzguODEiIHN0cm9rZT0iIzYyMjY0NCIgc3Ryb2tlLXdpZHRoPSI0LjUiLz48L2c+PC9zdmc+" alt="Bildzeichen Glieder 32 Pixel" width="32" height="32" class="m"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCIgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkJhbWJ1QnJpZGdlIEJpbGR6ZWljaGVuIEdsaWVkZXIiPjxyZWN0IHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgcng9IjE0IiBmaWxsPSIjNEZCOUVCIi8+PGcgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIj48Y2lyY2xlIGN4PSI0MiIgY3k9IjMyIiByPSIxNC41IiBzdHJva2U9IiM2MjI2NDQiIHN0cm9rZS13aWR0aD0iNC41Ii8+PGNpcmNsZSBjeD0iMjIiIGN5PSIzMiIgcj0iMTQuNSIgc3Ryb2tlPSIjMDQyOTM5IiBzdHJva2Utd2lkdGg9IjQuNSIvPjxwYXRoIGQ9Ik0yNS4wMSAxNy44MkExNC41IDE0LjUgMCAwIDEgMzQuODAgMjUuMTkiIHN0cm9rZT0iIzRGQjlFQiIgc3Ryb2tlLXdpZHRoPSI3LjkiLz48cGF0aCBkPSJNMjUuMDEgMTcuODJBMTQuNSAxNC41IDAgMCAxIDM0LjgwIDI1LjE5IiBzdHJva2U9IiMwNDI5MzkiIHN0cm9rZS13aWR0aD0iNC41Ii8+PHBhdGggZD0iTTM4Ljk5IDQ2LjE4QTE0LjUgMTQuNSAwIDAgMSAyOS4yMCAzOC44MSIgc3Ryb2tlPSIjNEZCOUVCIiBzdHJva2Utd2lkdGg9IjcuOSIvPjxwYXRoIGQ9Ik0zOC45OSA0Ni4xOEExNC41IDE0LjUgMCAwIDEgMjkuMjAgMzguODEiIHN0cm9rZT0iIzYyMjY0NCIgc3Ryb2tlLXdpZHRoPSI0LjUiLz48L2c+PC9zdmc+" alt="Bildzeichen Glieder 16 Pixel" width="16" height="16" class="m"><span class="cap">64 / 32 / 16 px</span></div></div><p class="files">Dateien: <code>logos/04-glieder-{light,dark}-{lockup,mark}.svg</code></p></article></div>
+
+<h2 id="farben">Farbset</h2>
+<p class="sub">Drei Skalen von 50 bis 950, aus OKLCH erzeugt (gleichmäßige Helligkeitsstufen). Die semantischen Rollen heißen wie bei den Schwesterprojekten: bg, surface, sunken, line, ink, ink-2, ink-3, link, ok, warn, bad. Neu: primary und accent, weil die Bridge zwei Markenfarben trägt.</p>
+<div class="ramps"><div class="ramp"><h3>Primär (Brückenblau)</h3><ol><li style="background:#EDF9FF;color:#000000"><b>50</b><span>#EDF9FF</span></li><li style="background:#D9F1FF;color:#000000"><b>100</b><span>#D9F1FF</span></li><li style="background:#B5E4FE;color:#000000"><b>200</b><span>#B5E4FE</span></li><li style="background:#83D1F9;color:#000000"><b>300</b><span>#83D1F9</span></li><li style="background:#4FB9EB;color:#000000"><b>400</b><span>#4FB9EB</span></li><li style="background:#1BA0D5;color:#000000"><b>500</b><span>#1BA0D5</span></li><li style="background:#0087BA;color:#000000"><b>600</b><span>#0087BA</span></li><li style="background:#006E99;color:#FFFFFF"><b>700</b><span>#006E99</span></li><li style="background:#00597B;color:#FFFFFF"><b>800</b><span>#00597B</span></li><li style="background:#05445E;color:#FFFFFF"><b>900</b><span>#05445E</span></li><li style="background:#042939;color:#FFFFFF"><b>950</b><span>#042939</span></li></ol></div><div class="ramp"><h3>Akzent (Filament-Rosé)</h3><ol><li style="background:#FFF2F8;color:#000000"><b>50</b><span>#FFF2F8</span></li><li style="background:#FFE3EF;color:#000000"><b>100</b><span>#FFE3EF</span></li><li style="background:#FFCAE1;color:#000000"><b>200</b><span>#FFCAE1</span></li><li style="background:#FDA8CD;color:#000000"><b>300</b><span>#FDA8CD</span></li><li style="background:#F183B6;color:#000000"><b>400</b><span>#F183B6</span></li><li style="background:#DD639E;color:#000000"><b>500</b><span>#DD639E</span></li><li style="background:#C34786;color:#FFFFFF"><b>600</b><span>#C34786</span></li><li style="background:#A1376E;color:#FFFFFF"><b>700</b><span>#A1376E</span></li><li style="background:#812F58;color:#FFFFFF"><b>800</b><span>#812F58</span></li><li style="background:#622644;color:#FFFFFF"><b>900</b><span>#622644</span></li><li style="background:#3C1628;color:#FFFFFF"><b>950</b><span>#3C1628</span></li></ol></div><div class="ramp"><h3>Neutral (Schiefer)</h3><ol><li style="background:#F3F7FB;color:#000000"><b>50</b><span>#F3F7FB</span></li><li style="background:#E9EDF1;color:#000000"><b>100</b><span>#E9EDF1</span></li><li style="background:#D6DDE6;color:#000000"><b>200</b><span>#D6DDE6</span></li><li style="background:#BFC7CF;color:#000000"><b>300</b><span>#BFC7CF</span></li><li style="background:#A6ADB5;color:#000000"><b>400</b><span>#A6ADB5</span></li><li style="background:#8D959C;color:#000000"><b>500</b><span>#8D959C</span></li><li style="background:#767D84;color:#000000"><b>600</b><span>#767D84</span></li><li style="background:#5F656D;color:#FFFFFF"><b>700</b><span>#5F656D</span></li><li style="background:#4B5259;color:#FFFFFF"><b>800</b><span>#4B5259</span></li><li style="background:#393F46;color:#FFFFFF"><b>900</b><span>#393F46</span></li><li style="background:#20262C;color:#FFFFFF"><b>950</b><span>#20262C</span></li></ol></div></div>
+<div class="pair">
+<div class="panel t-light"><p class="ptitle">Light</p>
+<div class="card"><div class="row"><h3>Drucker P1S, AMS Slot 2</h3><span class="badge b-ok">Verbunden</span></div>
+<p style="color:var(--ink-2);font-size:15px">Spule PLA Basic, Blau, noch 64 % übrig.</p><div class="meter" role="img" aria-label="64 Prozent Restmenge"><i></i></div>
+<div class="row"><span class="badge b-warn">Fast leer ab 15 %</span><span class="badge b-info">Etikett wartet</span><span class="badge b-acc">Regel aktiv</span><span class="badge b-bad">Konto getrennt</span></div></div>
+<div class="btns"><button class="btn btn-p" type="button">Regel speichern</button><button class="btn btn-s" type="button">Abbrechen</button><button class="btn btn-a" type="button">Etikett drucken</button></div>
+<div class="fld"><label for="t-light-f">Webhook-Adresse</label><input id="t-light-f" value="https://hooks.example.invalid/bridge"><small>Wird bei jedem Spulenwechsel aufgerufen. <a href="#farben">Mehr zur Regel</a></small></div>
+<div class="rule"><b>Wenn</b><span>AMS-Spule unter 15 %</span><b>Dann</b><span>Etikett drucken, Webhook senden</span></div></div><div class="panel t-dark"><p class="ptitle">Dark</p>
+<div class="card"><div class="row"><h3>Drucker P1S, AMS Slot 2</h3><span class="badge b-ok">Verbunden</span></div>
+<p style="color:var(--ink-2);font-size:15px">Spule PLA Basic, Blau, noch 64 % übrig.</p><div class="meter" role="img" aria-label="64 Prozent Restmenge"><i></i></div>
+<div class="row"><span class="badge b-warn">Fast leer ab 15 %</span><span class="badge b-info">Etikett wartet</span><span class="badge b-acc">Regel aktiv</span><span class="badge b-bad">Konto getrennt</span></div></div>
+<div class="btns"><button class="btn btn-p" type="button">Regel speichern</button><button class="btn btn-s" type="button">Abbrechen</button><button class="btn btn-a" type="button">Etikett drucken</button></div>
+<div class="fld"><label for="t-dark-f">Webhook-Adresse</label><input id="t-dark-f" value="https://hooks.example.invalid/bridge"><small>Wird bei jedem Spulenwechsel aufgerufen. <a href="#farben">Mehr zur Regel</a></small></div>
+<div class="rule"><b>Wenn</b><span>AMS-Spule unter 15 %</span><b>Dann</b><span>Etikett drucken, Webhook senden</span></div></div>
+</div>
+
+<h2 id="kontrast">Kontraste nach WCAG 2.2 AA</h2>
+<p class="sub">Berechnet mit der relativen Luminanz nach WCAG. Text braucht 4.5:1, der Rahmen von Eingabefeldern 3:1. Alle Paare bestehen.</p>
+<div class="tables">
+<div class="tw"><table><caption>Light</caption><thead><tr><th>Paar</th><th>Probe</th><th class="num">Wert</th><th class="num">Soll</th><th></th></tr></thead><tbody><tr><td>Text ink / bg</td><td><span class="chip" style="color:#20262C;background:#F3F7FB">Aa</span></td><td class="num">14.19:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Text ink-2 / bg</td><td><span class="chip" style="color:#4B5259;background:#F3F7FB">Aa</span></td><td class="num">7.36:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Text ink-3 / bg</td><td><span class="chip" style="color:#5F656D;background:#F3F7FB">Aa</span></td><td class="num">5.47:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Text ink / surface</td><td><span class="chip" style="color:#20262C;background:#FBFEFF">Aa</span></td><td class="num">15.07:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Text ink-3 / surface</td><td><span class="chip" style="color:#5F656D;background:#FBFEFF">Aa</span></td><td class="num">5.81:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Text ink-3 / sunken</td><td><span class="chip" style="color:#5F656D;background:#E9EDF1">Aa</span></td><td class="num">5.00:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Link / bg</td><td><span class="chip" style="color:#006E99;background:#F3F7FB">Aa</span></td><td class="num">5.29:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Link / surface</td><td><span class="chip" style="color:#006E99;background:#FBFEFF">Aa</span></td><td class="num">5.62:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Primär-Button: primary-ink / primary</td><td><span class="chip" style="color:#FFFFFF;background:#006E99">Aa</span></td><td class="num">5.69:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Primär-Button hover</td><td><span class="chip" style="color:#FFFFFF;background:#00597B">Aa</span></td><td class="num">7.73:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Primär-Text auf primary-soft</td><td><span class="chip" style="color:#006E99;background:#D9F1FF">Aa</span></td><td class="num">4.87:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Akzent-Button: accent-ink / accent</td><td><span class="chip" style="color:#FFFFFF;background:#A1376E">Aa</span></td><td class="num">6.39:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Akzent-Text / accent-soft</td><td><span class="chip" style="color:#A1376E;background:#FFE3EF">Aa</span></td><td class="num">5.32:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Erfolg / ok-soft</td><td><span class="chip" style="color:#00704E;background:#DAF6E9">Aa</span></td><td class="num">5.35:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Warnung / warn-soft</td><td><span class="chip" style="color:#8C5007;background:#FFE9D4">Aa</span></td><td class="num">5.47:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Fehler / bad-soft</td><td><span class="chip" style="color:#B02B27;background:#FFE7E4">Aa</span></td><td class="num">5.53:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Info / info-soft</td><td><span class="chip" style="color:#006E99;background:#D9F1FF">Aa</span></td><td class="num">4.87:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Erfolg / surface</td><td><span class="chip" style="color:#00704E;background:#FBFEFF">Aa</span></td><td class="num">6.05:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Warnung / surface</td><td><span class="chip" style="color:#8C5007;background:#FBFEFF">Aa</span></td><td class="num">6.35:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Fehler / surface</td><td><span class="chip" style="color:#B02B27;background:#FBFEFF">Aa</span></td><td class="num">6.43:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Eingabe-Rahmen line-strong / surface (UI 3:1)</td><td><span class="chip" style="color:#767D84;background:#FBFEFF">Aa</span></td><td class="num">4.11:1</td><td class="num">3:1</td><td><span class="pass">besteht</span></td></tr></tbody></table></div>
+<div class="tw"><table><caption>Dark</caption><thead><tr><th>Paar</th><th>Probe</th><th class="num">Wert</th><th class="num">Soll</th><th></th></tr></thead><tbody><tr><td>Text ink / bg</td><td><span class="chip" style="color:#F0F4F7;background:#0D1218">Aa</span></td><td class="num">17.00:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Text ink-2 / bg</td><td><span class="chip" style="color:#C3C8CE;background:#0D1218">Aa</span></td><td class="num">11.17:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Text ink-3 / bg</td><td><span class="chip" style="color:#9FA5AC;background:#0D1218">Aa</span></td><td class="num">7.57:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Text ink / surface</td><td><span class="chip" style="color:#F0F4F7;background:#161C23">Aa</span></td><td class="num">15.51:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Text ink-3 / surface</td><td><span class="chip" style="color:#9FA5AC;background:#161C23">Aa</span></td><td class="num">6.90:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Text ink-3 / sunken</td><td><span class="chip" style="color:#9FA5AC;background:#1E252C">Aa</span></td><td class="num">6.23:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Link / bg</td><td><span class="chip" style="color:#83D1F9;background:#0D1218">Aa</span></td><td class="num">11.15:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Link / surface</td><td><span class="chip" style="color:#83D1F9;background:#161C23">Aa</span></td><td class="num">10.17:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Primär-Button: primary-ink / primary</td><td><span class="chip" style="color:#042939;background:#4FB9EB">Aa</span></td><td class="num">6.86:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Primär-Button hover</td><td><span class="chip" style="color:#042939;background:#83D1F9">Aa</span></td><td class="num">9.01:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Primär als Text / surface</td><td><span class="chip" style="color:#4FB9EB;background:#161C23">Aa</span></td><td class="num">7.74:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Akzent-Button: accent-ink / accent</td><td><span class="chip" style="color:#3C1628;background:#F183B6">Aa</span></td><td class="num">6.48:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Akzent-Text / accent-soft</td><td><span class="chip" style="color:#F183B6;background:#4C1E34">Aa</span></td><td class="num">5.62:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Erfolg / ok-soft</td><td><span class="chip" style="color:#5ED8A9;background:#103627">Aa</span></td><td class="num">7.52:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Warnung / warn-soft</td><td><span class="chip" style="color:#FCB26F;background:#442910">Aa</span></td><td class="num">7.47:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Fehler / bad-soft</td><td><span class="chip" style="color:#FF958A;background:#4A231F">Aa</span></td><td class="num">6.39:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Info / info-soft</td><td><span class="chip" style="color:#83D1F9;background:#0B3547">Aa</span></td><td class="num">7.71:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Erfolg / surface</td><td><span class="chip" style="color:#5ED8A9;background:#161C23">Aa</span></td><td class="num">9.69:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Warnung / surface</td><td><span class="chip" style="color:#FCB26F;background:#161C23">Aa</span></td><td class="num">9.59:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Fehler / surface</td><td><span class="chip" style="color:#FF958A;background:#161C23">Aa</span></td><td class="num">8.10:1</td><td class="num">4.5:1</td><td><span class="pass">besteht</span></td></tr><tr><td>Eingabe-Rahmen line-strong / surface (UI 3:1)</td><td><span class="chip" style="color:#6C7680;background:#161C23">Aa</span></td><td class="num">3.71:1</td><td class="num">3:1</td><td><span class="pass">besteht</span></td></tr></tbody></table></div>
+</div>
+
+<h2 id="abstand">Abstand zu Bambu-Grün</h2>
+<p class="sub">Referenz ist #00AE42 (Hue 147° in OKLCH). Die Marke nutzt keine grüne Fläche. Grün kommt nur als Statusfarbe „Erfolg“ vor, bewusst bläulicher (Hue 165°), und nie als Primär- oder Akzentfarbe.</p>
+<div class="tables"><div class="tw"><table><thead><tr><th>Farbe</th><th>Hex</th><th class="num">Hue</th><th class="num">Δ Hue</th><th class="num">ΔE2000</th></tr></thead><tbody><tr class="ref"><td>Bambu-Grün (Referenz)</td><td><span class="dot" style="background:#00AE42"></span>#00AE42</td><td class="num">147°</td><td class="num">0°</td><td class="num">0.0</td></tr><tr><td>Primär 700 (Buttons, Links)</td><td><span class="dot" style="background:#006E99"></span>#006E99</td><td class="num">234°</td><td class="num">87°</td><td class="num">49.3</td></tr><tr><td>Primär 600</td><td><span class="dot" style="background:#0087BA"></span>#0087BA</td><td class="num">234°</td><td class="num">87°</td><td class="num">48.2</td></tr><tr><td>Primär 400 (Dark-Modus)</td><td><span class="dot" style="background:#4FB9EB"></span>#4FB9EB</td><td class="num">232°</td><td class="num">85°</td><td class="num">46.9</td></tr><tr><td>Primär 300</td><td><span class="dot" style="background:#83D1F9"></span>#83D1F9</td><td class="num">232°</td><td class="num">84°</td><td class="num">45.5</td></tr><tr><td>Akzent 700</td><td><span class="dot" style="background:#A1376E"></span>#A1376E</td><td class="num">352°</td><td class="num">156°</td><td class="num">79.7</td></tr><tr><td>Akzent 400</td><td><span class="dot" style="background:#F183B6"></span>#F183B6</td><td class="num">352°</td><td class="num">155°</td><td class="num">76.2</td></tr><tr><td>Erfolg (nur Status, hell)</td><td><span class="dot" style="background:#00704E"></span>#00704E</td><td class="num">164°</td><td class="num">16°</td><td class="num">24.4</td></tr><tr><td>Erfolg (nur Status, dunkel)</td><td><span class="dot" style="background:#5ED8A9"></span>#5ED8A9</td><td class="num">165°</td><td class="num">18°</td><td class="num">17.3</td></tr></tbody></table></div></div>
+
+<h2 id="tailwind">Tailwind-4-Block</h2>
+<p class="sub">Skalen als <code>@theme</code>, Rollen als <code>@theme inline</code>, Light, Dark per System und per <code>data-theme</code>. Wie bei Label Printer Hub: das Dark-Set steht zweimal, damit sowohl die Systemeinstellung als auch der Umschalter greifen.</p>
+<div class="code"><button class="btn btn-s copy" id="cp" type="button">Kopieren</button><pre id="twcode" tabindex="0">@import &quot;tailwindcss&quot;;
+
+/* BambuBridge: Skalen (primitiv) */
+@theme {
+  --color-primary-50: #EDF9FF;
+  --color-primary-100: #D9F1FF;
+  --color-primary-200: #B5E4FE;
+  --color-primary-300: #83D1F9;
+  --color-primary-400: #4FB9EB;
+  --color-primary-500: #1BA0D5;
+  --color-primary-600: #0087BA;
+  --color-primary-700: #006E99;
+  --color-primary-800: #00597B;
+  --color-primary-900: #05445E;
+  --color-primary-950: #042939;
+
+  --color-accent-50: #FFF2F8;
+  --color-accent-100: #FFE3EF;
+  --color-accent-200: #FFCAE1;
+  --color-accent-300: #FDA8CD;
+  --color-accent-400: #F183B6;
+  --color-accent-500: #DD639E;
+  --color-accent-600: #C34786;
+  --color-accent-700: #A1376E;
+  --color-accent-800: #812F58;
+  --color-accent-900: #622644;
+  --color-accent-950: #3C1628;
+
+  --color-neutral-50: #F3F7FB;
+  --color-neutral-100: #E9EDF1;
+  --color-neutral-200: #D6DDE6;
+  --color-neutral-300: #BFC7CF;
+  --color-neutral-400: #A6ADB5;
+  --color-neutral-500: #8D959C;
+  --color-neutral-600: #767D84;
+  --color-neutral-700: #5F656D;
+  --color-neutral-800: #4B5259;
+  --color-neutral-900: #393F46;
+  --color-neutral-950: #20262C;
+  --font-sans: &quot;Space Grotesk&quot;, &quot;Inter&quot;, system-ui, sans-serif;
+  --radius-r1: 6px;
+  --radius-r2: 10px;
+  --radius-r3: 14px;
+}
+
+/* semantische Rollen: lesen die Variablen unten (Light/Dark) */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-sunken: var(--sunken);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-ink: var(--primary-ink);
+  --color-primary-soft: var(--primary-soft);
+  --color-link: var(--link);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+}
+
+/* Light ist Standard, Dark folgt dem System; data-theme überschreibt beides */
+:root {
+  color-scheme: light;
+  --bg:#F3F7FB;
+  --surface:#FBFEFF;
+  --sunken:#E9EDF1;
+  --line:#D6DDE6;
+  --line-strong:#767D84;
+  --ink:#20262C;
+  --ink-2:#4B5259;
+  --ink-3:#5F656D;
+  --primary:#006E99;
+  --primary-hover:#00597B;
+  --primary-ink:#FFFFFF;
+  --primary-soft:#D9F1FF;
+  --link:#006E99;
+  --accent:#A1376E;
+  --accent-hover:#812F58;
+  --accent-ink:#FFFFFF;
+  --accent-soft:#FFE3EF;
+  --ok:#00704E;
+  --ok-soft:#DAF6E9;
+  --warn:#8C5007;
+  --warn-soft:#FFE9D4;
+  --bad:#B02B27;
+  --bad-soft:#FFE7E4;
+  --info:#006E99;
+  --info-soft:#D9F1FF;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme=&quot;light&quot;]) {
+    color-scheme: dark;
+    --bg:#0D1218;
+    --surface:#161C23;
+    --sunken:#1E252C;
+    --line:#2A3138;
+    --line-strong:#6C7680;
+    --ink:#F0F4F7;
+    --ink-2:#C3C8CE;
+    --ink-3:#9FA5AC;
+    --primary:#4FB9EB;
+    --primary-hover:#83D1F9;
+    --primary-ink:#042939;
+    --primary-soft:#0B3547;
+    --link:#83D1F9;
+    --accent:#F183B6;
+    --accent-hover:#FDA8CD;
+    --accent-ink:#3C1628;
+    --accent-soft:#4C1E34;
+    --ok:#5ED8A9;
+    --ok-soft:#103627;
+    --warn:#FCB26F;
+    --warn-soft:#442910;
+    --bad:#FF958A;
+    --bad-soft:#4A231F;
+    --info:#83D1F9;
+    --info-soft:#0B3547;
+  }
+}
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+  --bg:#0D1218;
+  --surface:#161C23;
+  --sunken:#1E252C;
+  --line:#2A3138;
+  --line-strong:#6C7680;
+  --ink:#F0F4F7;
+  --ink-2:#C3C8CE;
+  --ink-3:#9FA5AC;
+  --primary:#4FB9EB;
+  --primary-hover:#83D1F9;
+  --primary-ink:#042939;
+  --primary-soft:#0B3547;
+  --link:#83D1F9;
+  --accent:#F183B6;
+  --accent-hover:#FDA8CD;
+  --accent-ink:#3C1628;
+  --accent-soft:#4C1E34;
+  --ok:#5ED8A9;
+  --ok-soft:#103627;
+  --warn:#FCB26F;
+  --warn-soft:#442910;
+  --bad:#FF958A;
+  --bad-soft:#4A231F;
+  --info:#83D1F9;
+  --info-soft:#0B3547;
+}</pre></div>
+
+<h2 id="hinweise">Hinweise</h2>
+<div class="notes">
+<div class="note"><b>Name.</b> „Bambu“ steckt im Projektnamen. Ob das markenrechtlich ein Thema ist, kann ich nicht beurteilen (keine Rechtsberatung). Im Bildzeichen kommt das Wort nirgends vor; die Wortmarke ist ein neutrales, selbst gezeichnetes Wortbild. Falls nötig, lässt sich der Schriftzug ohne Änderung am Bildzeichen anpassen.</div>
+<div class="note"><b>Unterscheidbarkeit.</b> Kein Bambus, kein stilisiertes B, kein Streifen-Motiv, keine grün-dominante Palette. Gegenüber Label Printer Hub (Amber, warmes Papier, Stempelblau) und Kept (Amber, Violett, warmes Papier) setzt die Bridge auf kühle Neutrale und ein Cyanblau bei Hue 232° statt Amber. Das Primärblau liegt nur 15 ΔE2000 vom Stempelblau (#2F4E8F) des Printer Hubs entfernt: verwandt im Ton, aber heller und grünstichiger. Die Unterscheidung tragen der Rosé-Akzent und die kühlen Neutralen. Spoolman nutzt ein oranges Spulen-Icon; die Bridge hat keine orange Fläche und zeigt Spulen nur als Ring.</div>
+<div class="note"><b>Statusfarben.</b> Warnung ist ein gedecktes Braunorange und nur für Badges und Hinweise gedacht, nicht für Flächen der Marke.</div>
+<div class="note"><b>Favicon.</b> Das Bildzeichen ist ein abgerundetes Quadrat mit eigener Fläche und funktioniert ohne Rand als App-Icon. Am robustesten bei 16 px sind Drehscheibe und Bogen; Spule zum Etikett und Glieder brauchen mindestens 24 px.</div>
+</div>
+<h3 style="margin-top:56px;font-size:16px">Fundstellen der Vorbild-Tokens</h3>
+<ul class="src sub">
+<li>Label Printer Hub: <a href="https://github.com/strausmann/Label-Printer-Hub/blob/main/frontend/src/design/tokens.css">frontend/src/design/tokens.css</a> (Primitive, Rollen, Dark) und <a href="https://github.com/strausmann/Label-Printer-Hub/blob/main/frontend/src/index.css">frontend/src/index.css</a> (Tailwind-4-<code>@theme inline</code>)</li>
+<li>Kept: <a href="https://github.com/keptinventory/kept/blob/main/apps/web/src/styles/tokens.css">apps/web/src/styles/tokens.css</a> (Rollen, zwei Dark-Blöcke, forcierte Panels <code>.t-light</code>/<code>.t-dark</code>)</li>
+</ul>
+</div>
+<script>
+(function(){var b=document.getElementById('cp'),p=document.getElementById('twcode');if(!b||!p)return;
+function sel(){var r=document.createRange();r.selectNodeContents(p);var s=getSelection();s.removeAllRanges();s.addRange(r)}
+b.addEventListener('click',function(){var t=p.textContent;var done=function(){b.textContent='Kopiert';setTimeout(function(){b.textContent='Kopieren'},1600)};
+try{navigator.clipboard.writeText(t).then(done,function(){sel();b.textContent='Markiert, bitte Strg+C'})}catch(e){sel();b.textContent='Markiert, bitte Strg+C'}})})();
+</script>
