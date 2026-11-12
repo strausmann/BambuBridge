@@ -47,7 +47,10 @@ The first admin token comes from one of two places:
   long as an enabled, unexpired token with scope `admin` exists, bootstrap answers 403
   `bootstrap_closed`. If the user `admin` is disabled or no longer has the role `admin`,
   bootstrap refuses with `bootstrap_owner_disabled` / `bootstrap_owner_not_admin` instead of
-  issuing a token that could not be used.
+  issuing a token that could not be used. Each client address may present five wrong
+  bootstrap keys per minute; after that it gets 429 without the key being compared, also for
+  the right key. While the variable is set and bootstrap is open, the server logs a warning at
+  start: create the first admin token, then remove `BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY`.
 - **CLI:** `bambubridge admin create-key --scope admin --name NAME` (reads
   `BAMBUBRIDGE_DATABASE_URL`) prints the token once on stdout.
 

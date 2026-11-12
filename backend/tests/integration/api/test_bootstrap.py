@@ -2,21 +2,31 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 import pytest_asyncio
+from fastapi import FastAPI
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app import main as main_module
+from app.auth import dependencies as deps
 from app.config import Settings
 from app.db.session import make_session_factory
 from app.main import create_app
 from app.models.api_key import ApiKey
 from app.models.user import User
-from tests.conftest import KEY_HEADER, TEST_BOOTSTRAP_KEY, issue_token
+from tests.conftest import (
+    DEAD_DATABASE_URL,
+    KEY_HEADER,
+    TEST_BOOTSTRAP_KEY,
+    issue_token,
+    settings_variant,
+)
 
 BASE = "/api/v1/admin/api-keys"
 BOOTSTRAP_HEADER = "X-BambuBridge-Bootstrap"
@@ -228,3 +238,78 @@ async def test_bootstrap_disabled_without_configured_key(
 
 async def test_create_without_any_header_401(client: httpx.AsyncClient):
     _problem(await client.post(BASE, json=BODY), 401, "not_authenticated")
+
+
+def _client_at(app: FastAPI, ip: str) -> httpx.AsyncClient:
+    transport = httpx.ASGITransport(app=app, client=(ip, 40000))
+    return httpx.AsyncClient(transport=transport, base_url="http://test")
+
+
+async def test_bootstrap_failures_are_limited_per_client(app: FastAPI, engine: AsyncEngine):
+    # Audit H1: wrong bootstrap keys count against a per-client budget; over it the
+    # address gets 429 without a key comparison, even for the right key. Other addresses
+    # are not affected.
+    budget = deps.FAILED_BOOTSTRAP_ATTEMPTS_PER_CLIENT_PER_MINUTE
+    async with _client_at(app, "198.51.100.7") as guesser:
+        for _ in range(budget):
+            r = await guesser.post(BASE, json=BODY, headers={BOOTSTRAP_HEADER: "wrong"})
+            _problem(r, 401, "invalid_bootstrap_key")
+        r = await guesser.post(BASE, json=BODY, headers={BOOTSTRAP_HEADER: "wrong"})
+        _problem(r, 429, "rate_limited")
+        assert int(r.headers["Retry-After"]) >= 1
+        r = await guesser.post(BASE, json=BODY, headers=GOOD)
+        _problem(r, 429, "rate_limited")
+    assert await _count(engine) == 0
+    async with _client_at(app, "198.51.100.8") as operator:
+        r = await operator.post(BASE, json=BODY, headers=GOOD)
+        assert r.status_code == 201, r.text
+
+
+async def test_correct_bootstrap_key_does_not_use_up_the_budget(app: FastAPI):
+    budget = deps.FAILED_BOOTSTRAP_ATTEMPTS_PER_CLIENT_PER_MINUTE
+    async with _client_at(app, "198.51.100.9") as c:
+        for _ in range(budget - 1):
+            r = await c.post(BASE, json=BODY, headers={BOOTSTRAP_HEADER: "wrong"})
+            _problem(r, 401, "invalid_bootstrap_key")
+        assert (await c.post(BASE, json=BODY, headers=GOOD)).status_code == 201
+        # Closed now; the answer is the closed one, not a rate limit.
+        _problem(await c.post(BASE, json=BODY, headers=GOOD), 403, "bootstrap_closed")
+
+
+async def test_startup_warns_while_bootstrap_is_open(
+    app: FastAPI, engine: AsyncEngine, caplog: pytest.LogCaptureFixture
+):
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        async with app.router.lifespan_context(app):
+            pass
+    assert "bootstrap is open" in caplog.text
+    assert TEST_BOOTSTRAP_KEY not in caplog.text
+
+
+async def test_startup_does_not_warn_once_bootstrap_is_closed(
+    app: FastAPI, admin_token: str, caplog: pytest.LogCaptureFixture
+):
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        async with app.router.lifespan_context(app):
+            pass
+    assert "bootstrap is open" not in caplog.text
+
+
+async def test_startup_does_not_warn_without_a_bootstrap_key(
+    settings: Settings, engine: AsyncEngine, caplog: pytest.LogCaptureFixture
+):
+    application = create_app(settings_variant(settings, bootstrap_admin_key=""))
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        async with application.router.lifespan_context(application):
+            pass
+    assert "bootstrap is open" not in caplog.text
+
+
+async def test_startup_bootstrap_check_survives_a_dead_database(
+    settings: Settings, caplog: pytest.LogCaptureFixture
+):
+    application = create_app(settings_variant(settings, database_url=DEAD_DATABASE_URL))
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        await main_module.warn_if_bootstrap_open(application)
+    assert "bootstrap is open" not in caplog.text
+    await application.state.engine.dispose()

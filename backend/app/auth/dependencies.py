@@ -62,6 +62,11 @@ FAILED_VERIFICATIONS_PER_MINUTE = 10
 # *before* any bcrypt work (see ``authenticate_token``).
 FAILED_VERIFICATIONS_PER_CLIENT_PER_MINUTE = 30
 BOOTSTRAP_HEADER = "X-BambuBridge-Bootstrap"
+# Wrong bootstrap keys tolerated per client address and minute; above it the address gets
+# 429 without a key comparison. Clients without a usable address share one bucket (fail
+# closed: it only delays bootstrap, which the CLI can always do instead).
+FAILED_BOOTSTRAP_ATTEMPTS_PER_CLIENT_PER_MINUTE = 5
+_UNKNOWN_BOOTSTRAP_CLIENT = "unknown"
 
 _key_header = APIKeyHeader(
     name=KEY_HEADER,
@@ -316,6 +321,25 @@ def check_bootstrap_key(settings: Settings, presented: str) -> AuthContext:
     return AuthContext(kind="bootstrap", scope="admin", user_id=None, key_id=None, user=None)
 
 
+def check_bootstrap_attempt(request: Request, presented: str) -> AuthContext:
+    """``check_bootstrap_key`` behind a per-client budget of failed attempts.
+
+    Over the budget the client gets 429 before any comparison, also for the right key;
+    a correct key never counts against the budget.
+    """
+    limiter: SlidingWindowRateLimiter = request.app.state.failed_bootstrap_limiter
+    client = _request_client(request) or _UNKNOWN_BOOTSTRAP_CLIENT
+    budget = FAILED_BOOTSTRAP_ATTEMPTS_PER_CLIENT_PER_MINUTE
+    allowed, retry_after = limiter.peek(client, limit=budget)
+    if not allowed:
+        raise _rate_limited(retry_after)
+    try:
+        return check_bootstrap_key(request.app.state.settings, presented)
+    except ApiError:
+        limiter.hit(client, limit=budget)
+        raise
+
+
 async def require_admin_or_bootstrap(
     request: Request,
     session: SessionDep,
@@ -326,7 +350,7 @@ async def require_admin_or_bootstrap(
     if key:
         return await authenticate_token(request, session, key, "admin")
     if bootstrap:
-        return check_bootstrap_key(request.app.state.settings, bootstrap)
+        return check_bootstrap_attempt(request, bootstrap)
     return await authenticate_request(request, session, None, "admin")
 
 

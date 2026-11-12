@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import lru_cache
@@ -9,7 +11,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from app.api.errors import register_error_handlers
+from app.api.errors import CONNECTION_ERRORS, DatabaseUnavailableError, register_error_handlers
 from app.api.routes import api_keys, auth_continue, auth_session, health, system
 from app.api.routes import settings as settings_routes
 
@@ -21,7 +23,8 @@ from app.auth import sessions as ui_sessions
 from app.auth.rate_limit import SlidingWindowRateLimiter
 from app.config import Settings, get_settings
 from app.db.engine import make_engine
-from app.db.session import make_session_factory
+from app.db.session import connected, make_session_factory
+from app.repositories import api_keys as api_keys_repo
 from app.security.secret_box import secret_box_from_settings
 from app.settings_store.listener import SettingsListener
 from app.settings_store.store import SettingsStore
@@ -30,10 +33,45 @@ from app.web.security_headers import SecurityHeadersMiddleware
 from app.web.spa import mount_spa
 from app.web.version_header import VersionHeaderMiddleware
 
+_log = logging.getLogger(__name__)
+_STARTUP_DB_ERRORS: tuple[type[BaseException], ...] = (
+    *CONNECTION_ERRORS,
+    DatabaseUnavailableError,
+    TimeoutError,
+)
+BOOTSTRAP_CHECK_TIMEOUT_SECONDS = 3.0
+
+
+async def warn_if_bootstrap_open(app: FastAPI) -> None:
+    """Warn while ``BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY`` is set and bootstrap is still open.
+
+    An unreachable or stalled database skips the check; the server must start without one.
+    """
+    settings: Settings = app.state.settings
+    if not settings.bootstrap_admin_key.get_secret_value():
+        return
+
+    async def closed() -> bool:
+        async with app.state.session_factory() as session:
+            await connected(session)
+            return await api_keys_repo.usable_admin_token_exists(session)
+
+    try:
+        if await asyncio.wait_for(closed(), timeout=BOOTSTRAP_CHECK_TIMEOUT_SECONDS):
+            return
+    except _STARTUP_DB_ERRORS:
+        return
+    _log.warning(
+        "BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY is set and bootstrap is open (no usable admin "
+        "token exists): anyone who can reach the API and knows the key can create an admin "
+        "token. Create the first admin token, then remove the variable."
+    )
+
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     ui_sessions.warn_if_insecure(app.state.settings)
+    await warn_if_bootstrap_open(app)
     # The listener loads every setting once connected and keeps the store current.
     listener = SettingsListener(app.state.engine, app.state.settings_store)
     app.state.settings_listener = listener
@@ -62,11 +100,12 @@ def create_app(settings: Settings, *, web_dist_dir: Path | None = None) -> FastA
     app.state.settings_listener = None
     app.state.session_keys = ui_sessions.session_keys(settings)
     # Per process (see app.auth.rate_limit): requests per token, failed checks per prefix and
-    # per client address, sign-in attempts per client address.
+    # per client address, sign-in attempts and failed bootstrap keys per client address.
     app.state.rate_limiter = SlidingWindowRateLimiter()
     app.state.failed_auth_limiter = SlidingWindowRateLimiter()
     app.state.failed_auth_client_limiter = SlidingWindowRateLimiter()
     app.state.sign_in_limiter = SlidingWindowRateLimiter()
+    app.state.failed_bootstrap_limiter = SlidingWindowRateLimiter()
     register_error_handlers(app)
     # Wraps the error middleware (an oversize body never reaches a handler) and is wrapped
     # by the header middlewares below, so the 413 carries them too.
