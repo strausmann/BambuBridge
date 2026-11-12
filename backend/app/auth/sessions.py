@@ -164,9 +164,14 @@ async def create_session(
 ) -> tuple[UiSession, str]:
     """Insert a session, commit, and return ``(row, cookie_token)``.
 
-    At most ``MAX_ACTIVE_SESSIONS`` active sessions per user: opening one more revokes the
-    oldest. Sessions that expired more than ``PURGE_AFTER`` ago are deleted on the way, so
-    the table stays bounded without a background job.
+    At most ``MAX_ACTIVE_SESSIONS`` active sessions per user and credential: opening one
+    more revokes the oldest of the same credential. A credential is one API token (token
+    sign-in) or the user's identity-provider sign-ins as one group (``api_key_id`` null).
+    A sign-in therefore never ends a session opened with another credential: a read token
+    signing in over and over cannot sign the operator out of an SSO session.
+
+    Sessions that expired more than ``PURGE_AFTER`` ago are deleted on the way, so the
+    table stays bounded without a background job.
 
     Count, revoke and insert run under a lock on the user's row (``FOR NO KEY UPDATE``,
     held until the commit), so concurrent sign-ins of the same user are serialised and
@@ -178,11 +183,15 @@ async def create_session(
     now = _now()
     token = secrets.token_urlsafe(32)
     await db.execute(delete(UiSession).where(UiSession.expires_at < now - PURGE_AFTER))
+    same_credential = (
+        UiSession.api_key_id.is_(None) if api_key_id is None else UiSession.api_key_id == api_key_id
+    )
     active = (
         await db.scalars(
             select(UiSession.id)
             .where(
                 UiSession.user_id == user_id,
+                same_credential,
                 UiSession.revoked_at.is_(None),
                 UiSession.expires_at > now,
             )

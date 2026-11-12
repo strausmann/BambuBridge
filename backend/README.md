@@ -80,3 +80,12 @@ Errors are problem details (`application/problem+json`) with a stable `error_cod
 `validation_failed` (field locations and messages only, never the submitted values),
 `not_found`, `method_not_allowed`, `database_unavailable` (the database cannot be reached)
 and `internal_error` (anything else; details only in the server log).
+
+## Browser sessions
+
+A browser signs in with a token (`POST /api/v1/auth/session`) or through the trusted SSO header
+(`GET /auth/continue`). Sessions last 12 hours. Each user has at most 20 active sessions per
+credential: one API token is one credential, and all identity-provider (SSO) sign-ins of the user
+together are another. A new sign-in over the cap revokes the oldest session of the same
+credential only, so a token, even one with scope `read`, can never sign the operator out of a
+session opened with another token or with SSO.

@@ -435,3 +435,34 @@ async def test_parallel_sign_ins_never_exceed_the_session_cap(
     active = [r for r in rows if r.revoked_at is None]
     assert len(rows) == preexisting + parallel
     assert len(active) == ui_sessions.MAX_ACTIVE_SESSIONS
+
+
+async def test_token_sign_ins_never_evict_sessions_of_another_credential(
+    app: FastAPI,
+    admin_client: httpx.AsyncClient,
+    browser: httpx.AsyncClient,
+    read_token: str,
+    engine: AsyncEngine,
+):
+    # Audit F1: the cap is per credential. A read token signing in over and over only
+    # rotates its own sessions; the operator's SSO session stays valid.
+    await put_settings(
+        admin_client, {"sso.trust_token": TRUST_TOKEN, "auth.sign_in_limit_per_minute": 600}
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url=PUBLIC_URL) as operator:
+        r = await operator.get("/auth/continue?next=/x", headers=SSO)
+        assert r.status_code == 303, r.text
+        for _ in range(ui_sessions.MAX_ACTIVE_SESSIONS + 5):
+            await _sign_in(browser, read_token)
+            browser.cookies.clear()
+        r = await operator.get(SESSION_URL)
+        assert r.status_code == 200, r.text
+        assert r.json()["scope"] == "admin"
+    rows = await _rows(engine)
+    token_rows = [row for row in rows if row.api_key_id is not None]
+    assert len(token_rows) == ui_sessions.MAX_ACTIVE_SESSIONS + 5
+    # The read token's own sessions are still capped.
+    assert sum(row.revoked_at is None for row in token_rows) == ui_sessions.MAX_ACTIVE_SESSIONS
+    sso_rows = [row for row in rows if row.api_key_id is None]
+    assert [row.revoked_at for row in sso_rows] == [None]
