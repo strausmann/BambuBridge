@@ -50,14 +50,23 @@ async def _readiness_auth(
     request: Request,
     key: Annotated[str | None, key_security("read")] = None,
 ) -> AuthContext | None:
-    """``require_scope("read")`` that yields ``None`` instead of 503 when the DB is down."""
+    """``require_scope("read")`` that yields ``None`` instead of 503 when the DB is down.
+
+    "Down" includes stalled: the lookup is bounded by ``DATABASE_CHECK_TIMEOUT_SECONDS``.
+    """
     if not has_credentials(request, key):
         raise ApiError(401, "not_authenticated", "Authentication required")
-    try:
+
+    async def check() -> AuthContext:
         async with request.app.state.session_factory() as session:
             await connected(session)
             return await authenticate_request(request, session, key, "read")
-    except _DB_DOWN:
+
+    # A stalled database (accepts, never answers) must not hold the probe: the same bound
+    # as the database check applies to the credential lookup.
+    try:
+        return await asyncio.wait_for(check(), timeout=DATABASE_CHECK_TIMEOUT_SECONDS)
+    except _CHECK_FAILED:
         return None
 
 
@@ -98,8 +107,11 @@ _READINESS_RESPONSES: dict[int | str, dict[str, Any]] = {
 async def readiness(
     request: Request, _auth: Annotated[AuthContext | None, Depends(_readiness_auth)]
 ) -> JSONResponse:
+    # ``None``: the credential lookup already found the database down or stalled; probing
+    # again would only add a second timeout.
+    database_ok = _auth is not None and await _database_ok(request.app.state.engine)
     body = Readiness(
-        database="ok" if await _database_ok(request.app.state.engine) else "unavailable",
+        database="ok" if database_ok else "unavailable",
         listener="ok" if _listener_ok(request) else "unavailable",
     )
     ready = body.database == "ok" and body.listener == "ok"

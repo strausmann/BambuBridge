@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
+
 import httpx
+import pytest
 from fastapi import FastAPI
 
+from app.api.routes import system
 from app.config import Settings
 from app.main import create_app
 from tests.conftest import DEAD_DATABASE_URL, KEY_HEADER, settings_variant
@@ -59,3 +64,37 @@ async def test_info_is_public_and_minimal(client: httpx.AsyncClient):
     body = r.json()
     assert set(body) == {"name", "version", "build"}
     assert body["name"] == "BambuBridge"
+
+
+async def test_readiness_is_bounded_when_the_database_stalls(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+):
+    # A TCP listener that accepts and never answers: the auth lookup on the readiness
+    # path must give up after the readiness timeout and answer 503, not wait.
+    monkeypatch.setattr(system, "DATABASE_CHECK_TIMEOUT_SECONDS", 0.5)
+    stalled: list[asyncio.StreamWriter] = []
+
+    async def accept(_r: asyncio.StreamReader, w: asyncio.StreamWriter) -> None:
+        stalled.append(w)
+
+    server = await asyncio.start_server(accept, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    url = f"postgresql+asyncpg://u:p@127.0.0.1:{port}/x"
+    application = create_app(settings_variant(settings, database_url=url))
+    transport = httpx.ASGITransport(app=application)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            started = time.monotonic()
+            r = await asyncio.wait_for(
+                c.get("/readiness", headers={KEY_HEADER: SOME_TOKEN}), timeout=10
+            )
+            elapsed = time.monotonic() - started
+        assert r.status_code == 503, r.text
+        assert r.json() == {"database": "unavailable", "listener": "unavailable"}
+        # One bound, not one per check: the auth timeout already answers for the database.
+        assert elapsed < 1.5, elapsed
+    finally:
+        for w in stalled:
+            w.close()
+        server.close()
+        await application.state.engine.dispose()
