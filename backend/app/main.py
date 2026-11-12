@@ -30,6 +30,7 @@ from app.security.secret_box import secret_box_from_settings
 from app.settings_store.listener import SettingsListener
 from app.settings_store.store import SettingsStore
 from app.web.body_limit import BodySizeLimitMiddleware
+from app.web.head import HeadAsGetMiddleware
 from app.web.security_headers import SecurityHeadersMiddleware
 from app.web.spa import mount_spa
 from app.web.version_header import VersionHeaderMiddleware
@@ -118,6 +119,8 @@ def create_app(settings: Settings, *, web_dist_dir: Path | None = None) -> FastA
     # Added after the error middleware, so they wrap it: problem responses get the headers.
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(VersionHeaderMiddleware)
+    # Outermost: every layer below sees a HEAD request as the GET it stands for.
+    app.add_middleware(HeadAsGetMiddleware)
     for router in (
         health.router,
         system.router,
