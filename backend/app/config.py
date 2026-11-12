@@ -28,7 +28,8 @@ class Settings(BaseSettings):
         hide_input_in_errors=True,
     )
 
-    database_url: str
+    # Contains the database password; SecretStr keeps it out of repr(), logs and tracebacks.
+    database_url: SecretStr
     # Key for secrets stored in the database (base64url of exactly 32 bytes).
     secret_key: SecretStr
     # Public base URL (links, cookie scope).

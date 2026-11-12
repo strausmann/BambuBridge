@@ -85,7 +85,17 @@ def test_get_settings_reads_prefixed_environment(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("BAMBUBRIDGE_SECRET_KEY", GOOD_KEY)
     monkeypatch.setenv("BAMBUBRIDGE_PUBLIC_URL", "https://bb.example.com")
     try:
-        assert get_settings().database_url == URL
+        assert get_settings().database_url.get_secret_value() == URL
         assert get_settings() is get_settings()
     finally:
         get_settings.cache_clear()
+
+
+def test_repr_and_str_show_neither_the_database_password_nor_the_dsn():
+    dsn = "postgresql+asyncpg://bb_user:s3cr3t-pw-value@db.example.com:5432/bambubridge"
+    settings = _make(database_url=dsn, bootstrap_admin_key="b" * 40)
+    for text in (repr(settings), str(settings), repr(settings.model_dump())):
+        assert "s3cr3t-pw-value" not in text
+        assert dsn not in text
+        assert GOOD_KEY not in text and "b" * 40 not in text
+    assert settings.database_url.get_secret_value() == dsn

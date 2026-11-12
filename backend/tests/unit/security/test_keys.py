@@ -55,7 +55,7 @@ def test_rejects_standard_alphabet_characters():
 
 
 def test_non_canonical_fixture_really_differs_in_the_last_character_only():
-    assert NON_CANONICAL != GOOD.rstrip("=") and len(NON_CANONICAL) == 43
+    assert GOOD.rstrip("=") != NON_CANONICAL and len(NON_CANONICAL) == 43
 
 
 @pytest.mark.parametrize("bad", [GOOD + "=", NON_CANONICAL])
