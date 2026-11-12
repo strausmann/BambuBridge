@@ -105,3 +105,22 @@ async def test_unknown_api_path_stays_404_without_allow(web_client: httpx.AsyncC
     assert r.status_code == 404
     assert r.json()["error_code"] == "not_found"
     assert "allow" not in r.headers
+
+
+async def test_get_on_a_known_path_without_get_is_405_with_allow(web_client: httpx.AsyncClient):
+    # The api-keys item route takes only PATCH and DELETE; with the UI mounted a GET or
+    # HEAD must still answer 405 with Allow, not the reserved-path 404.
+    path = "/api/v1/admin/api-keys/00000000-0000-0000-0000-000000000000"
+    for method in ("GET", "HEAD"):
+        r = await web_client.request(method, path)
+        assert r.status_code == 405, method
+        allowed = {m.strip() for m in r.headers["allow"].split(",")}
+        assert allowed == {"PATCH", "DELETE"}, method
+    r = await web_client.get(path)
+    assert r.json()["error_code"] == "method_not_allowed"
+
+
+async def test_unknown_get_api_path_stays_404_without_allow(web_client: httpx.AsyncClient):
+    r = await web_client.get("/api/x")
+    assert r.status_code == 404
+    assert "allow" not in r.headers

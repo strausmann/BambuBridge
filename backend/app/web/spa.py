@@ -5,8 +5,9 @@ a file of the build is served from it; any other path gets ``index.html`` so cli
 routes survive a reload, except paths the server owns: ``/api/...``, ``/auth/...``,
 ``/docs`` and ``/openapi.json`` keep their JSON 404, and a missing ``/assets/...`` file is
 a real 404 (a browser that asked for a script must not get HTML). The route takes every
-method so that an unknown path answers 404 for any method; a wrong method on a path another
-route knows still answers 405 with an ``Allow`` header, as without the web UI.
+method so that an unknown path answers 404 for any method; a wrong method (GET and HEAD
+included) on a path another route knows still answers 405 with an ``Allow`` header, as
+without the web UI.
 
 Without ``index.html`` in the build directory the server runs API-only: one warning, no
 route.
@@ -70,15 +71,17 @@ def mount_spa(app: FastAPI, dist_dir: Path) -> bool:
 
     async def spa(request: Request) -> Response:
         full_path: str = request.path_params.get("full_path", "")
-        # Only GET/HEAD are answered from the build. Any other method is a 405 with Allow
-        # when a route knows the path (this route matches every method, so Starlette
-        # never reports the partial match itself), else a 404, as without the web UI.
+        # Only GET/HEAD are answered from the build. A path another route knows under other
+        # methods is a 405 with Allow (this route matches every method, so Starlette never
+        # reports the partial match itself); any other non-GET/HEAD is a 404, as without
+        # the web UI.
         # Control characters (a NUL makes the filesystem calls raise) never name a file
         # of the build.
-        if request.method not in ("GET", "HEAD"):
-            allowed = _allowed_methods(request.app, request.scope, spa)
-            if allowed:
-                raise HTTPException(status_code=405, headers={"Allow": ", ".join(allowed)})
+        # GET/HEAD included: a path another route knows only under other methods (for
+        # example PATCH/DELETE on an item) is a 405, not the reserved-path 404.
+        allowed = _allowed_methods(request.app, request.scope, spa)
+        if allowed:
+            raise HTTPException(status_code=405, headers={"Allow": ", ".join(allowed)})
         if (
             request.method not in ("GET", "HEAD")
             or is_reserved(full_path)
