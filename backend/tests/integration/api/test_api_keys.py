@@ -606,3 +606,84 @@ async def test_client_budget_same_answers_for_known_and_unknown_prefixes(
         sequences.append(statuses)
     assert sequences[0] == sequences[1]
     assert sequences[0][-1] == 429
+
+
+async def test_unknown_client_never_gets_the_pre_check_429(
+    app: FastAPI, admin_token: str, small_client_budget: int
+):
+    # A client address that cannot be determined shares no bucket with anyone: one guesser
+    # without a usable address must not lock out every other such client.
+    async with _client_at(app, "not-an-ip") as guesser, _client_at(app, "") as other:
+        for i in range(BUDGET + 3):
+            guess = TOKEN_PREFIX + f"{i:04d}" + "U" * 36
+            r = await guesser.get(BASE, headers={KEY_HEADER: guess})
+            _problem(r, 401, "invalid_token")
+        assert (await other.get(BASE, headers={KEY_HEADER: admin_token})).status_code == 200
+        assert (await guesser.get(BASE, headers={KEY_HEADER: admin_token})).status_code == 200
+    # The per-prefix budget still applies to unknown clients.
+    async with _client_at(app, "not-an-ip") as guesser:
+        prefix = TOKEN_PREFIX + "Y" * 9
+        statuses = [
+            (
+                await guesser.get(BASE, headers={KEY_HEADER: prefix + f"{i:04d}" + "Y" * 27})
+            ).status_code
+            for i in range(11)
+        ]
+    assert statuses[-1] == 429
+
+
+async def test_cached_valid_token_passes_while_its_client_is_over_budget(
+    app: FastAPI, admin_token: str, monkeypatch: pytest.MonkeyPatch, small_client_budget: int
+):
+    import app.auth.tokens as tokens
+
+    async with _client_at(app, "192.0.2.50") as c:
+        tokens.clear_verify_cache()
+        assert (await c.get(BASE, headers={KEY_HEADER: admin_token})).status_code == 200
+        for i in range(BUDGET):
+            guess = TOKEN_PREFIX + f"{i:04d}" + "C" * 36
+            assert (await c.get(BASE, headers={KEY_HEADER: guess})).status_code == 401
+        calls: list[bytes] = []
+        real_checkpw = tokens.bcrypt.checkpw
+
+        def spy(password: bytes, hashed: bytes) -> bool:
+            calls.append(hashed)
+            return real_checkpw(password, hashed)
+
+        monkeypatch.setattr(tokens.bcrypt, "checkpw", spy)
+        # The token verified a moment ago is still let through, without bcrypt work ...
+        assert (await c.get(BASE, headers={KEY_HEADER: admin_token})).status_code == 200
+        # ... while anything else from this client still gets 429 before bcrypt.
+        _problem(
+            await c.get(BASE, headers={KEY_HEADER: admin_token[:16] + "W" * 31}),
+            429,
+            "rate_limited",
+        )
+        _problem(
+            await c.get(BASE, headers={KEY_HEADER: TOKEN_PREFIX + "V" * 40}), 429, "rate_limited"
+        )
+        _problem(await c.get(BASE, headers={KEY_HEADER: "garbage"}), 429, "rate_limited")
+        assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "shared"),
+    [
+        ("2001:db8:1:2::10", "2001:db8:1:2:ffff:1:2:3", True),
+        ("2001:db8:1:2::10", "2001:db8:1:3::10", False),
+        ("::ffff:192.0.2.60", "192.0.2.60", True),
+        ("192.0.2.61", "192.0.2.62", False),
+    ],
+)
+async def test_ipv6_clients_share_a_budget_per_64(
+    app: FastAPI, admin_token: str, small_client_budget: int, first: str, second: str, shared: bool
+):
+    async with _client_at(app, first) as a, _client_at(app, second) as b:
+        for i in range(BUDGET):
+            guess = TOKEN_PREFIX + f"{i:04d}" + "S" * 36
+            assert (await a.get(BASE, headers={KEY_HEADER: guess})).status_code == 401
+        r = await b.get(BASE, headers={KEY_HEADER: TOKEN_PREFIX + "T" * 40})
+        if shared:
+            _problem(r, 429, "rate_limited")
+        else:
+            _problem(r, 401, "invalid_token")

@@ -37,6 +37,7 @@ from app.auth.rate_limit import SlidingWindowRateLimiter, client_key
 from app.auth.scopes import Scope, lower_scope, satisfies
 from app.auth.tokens import (
     dummy_verify,
+    is_cached,
     looks_like_token,
     token_prefix,
     verify_token,
@@ -114,7 +115,7 @@ def _rate_limited(retry_after: int) -> ApiError:
     )
 
 
-def _request_client(request: Request) -> str:
+def _request_client(request: Request) -> str | None:
     return client_key(request.client.host if request.client else None)
 
 
@@ -140,7 +141,7 @@ def _record_failure(
     of exhausting the thread pool; protecting CPU against floods is the job of the reverse
     proxy in front of the service. The limiter's LRU cap bounds the stored prefixes.
     """
-    if client_failures is not None and client is not None:
+    if client_failures is not None and client is not None:  # unknown clients: no bucket
         client_failures.hit(client, limit=FAILED_VERIFICATIONS_PER_CLIENT_PER_MINUTE)
     allowed, retry_after = failures.hit(prefix, limit=FAILED_VERIFICATIONS_PER_MINUTE)
     if not allowed:
@@ -156,18 +157,30 @@ async def authenticate_token(
     failures: SlidingWindowRateLimiter = request.app.state.failed_auth_limiter
     client_failures: SlidingWindowRateLimiter = request.app.state.failed_auth_client_limiter
     client = _request_client(request)
-    # A client address that failed too often recently is refused before the lookup and
-    # before bcrypt: it cannot burn CPU, and the answer is the same for every prefix. This
-    # cannot lock out a token holder elsewhere, only the guessing address itself.
-    allowed, retry_after = client_failures.peek(
-        client, limit=FAILED_VERIFICATIONS_PER_CLIENT_PER_MINUTE
-    )
-    if not allowed:
-        raise _rate_limited(retry_after)
+    # A client address that failed too often recently gets no bcrypt work: it cannot burn
+    # CPU, and the answer is the same 429 for every prefix. Two exceptions keep this from
+    # locking out others:
+    # - A client without a usable address is never pre-checked: all such clients would
+    #   share one bucket, so one guesser could lock out all of them. The per-prefix budget
+    #   still applies to them.
+    # - A token that was verified recently (verify cache) is let through, so a holder
+    #   behind the same address (or /64) as a guesser keeps working. The cache only holds
+    #   successful verifications, so this opens nothing to a guesser.
+    over_budget, retry_after = False, 0
+    if client is not None:
+        allowed, retry_after = client_failures.peek(
+            client, limit=FAILED_VERIFICATIONS_PER_CLIENT_PER_MINUTE
+        )
+        over_budget = not allowed
     if not looks_like_token(presented):
+        if over_budget:
+            raise _rate_limited(retry_after)
         raise _invalid_token()
     prefix = token_prefix(presented)
     found = await api_keys_repo.get_by_prefix(session, prefix)
+    # Over budget, known and unknown prefixes take the same path (one lookup, no bcrypt).
+    if over_budget and (found is None or not is_cached(presented, found[0].hash)):
+        raise _rate_limited(retry_after)
     if found is None:
         await dummy_verify(presented)  # same bcrypt work as for a known prefix
         _record_failure(failures, prefix, client_failures, client)

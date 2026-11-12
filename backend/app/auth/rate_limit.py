@@ -79,14 +79,27 @@ class SlidingWindowRateLimiter:
         return len(self._hits)
 
 
-def client_key(host: str | None) -> str:
-    """Normalised client address for per-client limits.
+# IPv6 clients are grouped by their /64 network: one end site usually owns a whole /64, so a
+# single address per bucket would let one host rotate through 2**64 fresh buckets.
+IPV6_CLIENT_PREFIX = 64
+
+
+def client_key(host: str | None) -> str | None:
+    """Normalised client address for per-client limits, or ``None`` if there is none.
 
     Behind the reverse proxy this is the forwarded client: the entrypoint trusts proxy
-    headers from exactly one address (``FORWARDED_ALLOW_IPS``). Anything that is not an IP
-    address shares one bucket instead of opening its own.
+    headers from exactly one address (``FORWARDED_ALLOW_IPS``). IPv4 addresses are used as
+    they are, IPv4-mapped IPv6 addresses as their IPv4 address, other IPv6 addresses as their
+    /64 network. Anything that is not an IP address gives ``None``: the caller decides
+    whether to skip the limit or to use a shared bucket.
     """
     try:
-        return str(ipaddress.ip_address((host or "").strip()))
+        address = ipaddress.ip_address((host or "").strip())
     except ValueError:
-        return "unknown"
+        return None
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            return str(address.ipv4_mapped)
+        # ``int()`` drops a zone index (``fe80::1%eth0``), which a network cannot carry.
+        return str(ipaddress.IPv6Network((int(address), IPV6_CLIENT_PREFIX), strict=False))
+    return str(address)

@@ -57,10 +57,16 @@ budget per presented prefix (10 per minute, then 429; the same for unknown prefi
 answer does not reveal whether a prefix exists). The budget changes the status code of a
 failed check, not its cost: every attempt is checked with bcrypt, so a correct token is always
 accepted, even while its prefix is under attack. In addition each client address has a budget of
-30 failed checks per minute: an address over it gets 429 before any lookup or bcrypt work, for
-every prefix alike. This only throttles the guessing address; a correct token from any other
-address, or from the same address while under budget, is still checked and accepted. The client
-address is the forwarded one, trusted only from the single proxy address in `FORWARDED_ALLOW_IPS`.
+30 failed checks per minute: an address over it gets 429 before any bcrypt work, for every
+prefix alike. This only throttles the guessing address; a correct token from any other address,
+or from the same address while under budget, is still checked and accepted, and a token verified
+in the last five minutes is accepted even from an address over budget. IPv4 clients are counted
+per address (IPv4-mapped IPv6 as IPv4), IPv6 clients per /64 network. A request without a usable
+client address skips this per-client check (the per-prefix budget still applies), so such
+clients never share one bucket. The client address is the forwarded one, trusted only from the
+single proxy address in `FORWARDED_ALLOW_IPS`. If that setting does not match your proxy, every
+client appears as the proxy's own address and all of them share one budget: one guesser then
+throttles everyone, so check it when all clients get 429 at once.
 Browser sign-ins (`POST /api/v1/auth/session`, `GET /auth/continue`) are limited per client address
 by the setting `auth.sign_in_limit_per_minute`. At most four bcrypt checks run at once; further
 requests queue. Protecting CPU against request floods is the job of the reverse proxy in front of

@@ -22,6 +22,9 @@ from app.auth.sso import user_for_identity
 from app.models.ui_session import UiSession
 from app.settings_store.store import SettingsStore
 
+# Shared sign-in bucket for requests whose client address is unknown.
+UNKNOWN_CLIENT = "unknown"
+
 
 async def _first_identity(
     request: Request, store: SettingsStore
@@ -85,8 +88,10 @@ def check_sign_in_limit(request: Request) -> None:
     store: SettingsStore = request.app.state.settings_store
     limiter: SlidingWindowRateLimiter = request.app.state.sign_in_limiter
     host = request.client.host if request.client else None
+    # Clients without a usable address share one bucket here (fail closed): skipping the
+    # limit would let them open sessions without bound.
     allowed, retry_after = limiter.hit(
-        client_key(host), limit=store.get("auth.sign_in_limit_per_minute")
+        client_key(host) or UNKNOWN_CLIENT, limit=store.get("auth.sign_in_limit_per_minute")
     )
     if not allowed:
         raise ApiError(
