@@ -56,7 +56,13 @@ requests get 429 with `Retry-After`. Failed checks (wrong token bodies) have a s
 budget per presented prefix (10 per minute, then 429; the same for unknown prefixes, so the
 answer does not reveal whether a prefix exists). The budget changes the status code of a
 failed check, not its cost: every attempt is checked with bcrypt, so a correct token is always
-accepted, even while its prefix is under attack. At most four bcrypt checks run at once; further
+accepted, even while its prefix is under attack. In addition each client address has a budget of
+30 failed checks per minute: an address over it gets 429 before any lookup or bcrypt work, for
+every prefix alike. This only throttles the guessing address; a correct token from any other
+address, or from the same address while under budget, is still checked and accepted. The client
+address is the forwarded one, trusted only from the single proxy address in `FORWARDED_ALLOW_IPS`.
+Browser sign-ins (`POST /api/v1/auth/session`, `GET /auth/continue`) are limited per client address
+by the setting `auth.sign_in_limit_per_minute`. At most four bcrypt checks run at once; further
 requests queue. Protecting CPU against request floods is the job of the reverse proxy in front of
 BambuBridge. The counters live in process memory: they are per process and start fresh after a restart.
 `last_used_at` is updated at most once per minute.

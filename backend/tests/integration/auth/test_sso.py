@@ -6,7 +6,7 @@ from typing import ClassVar
 
 import httpx
 import pytest
-from fastapi import Request
+from fastapi import FastAPI, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -14,9 +14,11 @@ from app.auth.identity import registry
 from app.auth.identity.base import Identity
 from app.auth.identity.pangolin_header import PangolinHeaderProvider
 from app.db.session import make_session_factory
+from app.models.app_setting import AppSetting
 from app.models.ui_session import UiSession
 from app.models.user import User
 from app.models.user_identity import UserIdentity
+from app.security.secret_box import secret_box_from_key
 from app.settings_store.store import SettingsStore
 from tests.conftest import SESSION_URL, SETTINGS_URL, TRUST_TOKEN, put_settings
 
@@ -70,7 +72,8 @@ async def test_sso_header_creates_session_with_matching_token(
     assert body["kind"] == "session"
     assert body["scope"] == "admin"
     assert body["identity_provider"] == "pangolin_header"
-    assert body["user"] == "alice"
+    assert body["user"] == "admin"
+    assert body["identity_subject"] == "alice"
     assert body["csrf_token"] == browser.cookies.get("__Host-bb_csrf")
     # The cookie alone now authenticates (no SSO headers on this request).
     me = await browser.get(SESSION_URL)
@@ -101,7 +104,7 @@ async def test_sso_header_names_follow_settings_without_restart(
     renamed = {"X-Other-Trust": TRUST_TOKEN, "Remote-Email": "alice@example.com"}
     r = await browser.post(SESSION_URL, headers=renamed)
     assert r.status_code == 201, r.text
-    assert r.json()["user"] == "alice@example.com"
+    assert r.json()["identity_subject"] == "alice@example.com"
 
 
 async def test_disabled_identity_provider_is_not_asked(
@@ -225,3 +228,46 @@ async def test_sso_sign_in_for_disabled_admin_401(
         await session.commit()
     _problem(await browser.post(SESSION_URL, headers=SSO), 401, "user_disabled")
     assert await _count(engine, UiSession) == 0
+
+
+async def test_undecryptable_trust_token_switches_sso_off(
+    app: FastAPI, browser: httpx.AsyncClient, engine: AsyncEngine
+):
+    # The trust token was sealed under another BAMBUBRIDGE_SECRET_KEY: SSO must stay off.
+    from datetime import UTC, datetime
+
+    foreign = secret_box_from_key(b"F" * 32).seal(TRUST_TOKEN, aad="sso.trust_token")
+    async with make_session_factory(engine)() as session:
+        session.add(
+            AppSetting(
+                key="sso.trust_token",
+                secret_token=foreign.token,
+                secret_key_id=foreign.key_id,
+                updated_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+        await app.state.settings_store.load(session)
+    views = {v.key: v for v in app.state.settings_store.describe()}
+    assert views["sso.trust_token"].undecryptable is True
+    r = await browser.post(SESSION_URL, headers=SSO)
+    _problem(r, 401, "not_authenticated")
+    assert "set-cookie" not in r.headers
+
+
+async def test_user_is_the_display_name_and_subject_is_separate(
+    browser: httpx.AsyncClient, admin_client: httpx.AsyncClient
+):
+    await put_settings(admin_client, {"sso.trust_token": TRUST_TOKEN})
+    created = (await browser.post(SESSION_URL, headers=SSO)).json()
+    current = (await browser.get(SESSION_URL)).json()
+    for body in (created, current):
+        assert body["user"] == "admin"
+        assert body["identity_subject"] == "alice"
+        assert body["identity_provider"] == "pangolin_header"
+
+
+async def test_invalid_trust_header_name_422(admin_client: httpx.AsyncClient):
+    r = await admin_client.put(SETTINGS_URL, json={"values": {"sso.trust_header": "X Bad:Name"}})
+    _problem(r, 422, "invalid_setting_value")
+    assert "X Bad:Name" not in r.text

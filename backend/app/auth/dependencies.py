@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.errors import ApiError
 from app.auth import csrf
 from app.auth import sessions as ui_sessions
-from app.auth.rate_limit import SlidingWindowRateLimiter
+from app.auth.rate_limit import SlidingWindowRateLimiter, client_key
 from app.auth.scopes import Scope, lower_scope, satisfies
 from app.auth.tokens import (
     dummy_verify,
@@ -57,6 +57,9 @@ KEY_HEADER = "X-BambuBridge-Key"
 SCOPE_MARKER = "__bambubridge_scope__"
 # Failed checks tolerated per presented prefix and minute before answering 429.
 FAILED_VERIFICATIONS_PER_MINUTE = 10
+# Failed checks tolerated per client address and minute; above it the client gets 429
+# *before* any bcrypt work (see ``authenticate_token``).
+FAILED_VERIFICATIONS_PER_CLIENT_PER_MINUTE = 30
 BOOTSTRAP_HEADER = "X-BambuBridge-Bootstrap"
 
 _key_header = APIKeyHeader(
@@ -111,7 +114,16 @@ def _rate_limited(retry_after: int) -> ApiError:
     )
 
 
-def _record_failure(failures: SlidingWindowRateLimiter, prefix: str) -> NoReturn:
+def _request_client(request: Request) -> str:
+    return client_key(request.client.host if request.client else None)
+
+
+def _record_failure(
+    failures: SlidingWindowRateLimiter,
+    prefix: str,
+    client_failures: SlidingWindowRateLimiter | None = None,
+    client: str | None = None,
+) -> NoReturn:
     """Count a failed check against the presented prefix and reject the request.
 
     Keyed by the prefix string for known and unknown prefixes alike, so the answers
@@ -128,6 +140,8 @@ def _record_failure(failures: SlidingWindowRateLimiter, prefix: str) -> NoReturn
     of exhausting the thread pool; protecting CPU against floods is the job of the reverse
     proxy in front of the service. The limiter's LRU cap bounds the stored prefixes.
     """
+    if client_failures is not None and client is not None:
+        client_failures.hit(client, limit=FAILED_VERIFICATIONS_PER_CLIENT_PER_MINUTE)
     allowed, retry_after = failures.hit(prefix, limit=FAILED_VERIFICATIONS_PER_MINUTE)
     if not allowed:
         raise _rate_limited(retry_after)
@@ -138,18 +152,28 @@ async def authenticate_token(
     request: Request, session: AsyncSession, presented: str, need: Scope
 ) -> AuthContext:
     """Check an API token from the header and return its context (or raise ``ApiError``)."""
-    if not looks_like_token(presented):
-        raise _invalid_token()
     limiter: SlidingWindowRateLimiter = request.app.state.rate_limiter
     failures: SlidingWindowRateLimiter = request.app.state.failed_auth_limiter
+    client_failures: SlidingWindowRateLimiter = request.app.state.failed_auth_client_limiter
+    client = _request_client(request)
+    # A client address that failed too often recently is refused before the lookup and
+    # before bcrypt: it cannot burn CPU, and the answer is the same for every prefix. This
+    # cannot lock out a token holder elsewhere, only the guessing address itself.
+    allowed, retry_after = client_failures.peek(
+        client, limit=FAILED_VERIFICATIONS_PER_CLIENT_PER_MINUTE
+    )
+    if not allowed:
+        raise _rate_limited(retry_after)
+    if not looks_like_token(presented):
+        raise _invalid_token()
     prefix = token_prefix(presented)
     found = await api_keys_repo.get_by_prefix(session, prefix)
     if found is None:
         await dummy_verify(presented)  # same bcrypt work as for a known prefix
-        _record_failure(failures, prefix)
+        _record_failure(failures, prefix, client_failures, client)
     key, owner = found
     if not await verify_token(presented, key.hash):
-        _record_failure(failures, prefix)
+        _record_failure(failures, prefix, client_failures, client)
     if not key.enabled:
         raise _unauthorized("token_disabled", "API token disabled")
     if key.expires_at is not None and key.expires_at <= datetime.now(UTC):

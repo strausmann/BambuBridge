@@ -60,10 +60,11 @@ def create_app(settings: Settings, *, web_dist_dir: Path | None = None) -> FastA
     app.state.settings_store = SettingsStore(secret_box_from_settings(settings))
     app.state.settings_listener = None
     app.state.session_keys = ui_sessions.session_keys(settings)
-    # Per process (see app.auth.rate_limit): requests per token, failed checks per prefix,
-    # sign-in attempts per client address.
+    # Per process (see app.auth.rate_limit): requests per token, failed checks per prefix and
+    # per client address, sign-in attempts per client address.
     app.state.rate_limiter = SlidingWindowRateLimiter()
     app.state.failed_auth_limiter = SlidingWindowRateLimiter()
+    app.state.failed_auth_client_limiter = SlidingWindowRateLimiter()
     app.state.sign_in_limiter = SlidingWindowRateLimiter()
     register_error_handlers(app)
     # Added after the error middleware, so they wrap it: problem responses get the headers.

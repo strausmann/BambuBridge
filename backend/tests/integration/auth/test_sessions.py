@@ -64,6 +64,7 @@ async def test_token_sign_in_creates_session(
     assert body["kind"] == "session"
     assert body["scope"] == "admin"
     assert body["identity_provider"] is None
+    assert body["identity_subject"] is None
     assert body["user"] == "admin"
     rows = await _rows(engine)
     assert len(rows) == 1
@@ -304,6 +305,7 @@ async def test_sign_out_with_token_header_is_a_no_op(admin_client: httpx.AsyncCl
         "scope": "admin",
         "user": "admin",
         "identity_provider": None,
+        "identity_subject": None,
         "expires_at": None,
         "csrf_token": None,
     }
@@ -356,3 +358,14 @@ async def test_auth_continue_without_session_or_sso_401(browser: httpx.AsyncClie
 
 def test_session_keys_hide_their_value_in_repr(app: FastAPI):
     assert repr(app.state.session_keys) == "SessionKeys(<hidden>)"
+
+
+async def test_auth_continue_rate_limited_per_client(
+    browser: httpx.AsyncClient, admin_client: httpx.AsyncClient
+):
+    await put_settings(admin_client, {"auth.sign_in_limit_per_minute": 2})
+    for _ in range(2):
+        _problem(await browser.get("/auth/continue?next=/x"), 401, "not_authenticated")
+    r = await browser.get("/auth/continue?next=/x")
+    _problem(r, 429, "rate_limited")
+    assert int(r.headers["Retry-After"]) >= 1

@@ -24,9 +24,13 @@ class SignInRequest(BaseModel):
 class SessionInfo(BaseModel):
     kind: Literal["session", "token"]
     scope: Scope
-    user: str | None = None
+    user: str | None = Field(default=None, description="Display name of the signed-in user")
     identity_provider: str | None = Field(
         default=None, description="Provider that opened the session; null for a token sign-in"
+    )
+    identity_subject: str | None = Field(
+        default=None,
+        description="Subject the identity provider reported; null for a token sign-in",
     )
     expires_at: datetime | None = None
     csrf_token: str | None = Field(

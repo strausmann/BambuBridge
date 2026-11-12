@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.errors import ApiError
 from app.auth import sessions as ui_sessions
 from app.auth.dependencies import session_cookie
-from app.auth.sign_in import open_identity_session
+from app.auth.sign_in import check_sign_in_limit, open_identity_session
 from app.db.session import get_session
 from app.schemas.problem import ProblemDetail
 
@@ -94,10 +94,12 @@ async def auth_continue(
         db, token, request.app.state.settings_store, request.app.state.session_keys
     ):
         return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
+    # A sign-in attempt from here on: the same per-client limit as POST /api/v1/auth/session.
+    check_sign_in_limit(request)
     opened = await open_identity_session(request, db)
     if opened is None:
         raise ApiError(401, "not_authenticated", "Authentication required")
-    _row, new_token = opened
+    new_token = opened.token
     response = RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
     ui_sessions.set_cookies(
         response, request.app.state.settings, request.app.state.session_keys, new_token

@@ -7,6 +7,7 @@ means "not set".
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -18,6 +19,8 @@ _MAX_TEXT = 256
 _MAX_URL = 2048
 _MAX_SECRET = 4096
 _MAX_CHOICES = 32
+# RFC 7230 ``token``: the characters allowed in an HTTP header name.
+HEADER_NAME = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 
 # Pangolin's badger only removes ``Remote-*`` request headers before it sets its own, so
 # any other header name could be forged by the client.
@@ -51,6 +54,8 @@ class SettingDef:
     min: int | None = None
     max: int | None = None
     choices: tuple[str, ...] | None = None
+    # ``str`` only: the value must be an HTTP header name (RFC 7230 token).
+    header_name: bool = False
 
 
 # Allowed elements of a ``choices`` setting, by key. Filled at runtime by the module that
@@ -75,7 +80,7 @@ def allowed_choices(d: SettingDef) -> tuple[str, ...]:
 
 _DEFS: list[SettingDef] = [
     SettingDef("sso.user_header", "choice", "Remote-User", "sso", choices=SSO_USER_HEADERS),
-    SettingDef("sso.trust_header", "str", "X-Pangolin-Token", "sso"),
+    SettingDef("sso.trust_header", "str", "X-Pangolin-Token", "sso", header_name=True),
     # Empty (default) switches SSO off.
     SettingDef("sso.trust_token", "secret", "", "sso", min=32),
     SettingDef("auth.sign_in_limit_per_minute", "int", 10, "auth", min=1, max=600),
@@ -128,6 +133,8 @@ def validate_value(d: SettingDef, value: Any) -> Any:
         return _validate_url(text, bad)
     if len(text) > _MAX_TEXT:
         raise bad("too long")
+    if d.header_name and not HEADER_NAME.fullmatch(text):
+        raise bad("must be an HTTP header name (letters, digits and !#$%&'*+-.^_`|~)")
     return text
 
 

@@ -7,6 +7,7 @@ process; a restart starts every window fresh.
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import time
 from collections import OrderedDict, deque
@@ -57,9 +58,35 @@ class SlidingWindowRateLimiter:
             self._hits.popitem(last=False)
         return True, 0
 
+    def peek(self, key: Hashable, *, limit: int) -> tuple[bool, int]:
+        """Like :meth:`hit`, but records nothing: would one more hit be allowed now?"""
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        hits = self._hits.get(key)
+        if not hits:
+            return True, 0
+        now = self._clock()
+        recent = [t for t in hits if t > now - self._window]
+        if len(recent) >= limit:
+            return False, max(1, math.ceil(recent[0] + self._window - now))
+        return True, 0
+
     def reset(self, key: Hashable) -> None:
         """Forget a key (e.g. after its token was deleted)."""
         self._hits.pop(key, None)
 
     def tracked_keys(self) -> int:
         return len(self._hits)
+
+
+def client_key(host: str | None) -> str:
+    """Normalised client address for per-client limits.
+
+    Behind the reverse proxy this is the forwarded client: the entrypoint trusts proxy
+    headers from exactly one address (``FORWARDED_ALLOW_IPS``). Anything that is not an IP
+    address shares one bucket instead of opening its own.
+    """
+    try:
+        return str(ipaddress.ip_address((host or "").strip()))
+    except ValueError:
+        return "unknown"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Collection
+
 import pytest
 
 import app.auth.identity  # noqa: F401 - registers the providers the default names
@@ -114,13 +116,31 @@ def test_the_url_binding_guard_does_fire_for_a_url_setting():
     assert _url_settings_without_binding(with_url) == ["x.url"]
 
 
-def test_choices_validated_against_the_current_source():
+@pytest.fixture
+def choice_source():
+    """Register choice sources for test-only keys and remove them afterwards."""
+    from app.settings_store import registry as settings_registry
+
+    keys: list[str] = []
+
+    def register(key: str, source: Callable[[], Collection[str]]) -> None:
+        keys.append(key)
+        set_choices_source(key, source)
+
+    try:
+        yield register
+    finally:
+        for key in keys:
+            settings_registry._CHOICE_SOURCES.pop(key, None)
+
+
+def test_choices_validated_against_the_current_source(choice_source):
     d = SettingDef("x.list", "choices", [], "x")
     with pytest.raises(InvalidSettingValueError):
         validate_value(d, ["a"])  # no source: nothing is allowed
     assert validate_value(d, []) == []
     allowed = {"a", "b"}
-    set_choices_source("x.list", lambda: sorted(allowed))
+    choice_source("x.list", lambda: sorted(allowed))
     assert validate_value(d, ["b", "a"]) == ["b", "a"]
     assert allowed_choices(d) == ("a", "b")
     allowed.add("c")  # registered later: valid without a restart
@@ -128,9 +148,9 @@ def test_choices_validated_against_the_current_source():
 
 
 @pytest.mark.parametrize("bad", ["a", ["a", "a"], [1], ["zzz"], ["a"] * 33, None, {"a": 1}])
-def test_choices_rejects(bad: object):
+def test_choices_rejects(bad: object, choice_source):
     d = SettingDef("x.list2", "choices", [], "x")
-    set_choices_source("x.list2", lambda: ["a"])
+    choice_source("x.list2", lambda: ["a"])
     with pytest.raises(InvalidSettingValueError) as e:
         validate_value(d, bad)
     assert "zzz" not in str(e.value)
@@ -141,3 +161,22 @@ def test_identity_providers_choices_are_the_registered_kinds():
 
     assert allowed_choices(SETTINGS["auth.identity_providers"]) == registry.kinds()
     assert "pangolin_header" in registry.kinds()
+
+
+def test_choice_sources_of_test_keys_do_not_leak():
+    from app.settings_store import registry as settings_registry
+
+    assert not {"x.list", "x.list2"} & set(settings_registry._CHOICE_SOURCES)
+
+
+@pytest.mark.parametrize("name", ["X Pangolin", "X-Token:", "", "X\tY", "Ä-Token", "(x)", "a/b"])
+def test_trust_header_must_be_a_token_name(name: str):
+    with pytest.raises(InvalidSettingValueError) as e:
+        validate_value(SETTINGS["sso.trust_header"], name)
+    if name:
+        assert name not in str(e.value)
+
+
+@pytest.mark.parametrize("name", ["X-Pangolin-Token", "x_trust", "X-A.B~1!#$%&'*+^`|"])
+def test_trust_header_accepts_token_names(name: str):
+    assert validate_value(SETTINGS["sso.trust_header"], name) == name

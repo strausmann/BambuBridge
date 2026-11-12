@@ -178,8 +178,17 @@ class SettingsStore:
                 continue
             if row.value is None:
                 continue
+            raw = row.value
+            if d.type == "choices" and isinstance(raw, list):
+                # A kind that is no longer registered (a removed provider) is dropped, not
+                # the whole list: the remaining choice stays in force instead of the default.
+                allowed = set(allowed_choices(d))
+                kept = list(dict.fromkeys(v for v in raw if isinstance(v, str) and v in allowed))
+                if kept != raw:
+                    _log.warning("dropping unregistered entries of stored setting %s", row.key)
+                raw = kept
             try:
-                values[row.key] = validate_value(d, row.value)
+                values[row.key] = validate_value(d, raw)
             except SettingsError:
                 _log.warning("ignoring invalid stored setting %s", row.key)
 

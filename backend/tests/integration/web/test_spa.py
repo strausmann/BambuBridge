@@ -69,3 +69,21 @@ async def test_without_build_the_server_runs_api_only(
     finally:
         await application.state.engine.dispose()
     assert "API-only" in caplog.text
+
+
+async def test_control_characters_in_path_are_404_not_500(
+    web_client: httpx.AsyncClient, caplog: pytest.LogCaptureFixture
+):
+    with caplog.at_level(logging.WARNING):
+        for path in ("/x%00y", "/assets/a%00.js", "/%01"):
+            r = await web_client.get(path)
+            assert r.status_code == 404, (path, r.text)
+    assert [rec for rec in caplog.records if rec.levelno >= logging.ERROR] == []
+
+
+async def test_unknown_non_get_api_paths_are_404(web_client: httpx.AsyncClient):
+    for method in ("POST", "PUT", "PATCH", "DELETE"):
+        for path in ("/api/v1/unknown", "/printers", "/auth/x"):
+            r = await web_client.request(method, path)
+            assert r.status_code == 404, (method, path)
+            assert r.headers["content-type"].startswith("application/problem+json")
