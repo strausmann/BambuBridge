@@ -122,6 +122,7 @@ def choice_source():
     from app.settings_store import registry as settings_registry
 
     keys: list[str] = []
+    before = dict(settings_registry._CHOICE_SOURCES)
 
     def register(key: str, source: Callable[[], Collection[str]]) -> None:
         keys.append(key)
@@ -132,6 +133,9 @@ def choice_source():
     finally:
         for key in keys:
             settings_registry._CHOICE_SOURCES.pop(key, None)
+    # Checked here, not in a separate test: a test's outcome must not depend on the order
+    # in which the tests run.
+    assert before == settings_registry._CHOICE_SOURCES
 
 
 def test_choices_validated_against_the_current_source(choice_source):
@@ -161,12 +165,6 @@ def test_identity_providers_choices_are_the_registered_kinds():
 
     assert allowed_choices(SETTINGS["auth.identity_providers"]) == registry.kinds()
     assert "pangolin_header" in registry.kinds()
-
-
-def test_choice_sources_of_test_keys_do_not_leak():
-    from app.settings_store import registry as settings_registry
-
-    assert not {"x.list", "x.list2"} & set(settings_registry._CHOICE_SOURCES)
 
 
 @pytest.mark.parametrize("name", ["X Pangolin", "X-Token:", "", "X\tY", "Ä-Token", "(x)", "a/b"])
