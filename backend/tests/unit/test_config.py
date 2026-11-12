@@ -47,6 +47,23 @@ def test_secret_key_must_be_base64():
     assert [err["loc"] for err in e.value.errors()] == [("secret_key",)]
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param(GOOD_KEY[:10] + "!!" + GOOD_KEY[10:], id="injected-junk"),
+        pytest.param(GOOD_KEY[:10] + "\n" + GOOD_KEY[10:], id="inner-newline"),
+        pytest.param(
+            base64.b64encode(bytes([0xFB, 0xFF] * 16)).decode(), id="standard-alphabet-plus-slash"
+        ),
+    ],
+)
+def test_secret_key_rejects_non_strict_base64url(bad: str):
+    with pytest.raises(ValidationError) as e:
+        _make(secret_key=bad)
+    assert [err["loc"] for err in e.value.errors()] == [("secret_key",)]
+    assert bad not in str(e.value)
+
+
 def test_bootstrap_key_defaults_to_empty_and_needs_32_chars():
     assert _make().bootstrap_admin_key.get_secret_value() == ""
     with pytest.raises(ValidationError) as e:
