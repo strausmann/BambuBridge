@@ -31,3 +31,29 @@ To change the key:
 
 The old key is read by this command only, never by the server. Without the old key the command
 exits with status 2.
+
+## API tokens
+
+Requests authenticate with the header `X-BambuBridge-Key: bb_pat_…` (not `Authorization`, so a
+reverse proxy's basic-auth bypass can sit next to it). Scopes are `read` < `operate` < `admin`;
+a token never acts above its owner's role, and a disabled owner invalidates all of their tokens.
+Only a 16-character prefix and a bcrypt hash are stored; the plaintext is shown once.
+
+The first admin token comes from one of two places:
+
+- **Bootstrap:** with `BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY` set (at least 32 characters),
+  `POST /api/v1/admin/api-keys` with the header `X-BambuBridge-Bootstrap: <key>` and the body
+  `{"name": "…", "scope": "admin"}` creates exactly one admin token. As long as an enabled,
+  unexpired admin token of an enabled admin user exists, bootstrap answers 403
+  `bootstrap_closed`.
+- **CLI:** `bambubridge admin create-key --scope admin --name NAME` (reads
+  `BAMBUBRIDGE_DATABASE_URL`) prints the token once on stdout.
+
+Each token has a sliding 60-second rate limit (`rate_limit_per_minute`, default 60); excess
+requests get 429 with `Retry-After`. The counter lives in process memory: it is per process
+and starts fresh after a restart.
+
+Errors are problem details (`application/problem+json`) with a stable `error_code`, for example
+`not_authenticated`, `invalid_token`, `token_expired`, `token_disabled`, `owner_disabled`,
+`insufficient_scope`, `rate_limited`, `invalid_bootstrap_key`, `bootstrap_closed` and
+`database_unavailable`.

@@ -13,6 +13,10 @@ class ProblemDetail(BaseModel):
     status: int = Field(description="HTTP status code")
     detail: str | None = Field(default=None, description="Explanation specific to this occurrence")
     instance: str | None = Field(default=None, description="URI reference of this occurrence")
+    error_code: str | None = Field(
+        default=None,
+        description="Stable machine-readable error code (snake_case), e.g. ``invalid_token``",
+    )
     extensions: dict[str, object] = Field(
         default_factory=dict, description="Problem-type-specific fields"
     )
