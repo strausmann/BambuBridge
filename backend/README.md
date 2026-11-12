@@ -192,6 +192,10 @@ in this order:
      as base64 of the whole value and JSON-escaped;
    - the password in `scheme://user:password@host` and the credential after `Bearer` or
      `Basic`.
+
+   A JSON body is masked on its parsed values. Any other text is searched for
+   `"name": value` and `name=value` (quoted or bare) at every position, also inside the
+   quoted value of another name.
 3. **Cut.** Each body is stored up to 8192 bytes of UTF-8 (never cut inside a character),
    the address up to 2048 characters, the error up to 2000, at most 100 headers with values
    up to 2048 characters. Any cut sets `truncated`.

@@ -240,12 +240,12 @@ def test_free_text_rules():
     assert masker.text("sent basic dXNlcjpwYXNz") == "sent basic ***"
     assert masker.text("basic authentication failed") == "basic authentication failed"
     assert masker.text('{"password": "p\\"q", "n": 1') == '{"password": "***", "n": 1'
-    assert masker.text('{"apiKey":12345,"n":1') == '{"apiKey":"***","n":1'
+    assert masker.text('{"apiKey":12345,"n":1') == '{"apiKey":***,"n":1'
     assert masker.text('{"token": null}') == '{"token": null}'
-    assert masker.text('{"password": "cut off') == '{"password": "***"'
+    assert masker.text('{"password": "cut off') == '{"password": "***'
     assert masker.text("nothing to see: a=b") == "nothing to see: a=b"
     # Broken JSON with an object under a secret name: its end cannot be found, the rest goes.
-    assert masker.text('{"a": 1, "secrets": {"x": "y"}, "b": "c"') == '{"a": 1, "secrets": "***"'
+    assert masker.text('{"a": 1, "secrets": {"x": "y"}, "b": "c"') == '{"a": 1, "secrets": ***'
     assert masker.text('{"a": {"x": "y"}, "b": [1') == '{"a": {"x": "y"}, "b": [1'
 
 
@@ -457,3 +457,108 @@ def test_safe_prefix_looks_only_at_a_secret_across_the_cut():
     assert masker.safe_prefix(before, complete=True, limit=100) == (before[:100], True)
     assert masker.safe_prefix(after, complete=True, limit=100) == ("x" * 100, True)
     assert masker.safe_prefix(SECRET * 3 + "x" * 100, complete=True, limit=50) == (SECRET * 2, True)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ('a="x password=hunter22"', 'a="x password=***"'),
+        ("a='x password=hunter22'", "a='x password=***'"),
+        ("a=\"b='c token=hunter22 d' e\" f", "a=\"b='c token=*** d' e\" f"),
+        (
+            'a="b=\\"c password=hunter22\\""',
+            'a="b=\\"c password=***""',
+        ),  # the backslash goes with the value
+        ("a=1;password=hunter22", "a=1;password=***"),
+        ("a=x,token=hunter22&b=2", "a=x,token=***&b=2"),
+        ("a=b=c=password=hunter22", "a=b=c=password=***"),
+        ('note="see" password="hunter22 x" end', 'note="see" password=*** end'),
+    ],
+    ids=["double", "single", "nested", "escaped", "semicolon", "comma", "chain", "after-quoted"],
+)
+def test_a_pair_inside_the_value_of_a_plain_name_is_still_masked(text: str, expected: str):
+    masked = Masker().text(text)
+
+    assert "hunter22" not in masked
+    assert masked == expected
+
+
+def test_a_sensitive_name_with_a_quoted_value_is_masked_whole():
+    masker = Masker()
+    assert masker.text('password="a b=c token=d" x') == "password=*** x"
+    assert masker.text("password='a \"b\" c' x") == "password=*** x"
+    assert masker.text('a="x" secret="p q" b="y"') == 'a="x" secret=*** b="y"'
+
+
+def test_a_long_chain_of_pairs_is_scanned_without_recursion():
+    text = "a=" * 50_000 + "password=hunter22"
+    assert Masker().text(text) == "a=" * 50_000 + "password=***"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["A" * 262_144, "a=" * 131_072, '"' * 262_144, "a:" * 131_072, "://" + "a:" * 131_000],
+    ids=["one-run", "pairs", "quotes", "colons", "userinfo"],
+)
+def test_the_text_rules_take_linear_time(text: str):
+    import time
+
+    started = time.monotonic()
+    Masker(known_secrets=[SECRET]).text(text)
+    assert time.monotonic() - started < 5
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The bare value swallows the second name: its quoted value has to go with it.
+        ("secret=abc,token='hunter22 x' end", "secret=*** end"),
+        ('secret=abc;b="hunter22 x"&n=1', "secret=***&n=1"),
+        ("Authorization=Bearer hunter22.x next", "Authorization=*** next"),
+        ("basic TOKEN=Bearer hunter22 next", "basic *** next"),
+        ('Bearer xAuthorization="hunter22" next', "Bearer *** next"),
+        ("token=abc== next", "token=*** next"),
+    ],
+    ids=[
+        "swallowed-single",
+        "swallowed-double",
+        "scheme-value",
+        "scheme-in-scheme",
+        "name-after-scheme",
+        "padding",
+    ],
+)
+def test_rules_do_not_hide_a_value_from_each_other(text: str, expected: str):
+    masked = Masker().text(text)
+
+    assert "hunter22" not in masked
+    assert masked == expected
+
+
+def test_a_dict_key_is_masked_like_any_text():
+    assert mask({"see password='hunter22'": 1}) == {"see password=***": MASK}
+    assert mask({"q": {"x?token=hunter22&n=1": 1}}) == {"q": {"x?token=***&n=1": MASK}}
+
+
+def test_a_pair_inside_a_span_that_is_masked_already_is_still_looked_at():
+    # The swallowed name takes '&TOKEN=' for its quoted value; TOKEN has a value of its own.
+    text = "secret=Bearer abcb='&TOKEN='hunter22''/"
+    masked = Masker().text(text)
+
+    assert "hunter22" not in masked
+    assert masked == "secret=***'/"
+
+
+def test_a_chain_of_secret_pairs_is_linear():
+    import time
+
+    started = time.monotonic()
+    masked = Masker().text("token=" * 100_000 + "x")
+    assert time.monotonic() - started < 5
+    assert masked == "token=***"
+
+
+def test_a_name_cannot_percent_decode_its_way_out():
+    # "%bA" is a valid escape: decoded, the name no longer reads "authorization".
+    assert Masker().text("%bAuthorization='hunter22'") == "%bAuthorization=***"
+    assert Masker().text('{"%bAuthorization": "hunter22"') == '{"%bAuthorization": "***"'

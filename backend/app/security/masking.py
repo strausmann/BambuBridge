@@ -13,6 +13,13 @@ Three rules decide what becomes ``***``:
    ``MIN_KNOWN_SECRET_LENGTH`` characters, as a substring, also in its percent-encoded,
    base64 (whole value, with and without padding) and JSON-escaped forms.
 
+In text that is not parsed JSON (an address, an error message, a body in another format,
+broken JSON) the names are found by patterns: ``"name": value``, ``name=value`` with a
+quoted or bare value, the password in ``scheme://user:password@host`` and the credential
+after ``Bearer`` or ``Basic``. Each pattern is tried at every position of the same text and
+the union of what they find is masked, so no pattern depends on what another one left, and
+a pair inside the quoted value of a plain name (``a="x password=y"``) is found as well.
+
 Masking prefers hiding too much over showing a secret: a field called ``monkey`` is masked
 because its name contains ``key``. What it cannot do: find a secret nobody named or marked,
 find a known secret that was transformed in a way not listed above (hashed, base64 as part
@@ -28,7 +35,7 @@ import json
 import re
 import unicodedata
 from collections.abc import Collection, Iterator, Mapping
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote, quote_plus, unquote, unquote_plus
 
 MASK = "***"
@@ -43,21 +50,40 @@ SENSITIVE_WORDS = re.compile(
 NESTED_TOO_DEEPLY = "<not recorded: nested too deeply>"
 
 _PERCENT_ESCAPE = re.compile(r"%[0-9A-F]{2}")
-# ``scheme://user:password@host``: the password part.
-_USERINFO = re.compile(r"(?<=://)([^/?#@\s:]*):[^/?#@\s]*@")
+# The text rules below each name the spans of a text that hold a secret; ``Masker.text``
+# replaces the union of all spans. No rule works on the output of another one, so none can
+# take away what another needs to see (a name, a quote, a scheme word).
+
+# ``scheme://user:password@host``: the password.
+_USERINFO = re.compile(r"(?<=://)[^/?#@\s:]*:([^/?#@\s]*)@")
 # ``Bearer <token>`` / ``Basic <credentials>``; a following all-lower-case word ("basic
-# authentication failed") is prose, not a credential.
+# authentication failed") is prose, not a credential. Tried at every position (lookahead),
+# so a scheme word inside the token of another one (``basic x=Bearer <token>``) counts too.
 _AUTH_SCHEME = re.compile(
-    r"\b((?i:bearer|basic))(\s+)(?![a-z]+(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,}"
+    r"(?=\b(?i:bearer|basic)\s+((?![a-z]+(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,}))"
 )
-# ``"name": value`` in text that looks like JSON (also when it is cut off or broken). The
-# value is a string (possibly unterminated at the end of the text) or a bare literal.
-_JSON_FIELD = re.compile(r'"((?:[^"\\]|\\.)*)"(\s*:\s*)("(?:[^"\\]|\\.)*"?|[^\s,}\]"]+)')
-# ``"name": {`` or ``"name": [``: the value is an object or array, whose end a pattern cannot find.
-_JSON_CONTAINER_FIELD = re.compile(r'"((?:[^"\\]|\\.)*)"\s*:\s*(?=[\[{])')
-# ``name=value`` as in a query string, a form body or a message for people. The value is
-# quoted (possibly unterminated) or runs to the next ``&``, space, quote or angle bracket.
-_PAIR = re.compile(r"""([A-Za-z0-9_.%\-\[\]]+)=("(?:[^"\\]|\\.)*"?|'[^']*'?|[^&\s"'<>]*)""")
+# ``"name": value`` in text that looks like JSON (also when it is cut off or broken), tried
+# at every quote, because in broken text any quote may be the one that opens a name. The
+# value is a string (possibly unterminated at the end of the text), the start of an object
+# or array, or a bare literal. The bound on the name keeps the scan linear.
+_JSON_FIELD = re.compile(
+    r"""(?=
+        "((?:[^"\\]|\\.){0,128})"\s*:\s*
+        (?: "((?:[^"\\]|\\.)*)("?) | ([\[{]) | ([^\s,}\]"]+) )
+    )""",
+    re.VERBOSE,
+)
+# ``name=`` as in a query string, a form body or a message for people. The lookbehind makes
+# a name start only where a run of name characters starts, which keeps the scan linear.
+_PAIR_NAME = re.compile(r"(?<![A-Za-z0-9_.%\-\[\]])([A-Za-z0-9_.%\-\[\]]+)=")
+# The value after a secret name: quoted (possibly unterminated), a scheme word with what
+# follows it (``Authorization=Bearer <token>``), or bare up to the next ``&``, space, quote
+# or angle bracket.
+_PAIR_VALUE = re.compile(
+    r""""(?:[^"\\]|\\.)*"?|'[^']*'?|(?i:bearer|basic)\s+[^&\s"'<>]*|[^&\s"'<>]*"""
+)
+# A value that is not a plain bare run: it starts with a quote or a scheme word.
+_PAIR_VALUE_START = re.compile(r"""["']|(?i:bearer|basic)\s""")
 _SURROGATE = re.compile("[\ud800-\udfff]")
 
 
@@ -155,6 +181,11 @@ class Masker:
     def _is_secret_name(self, name: str) -> bool:
         return is_sensitive_name(name) or _fold(name) in self._leaf_names
 
+    def _is_secret_written_name(self, name: str) -> bool:
+        """For a name as written in text: judged as it stands and percent-decoded
+        (``pass%77ord``; but ``%bAuthorization`` must not decode its way out)."""
+        return self._is_secret_name(name) or self._is_secret_name(unquote_plus(name))
+
     def _at_secret_path(self, path: tuple[str, ...]) -> bool:
         return any(path[-len(secret) :] == secret for secret in self._paths)
 
@@ -164,38 +195,79 @@ class Masker:
             name = json.loads(f'"{raw}"')
         except ValueError:
             name = raw
-        return self._is_secret_name(str(name))
+        return self._is_secret_written_name(str(name))
 
-    def _json_field(self, match: re.Match[str]) -> str:
-        name, separator, value = match.groups()
-        if value == "null" or not self._is_secret_json_name(name):
-            return match.group()
-        return f'"{name}"{separator}"{MASK}"'
+    def _json_spans(self, text: str) -> Iterator[tuple[int, int]]:
+        """Values of secret-named ``"name": value`` fields."""
+        for match in _JSON_FIELD.finditer(text):
+            if not self._is_secret_json_name(match.group(1)):
+                continue
+            if match.start(4) >= 0:
+                # An object or array: a pattern cannot tell where it ends, the rest goes.
+                yield match.start(4), len(text)
+            elif match.start(5) >= 0:
+                if match.group(5) != "null":
+                    yield match.span(5)
+            elif match.group(3):
+                yield match.span(2)
+            else:
+                # A string that is never closed: it runs to the end of the text.
+                yield match.start(2), len(text)
 
-    def _cut_at_secret_container(self, text: str) -> str:
-        """Text rules cannot tell where an object or array ends: drop everything after the
-        first secret-named field that holds one."""
-        for match in _JSON_CONTAINER_FIELD.finditer(text):
-            if self._is_secret_json_name(match.group(1)):
-                return f'{text[: match.end()]}"{MASK}"'
-        return text
+    def _pair_spans(self, text: str) -> Iterator[tuple[int, int]]:
+        """Values of secret-named ``name=value`` pairs.
 
-    def _pair(self, match: re.Match[str]) -> str:
-        name = match.group(1)
-        if not self._is_secret_name(unquote_plus(name)):
-            return match.group()
-        return f"{name}={MASK}"
+        Every name is looked at, also one inside the value of another: a pair inside the
+        value of a plain name (``a="x password=y"``, ``a=1;password=y``) is found, and so is
+        a pair inside a value that is masked already (quotes in broken text do not always
+        pair up the way the first match took them).
+        """
+        # End of the bare run looked at last: no separator lies between its start and there.
+        bare_end = -1
+        for match in _PAIR_NAME.finditer(text):
+            start = match.end()
+            # A name that ends where a bare value ends was swallowed by that value; what
+            # follows it (a quoted string) is part of the secret.
+            swallowed = start == bare_end
+            if not swallowed and not self._is_secret_written_name(match.group(1)):
+                continue
+            if start < bare_end and _PAIR_VALUE_START.match(text, start) is None:
+                # Inside a bare run that was scanned before: the value ends where that
+                # run ends. Not scanning again keeps a long chain of pairs linear.
+                yield start, bare_end
+                continue
+            # Matches at every position, if only the empty string.
+            value = cast("re.Match[str]", _PAIR_VALUE.match(text, start))
+            if text[start : start + 1] not in ('"', "'"):
+                bare_end = value.end()
+            yield value.span()
 
     # -- public -------------------------------------------------------------
 
     def text(self, value: str) -> str:
         """Mask free text: a body that is not JSON, an address, an error message."""
+        # Known values first: any other rule could cut one in two.
         value = self._replace_known(value)
-        value = _USERINFO.sub(rf"\1:{MASK}@", value)
-        value = _AUTH_SCHEME.sub(rf"\1\2{MASK}", value)
-        value = self._cut_at_secret_container(value)
-        value = _JSON_FIELD.sub(self._json_field, value)
-        return _PAIR.sub(self._pair, value)
+        spans = sorted(
+            {
+                *(match.span(1) for match in _USERINFO.finditer(value)),
+                *(match.span(1) for match in _AUTH_SCHEME.finditer(value)),
+                *self._json_spans(value),
+                *self._pair_spans(value),
+            }
+        )
+        out: list[str] = []
+        position = 0
+        masked_to = -1
+        for start, end in spans:
+            if start <= masked_to:
+                # Overlaps or touches the span before it: one mask stands for both.
+                position = masked_to = max(masked_to, end)
+                continue
+            out += (value[position:start], MASK)
+            position = masked_to = end
+        out.append(value[position:])
+        return "".join(out)
 
     def value(self, value: Any) -> Any:
         """A masked copy of a JSON-like value (dict, list, string, number ...).
@@ -218,7 +290,7 @@ class Masker:
                     masked = None if item is None else MASK
                 else:
                     masked = self._value(item, here)
-                out[self._replace_known(name)] = masked
+                out[self.text(name)] = masked
             return out
         if isinstance(value, list | tuple):
             return [self._value(item, path) for item in value]
