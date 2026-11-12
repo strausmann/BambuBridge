@@ -19,7 +19,7 @@ import hmac
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Annotated, Literal, cast
+from typing import Annotated, Literal, NoReturn, cast
 from uuid import UUID
 
 from fastapi import Request, Security
@@ -38,7 +38,7 @@ KEY_HEADER = "X-BambuBridge-Key"
 # Attribute set on every scope-guard dependency; the OpenAPI gate walks route dependants
 # and requires it on every non-public route.
 SCOPE_MARKER = "__bambubridge_scope__"
-# Wrong token bodies tolerated per known prefix and minute before answering 429.
+# Failed checks tolerated per presented prefix and minute before answering 429.
 FAILED_VERIFICATIONS_PER_MINUTE = 10
 BOOTSTRAP_HEADER = "X-BambuBridge-Bootstrap"
 
@@ -91,6 +91,21 @@ def _rate_limited(retry_after: int) -> ApiError:
     )
 
 
+def _record_failure(failures: SlidingWindowRateLimiter, prefix: str) -> NoReturn:
+    """Count a failed check against the presented prefix and reject the request.
+
+    Keyed by the prefix string for known and unknown prefixes alike, so the answers
+    (401 ... then 429 after the same number of failures) do not reveal whether a prefix
+    exists. Only failed attempts use this budget: a correct token is always verified and
+    accepted, so guessing against a prefix never locks out its holder, and the token's
+    own request limit is untouched. The limiter's LRU cap bounds the stored prefixes.
+    """
+    allowed, retry_after = failures.hit(prefix, limit=FAILED_VERIFICATIONS_PER_MINUTE)
+    if not allowed:
+        raise _rate_limited(retry_after)
+    raise _invalid_token()
+
+
 async def authenticate_token(request: Request, presented: str, need: Scope) -> AuthContext:
     """Check an API token from the header and return its context (or raise ``ApiError``)."""
     if not looks_like_token(presented):
@@ -100,18 +115,14 @@ async def authenticate_token(request: Request, presented: str, need: Scope) -> A
     failures: SlidingWindowRateLimiter = request.app.state.failed_auth_limiter
     async with factory() as session:
         await connected(session)
-        found = await api_keys_repo.get_by_prefix(session, token_prefix(presented))
+        prefix = token_prefix(presented)
+        found = await api_keys_repo.get_by_prefix(session, prefix)
         if found is None:
             await dummy_verify(presented)  # same bcrypt work as for a known prefix
-            raise _invalid_token()
+            _record_failure(failures, prefix)
         key, owner = found
         if not await verify_token(presented, key.hash):
-            # Wrong bodies for a known prefix have their own budget; the token's own
-            # rate limit is untouched, so guessing never locks out the real holder.
-            allowed, retry_after = failures.hit(key.id, limit=FAILED_VERIFICATIONS_PER_MINUTE)
-            if not allowed:
-                raise _rate_limited(retry_after)
-            raise _invalid_token()
+            _record_failure(failures, prefix)
         if not key.enabled:
             raise _unauthorized("token_disabled", "API token disabled")
         if key.expires_at is not None and key.expires_at <= datetime.now(UTC):

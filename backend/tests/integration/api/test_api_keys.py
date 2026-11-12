@@ -434,3 +434,27 @@ async def test_last_used_at_refreshed_after_a_minute(
         await session.commit()
     assert (await admin_client.get(BASE)).status_code == 200
     assert (await _key_row(engine, admin_token)).last_used_at > old  # type: ignore[operator]
+
+
+async def test_failure_limit_does_not_reveal_whether_a_prefix_exists(
+    client: httpx.AsyncClient, engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+):
+    import app.auth.dependencies as deps
+
+    monkeypatch.setattr(deps, "FAILED_VERIFICATIONS_PER_MINUTE", 3)
+    real = await issue_token(engine, "admin")
+    known_wrong = real[:16] + "W" * (len(real) - 16)
+    unknown = TOKEN_PREFIX + "U" * 40
+
+    async def sequence(value: str) -> list[tuple[int, str]]:
+        out = []
+        for _ in range(5):
+            r = await client.get(BASE, headers={KEY_HEADER: value})
+            out.append((r.status_code, r.json()["error_code"]))
+        return out
+
+    expected = [(401, "invalid_token")] * 3 + [(429, "rate_limited")] * 2
+    assert await sequence(known_wrong) == expected
+    assert await sequence(unknown) == expected
+    # The real holder of the attacked prefix is not throttled: a correct check succeeds.
+    assert (await client.get(BASE, headers={KEY_HEADER: real})).status_code == 200

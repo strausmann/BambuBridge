@@ -52,8 +52,10 @@ The first admin token comes from one of two places:
   `BAMBUBRIDGE_DATABASE_URL`) prints the token once on stdout.
 
 Each token has a sliding 60-second rate limit (`rate_limit_per_minute`, default 60); excess
-requests get 429 with `Retry-After`. Wrong token bodies for a known prefix have a separate
-budget (10 per minute, then 429), so guessing never uses up the real token's budget. The
+requests get 429 with `Retry-After`. Failed checks (wrong token bodies) have a separate
+budget per presented prefix (10 per minute, then 429; the same for unknown prefixes, so the
+answer does not reveal whether a prefix exists). A correct token is always accepted, so guessing
+never throttles the real holder or uses up its budget. The
 counters live in process memory: they are per process and start fresh after a restart.
 `last_used_at` is updated at most once per minute.
 
