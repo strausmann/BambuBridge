@@ -19,8 +19,15 @@ The container entrypoint runs `alembic upgrade head` before it starts the server
 ## Rotating the secret key
 
 Secrets in the database (`app_settings.secret_token`) are sealed with `BAMBUBRIDGE_SECRET_KEY`.
-To change the key, set the new value as `BAMBUBRIDGE_SECRET_KEY` and the previous one as
-`BAMBUBRIDGE_SECRET_KEY_OLD`, then run `bambubridge secrets rotate`. All secrets are re-encrypted
-in one transaction (nothing changes if one cannot be opened); afterwards remove
-`BAMBUBRIDGE_SECRET_KEY_OLD` and start the server. The old key is read by this command only, never
-by the server. Without the old key the command exits with status 2.
+To change the key:
+
+1. **Stop the server.** A running server holds the old key; after the rotation it would report
+   every secret as undecryptable until it is restarted with the new key.
+2. Set the new value as `BAMBUBRIDGE_SECRET_KEY` and the previous one as
+   `BAMBUBRIDGE_SECRET_KEY_OLD`, then run `bambubridge secrets rotate`. All secrets are
+   re-encrypted in one transaction (nothing changes if one cannot be opened), and the rotated
+   settings are announced on the settings channel when it commits.
+3. Remove `BAMBUBRIDGE_SECRET_KEY_OLD` and start the server with the new key.
+
+The old key is read by this command only, never by the server. Without the old key the command
+exits with status 2.

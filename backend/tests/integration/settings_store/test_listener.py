@@ -400,3 +400,57 @@ async def test_healthy_probe_keeps_the_connection(
         assert listener.connection_pid == pid
     finally:
         await listener.stop()
+
+
+async def _listen(test_database_url: str) -> tuple[Any, asyncio.Queue[str]]:
+    conn = await asyncpg.connect(test_database_url.replace("postgresql+asyncpg", "postgresql"))
+    received: asyncio.Queue[str] = asyncio.Queue()
+    await conn.add_listener(CHANNEL, lambda _c, _p, _ch, payload: received.put_nowait(payload))
+    return conn, received
+
+
+async def test_rotation_notifies_the_rotated_keys_when_it_commits(
+    store: SettingsStore, engine: AsyncEngine, db_session: AsyncSession, test_database_url: str
+):
+    from app.security.rotation import rotate_secrets
+    from app.settings_store.rotation import reencrypt_app_settings
+    from tests.integration.settings_store.conftest import KEY_A, KEY_B
+
+    await store.set_many(db_session, {"sso.trust_token": TOKEN, "retention.events_days": 5})
+    conn, received = await _listen(test_database_url)
+    try:
+        count = await rotate_secrets(engine, [reencrypt_app_settings], old_key=KEY_A, new_key=KEY_B)
+        payload = await asyncio.wait_for(received.get(), 2)
+    finally:
+        await conn.close()
+    assert count == 1
+    assert json.loads(payload) == ["sso.trust_token"]  # only the re-encrypted secret
+
+
+async def test_rotation_sends_nothing_when_it_rolls_back_or_rotates_nothing(
+    engine: AsyncEngine, store: SettingsStore, db_session: AsyncSession, test_database_url: str
+):
+    from app.security.rotation import RotationError, rotate_secrets
+    from app.settings_store.rotation import reencrypt_app_settings
+    from tests.integration.settings_store.conftest import KEY_A, KEY_B
+
+    async def failing(_session: AsyncSession, _box: SecretBox) -> int:
+        raise RotationError("later step failed")
+
+    conn, received = await _listen(test_database_url)
+    try:
+        # Nothing to rotate: no notification.
+        await rotate_secrets(engine, [reencrypt_app_settings], old_key=KEY_A, new_key=KEY_B)
+        # A later step fails: the transaction (and with it the NOTIFY) is rolled back.
+        await store.set_many(db_session, {"sso.trust_token": TOKEN})
+        await asyncio.wait_for(received.get(), 2)  # the set_many notification
+        with pytest.raises(RotationError):
+            await rotate_secrets(
+                engine, [reencrypt_app_settings, failing], old_key=KEY_A, new_key=KEY_B
+            )
+        # A marker proves the queue would have delivered an earlier notification.
+        await store.set_many(db_session, {"retention.events_days": 6})
+        payload = await asyncio.wait_for(received.get(), 2)
+    finally:
+        await conn.close()
+    assert json.loads(payload) == ["retention.events_days"]
