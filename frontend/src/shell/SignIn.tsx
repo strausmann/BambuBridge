@@ -1,10 +1,10 @@
 import { useLingui } from "@lingui/react/macro";
 import { Link } from "@tanstack/react-router";
 import { useRef, useState, type FormEvent } from "react";
-import { Button, Input, Label, TextField } from "react-aria-components";
+import { Input, Label, TextField } from "react-aria-components";
 import { ApiError } from "../api/client";
 import { AuthScreen, ErrorNote } from "./AuthScreen";
-import { BusyMark, useDelayedBusy } from "./Busy";
+import { BusyButton } from "./Busy";
 import { FIELD, PRIMARY_BUTTON, SECONDARY_BUTTON, TEXT_LINK } from "./ui";
 
 function useSignInMessage() {
@@ -38,21 +38,31 @@ export function SignIn({ onSignIn, onSso }: Props) {
   const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"token" | "sso" | null>(null);
-  const slow = useDelayedBusy(busy !== null);
   const field = useRef<HTMLInputElement>(null);
+  const ssoButton = useRef<HTMLButtonElement>(null);
 
   async function run(how: "token" | "sso", action: () => Promise<void>) {
     setError(null);
     setBusy(how);
+    // Held before the request: after a sign-in that went through, this screen is gone.
+    const input = field.current;
     try {
       await action();
+      if (how === "token") {
+        // The page is done with the token: drop it from the state and from the field itself.
+        setToken("");
+        if (input) {
+          input.value = "";
+          input.removeAttribute("value");
+        }
+      }
     } catch (failure) {
       if (how === "token" && failure instanceof ApiError && failure.status === 401) setToken("");
       setError(messageFor(failure, how));
       setBusy(null);
-      // The button that was pressed is disabled while busy and has lost the focus; the next
-      // step is in the token field either way (type again, or use a token instead of SSO).
-      field.current?.focus();
+      // The pressed button was disabled while busy and has lost the focus. Give it back where
+      // the next step is: the field for a token, the same button for single sign-on.
+      (how === "token" ? field.current : ssoButton.current)?.focus();
     }
   }
 
@@ -74,15 +84,13 @@ export function SignIn({ onSignIn, onSso }: Props) {
           <Input ref={field} className={`${FIELD} font-mono`} spellCheck={false} autoCapitalize="none" autoCorrect="off" enterKeyHint="go" />
         </TextField>
         {error ? <ErrorNote>{error}</ErrorNote> : null}
-        <Button type="submit" isDisabled={busy !== null} className={PRIMARY_BUTTON}>
+        <BusyButton type="submit" busy={busy === "token"} isDisabled={busy !== null} className={PRIMARY_BUTTON}>
           {t`Anmelden`}
-          <BusyMark show={slow && busy === "token"} />
-        </Button>
+        </BusyButton>
       </form>
-      <Button isDisabled={busy !== null} onPress={() => void run("sso", onSso)} className={SECONDARY_BUTTON}>
+      <BusyButton ref={ssoButton} busy={busy === "sso"} isDisabled={busy !== null} onPress={() => void run("sso", onSso)} className={SECONDARY_BUTTON}>
         {t`Mit einmaliger Anmeldung (SSO) fortfahren`}
-        <BusyMark show={slow && busy === "sso"} />
-      </Button>
+      </BusyButton>
       <p className="flex flex-wrap items-center gap-x-1.5 text-ink-2">
         <span>{t`Erster Start?`}</span>
         <Link to="/bootstrap" className={TEXT_LINK}>

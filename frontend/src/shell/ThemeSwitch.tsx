@@ -1,8 +1,16 @@
 import { useLingui } from "@lingui/react/macro";
 import { useState, type ReactNode } from "react";
 import { Radio, RadioGroup } from "react-aria-components";
+import { THUMB_RING } from "../design/tokens";
 import { MoonIcon, SunIcon, SystemIcon } from "./icons";
 import { isTheme, readTheme, storeTheme, switchTheme, type ThemeChoice } from "./theme";
+
+// The classes of the roles named in THUMB_RING (the pairing the contrast test checks). Written
+// out because the stylesheet is built from class names found in the source; a role changed in
+// THUMB_RING without its class here does not compile.
+const RING_CLASS: Record<typeof THUMB_RING.edge, string> = { "line-strong": "border-line-strong" };
+const THUMB_CLASS: Record<typeof THUMB_RING.thumb, string> = { surface: "bg-surface" };
+const TRACK_CLASS: Record<typeof THUMB_RING.track, string> = { sunken: "bg-sunken" };
 
 /**
  * System / light / dark, remembered in `localStorage` (`bb.theme`) and set as `data-theme`.
@@ -32,11 +40,11 @@ export function ThemeSwitch() {
         storeTheme(value);
         switchTheme(value);
       }}
-      className="group/theme relative flex rounded-r2 bg-sunken p-0.5"
+      className={`group/theme relative flex rounded-r2 p-0.5 ${TRACK_CLASS[THUMB_RING.track]}`}
     >
       <span
         aria-hidden="true"
-        className="pointer-events-none absolute top-0.5 left-0.5 size-11 rounded-r1 border border-line-strong bg-surface transition-transform duration-200 ease-out group-data-[choice=dark]/theme:translate-x-[200%] group-data-[choice=light]/theme:translate-x-full"
+        className={`pointer-events-none absolute top-0.5 left-0.5 size-11 rounded-r1 border transition-transform duration-200 ease-out group-data-[choice=dark]/theme:translate-x-[200%] group-data-[choice=light]/theme:translate-x-full ${RING_CLASS[THUMB_RING.edge]} ${THUMB_CLASS[THUMB_RING.thumb]}`}
       />
       {options.map((option) => (
         <Radio

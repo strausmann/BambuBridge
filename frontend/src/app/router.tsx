@@ -2,7 +2,7 @@ import { useLingui } from "@lingui/react/macro";
 import { createRootRoute, createRoute, createRouter, getRouteApi, Outlet, useLocation, useRouter, type RouterHistory } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { Button } from "react-aria-components";
-import { apiFetch } from "../api/client";
+import { ApiError, apiFetch } from "../api/client";
 import { DevicePage, NotFoundPage, OverviewPage, ProtocolPage, ProvidersPage, SettingsLayout, SettingsPage } from "../pages/placeholders";
 import { AppShell } from "../shell/AppShell";
 import { BootstrapKeyCreated } from "../shell/BootstrapKeyCreated";
@@ -15,15 +15,35 @@ export const BOOTSTRAP_HEADER = "X-BambuBridge-Bootstrap";
 /** Paths shown without a sign-in. */
 const PUBLIC_PATHS = ["/sign-in", "/bootstrap"];
 
-/** A sign-in return target must stay on this site: a path, never `//host` or a scheme. */
+/** Paths the server answers itself; the app never sends a visitor there after a sign-in. */
+const SERVER_PATHS = ["/api", "/auth", "/docs", "/openapi.json"];
+
+const isOrBelow = (pathname: string, base: string): boolean => pathname === base || pathname.startsWith(`${base}/`);
+
+/**
+ * A sign-in return target must stay on this site and inside the app. The value is resolved the
+ * way the browser would resolve it (dot segments, percent-encoded dots) and the result is
+ * checked and returned, so what was checked is what is used. Rejected: anything that is not a
+ * path, any backslash (browsers read it as a slash), control characters (browsers drop them), a
+ * result on another origin or starting with `//`, the server's own paths and the public pages.
+ */
 export function safeRedirect(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  if (!value.startsWith("/") || value.startsWith("//") || value.startsWith("/\\")) return undefined;
-  // Browsers drop tabs and newlines inside a URL, so "/\t/host" would become "//host".
+  if (typeof value !== "string" || !value.startsWith("/")) return undefined;
+  if (value.includes("\\") || /%5c/i.test(value)) return undefined;
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/.test(value)) return undefined;
-  if (PUBLIC_PATHS.some((path) => value === path || value.startsWith(`${path}?`))) return undefined;
-  return value;
+  let url: URL;
+  try {
+    url = new URL(value, window.location.origin);
+  } catch {
+    return undefined;
+  }
+  if (url.origin !== window.location.origin) return undefined;
+  const { pathname } = url;
+  if (pathname.startsWith("//") || pathname.includes("\\")) return undefined;
+  if (SERVER_PATHS.some((base) => isOrBelow(pathname, base))) return undefined;
+  if (PUBLIC_PATHS.some((base) => isOrBelow(pathname, base))) return undefined;
+  return `${pathname}${url.search}${url.hash}`;
 }
 
 /** Replaces the current history entry (a redirect should not leave a back-button trap). */
@@ -100,7 +120,10 @@ export async function createFirstAdminToken(bootstrapKey: string): Promise<strin
     json: { name: "First admin token", scope: "admin" },
     skipAuthHandler: true,
   });
-  return created.token;
+  // A 2xx without a token must not lead to a screen that shows an empty one.
+  const token: unknown = (created as { token?: unknown } | null | undefined)?.token;
+  if (typeof token !== "string" || token === "") throw new ApiError(200, "unexpected_content", "The server answered without a token");
+  return token;
 }
 
 function BootstrapRoute() {

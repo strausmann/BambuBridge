@@ -174,6 +174,14 @@ describe("apiFetch", () => {
     await expect(apiFetch("/x")).rejects.toMatchObject({ status: 500, code: null });
   });
 
+  it("only requests a path on this origin: one leading slash, no backslash, no scheme", async () => {
+    setCsrfToken("csrf-1");
+    for (const path of ["//evil.example/api", "https://evil.example/api", "/\\evil.example/api", "api/v1/info", "", "\\\\evil.example", "/api\\..\\x", " /api/v1/info", "/\t/evil.example"]) {
+      await expect(apiFetch(path, { method: "POST" }), JSON.stringify(path)).rejects.toBeInstanceOf(TypeError);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("reports an unreachable server as status 0", async () => {
     fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
     await expect(apiFetch("/x")).rejects.toMatchObject({ status: 0, code: "network_error" });

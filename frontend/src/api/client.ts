@@ -124,7 +124,21 @@ function parseProblem(status: number, body: unknown): { code: string | null; det
   return { code, detail, extensions };
 }
 
+/**
+ * `path` must be a path on this origin: one leading slash, then no second slash, no backslash
+ * (browsers read it as a slash) and no control character (browsers drop them). The session cookie
+ * and the CSRF token ride on every request, so a value that could name another host is a
+ * programming error and is refused before anything is sent.
+ */
+function assertOwnPath(path: string): void {
+  // eslint-disable-next-line no-control-regex
+  if (!/^\/(?![/\\])/.test(path) || path.includes("\\") || /[\u0000-\u001f\u007f]/.test(path)) {
+    throw new TypeError("apiFetch needs a path on this origin, starting with a single slash");
+  }
+}
+
 export async function apiFetch<T>(path: string, init: ApiInit = {}): Promise<T> {
+  assertOwnPath(path);
   const { json, skipAuthHandler = false, headers: initHeaders, ...rest } = init;
   const method = (rest.method ?? "GET").toUpperCase();
   const headers = new Headers(initHeaders);

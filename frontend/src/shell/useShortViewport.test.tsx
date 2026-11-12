@@ -8,6 +8,7 @@ function Probe() {
 
 class FakeViewport extends EventTarget {
   height = 800;
+  scale = 1;
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -52,5 +53,22 @@ describe("useShortViewport", () => {
     vi.stubGlobal("visualViewport", undefined);
     render(<Probe />);
     expect(screen.getByTestId("probe")).not.toHaveAttribute("data-short");
+  });
+
+  it("ignores pinch-zoom: a zoomed page shows less, but no keyboard is open", () => {
+    const viewport = new FakeViewport();
+    vi.stubGlobal("visualViewport", viewport);
+    render(<Probe />);
+    act(() => {
+      viewport.height = 300;
+      viewport.scale = 2;
+      viewport.dispatchEvent(new Event("resize"));
+    });
+    expect(screen.getByTestId("probe")).not.toHaveAttribute("data-short");
+    act(() => {
+      viewport.scale = 1.005; // rounding of an unzoomed page
+      viewport.dispatchEvent(new Event("resize"));
+    });
+    expect(screen.getByTestId("probe")).toHaveAttribute("data-short");
   });
 });

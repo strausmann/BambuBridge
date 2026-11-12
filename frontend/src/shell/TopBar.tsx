@@ -1,6 +1,6 @@
 import { useLingui } from "@lingui/react/macro";
 import { Link } from "@tanstack/react-router";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "react-aria-components";
 import { useSession } from "../app/session";
 import { ErrorNote } from "./AuthScreen";
@@ -16,12 +16,30 @@ export function TopBar() {
   const session = useSession();
   const userId = useId();
   const [signOutFailed, setSignOutFailed] = useState(false);
+  const signOutButton = useRef<HTMLButtonElement>(null);
 
   function signOut() {
     setSignOutFailed(false);
     // A sign-out the server did not confirm leaves the session open: stay here and say so.
     session.signOut().catch(() => setSignOutFailed(true));
   }
+
+  /** Closing the note returns the focus to the control it is about, for another try. */
+  function dismiss() {
+    setSignOutFailed(false);
+    signOutButton.current?.focus();
+  }
+
+  useEffect(() => {
+    if (!signOutFailed) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setSignOutFailed(false);
+      signOutButton.current?.focus();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [signOutFailed]);
 
   return (
     <header className="sticky top-0 z-10 flex h-[calc(4rem+env(safe-area-inset-top))] items-center gap-2 border-b border-line bg-surface pt-[env(safe-area-inset-top)] pr-[max(1rem,env(safe-area-inset-right))] pl-[max(1rem,env(safe-area-inset-left))] lg:pr-8 lg:pl-8">
@@ -37,7 +55,7 @@ export function TopBar() {
         ) : null}
         <ThemeSwitch />
         <LanguageSwitch />
-        <Button aria-label={t`Abmelden`} aria-describedby={session.user ? userId : undefined} onPress={signOut} className={ICON_BUTTON}>
+        <Button ref={signOutButton} aria-label={t`Abmelden`} aria-describedby={session.user ? userId : undefined} onPress={signOut} className={ICON_BUTTON}>
           <SignOutIcon />
         </Button>
       </div>
@@ -48,7 +66,7 @@ export function TopBar() {
             <ErrorNote>{t`Abmelden fehlgeschlagen, die Sitzung ist noch offen`}</ErrorNote>
             <Button
               aria-label={t`Meldung schließen`}
-              onPress={() => setSignOutFailed(false)}
+              onPress={dismiss}
               className={`press flex size-11 shrink-0 items-center justify-center rounded-r2 text-ink hover:bg-surface ${FOCUS}`}
             >
               <CloseIcon />

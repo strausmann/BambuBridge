@@ -3,9 +3,13 @@ import { useEffect, useState } from "react";
 /** Same limit as the `short` variant in index.css. */
 export const SHORT_VIEWPORT_PX = 560;
 
+/** Browsers report 1 with small rounding differences for a page that is not zoomed. */
+const MAX_UNZOOMED_SCALE = 1.01;
+
 function isShort(): boolean {
   const viewport = window.visualViewport;
-  return viewport != null && viewport.height < SHORT_VIEWPORT_PX;
+  // A pinch-zoomed page also has a small visual viewport, but no keyboard: leave the layout alone.
+  return viewport != null && viewport.scale <= MAX_UNZOOMED_SCALE && viewport.height < SHORT_VIEWPORT_PX;
 }
 
 /**

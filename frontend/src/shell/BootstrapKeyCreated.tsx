@@ -1,10 +1,10 @@
 import { Trans, useLingui } from "@lingui/react/macro";
-import { Link } from "@tanstack/react-router";
-import { useEffect, useState, type FormEvent } from "react";
+import { Link, useBlocker } from "@tanstack/react-router";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button, Input, Label, TextField } from "react-aria-components";
 import { ApiError } from "../api/client";
 import { AuthScreen, ErrorNote } from "./AuthScreen";
-import { BusyMark, useDelayedBusy } from "./Busy";
+import { BusyButton } from "./Busy";
 import { FIELD, PRIMARY_BUTTON, SECONDARY_BUTTON, TEXT_LINK } from "./ui";
 
 interface Props {
@@ -30,7 +30,8 @@ function useCreateMessage() {
  * First start: the one-time bootstrap key (`BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY`) can do one thing,
  * create the first admin token. The token is shown exactly once; it lives only in this
  * component's state and is gone after "Continue" or a reload. While it is on screen and was not
- * yet used to sign in, the browser asks before the page is closed or reloaded.
+ * yet used to sign in, leaving asks first: the browser for a reload or a closed tab, this screen
+ * for Back and for links inside the app.
  */
 export function BootstrapKeyCreated({ onCreate, onContinue }: Props) {
   const { t } = useLingui();
@@ -40,40 +41,59 @@ export function BootstrapKeyCreated({ onCreate, onContinue }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copy, setCopy] = useState<"idle" | "done" | "failed">("idle");
-  const slow = useDelayedBusy(busy);
 
+  const keyField = useRef<HTMLInputElement>(null);
+  const proceedButton = useRef<HTMLButtonElement>(null);
+  const stayButton = useRef<HTMLButtonElement>(null);
+  // True from the moment the token is sent to sign in: the navigation that follows is wanted.
+  const used = useRef(false);
+
+  const unusedToken = () => created !== null && !used.current;
+  const blocker = useBlocker({ shouldBlockFn: unusedToken, enableBeforeUnload: false, withResolver: true });
   const shown = created !== null;
   useEffect(() => {
     if (!shown) return;
-    const ask = (event: BeforeUnloadEvent) => event.preventDefault();
+    const ask = (event: BeforeUnloadEvent) => {
+      if (!used.current) event.preventDefault();
+    };
     window.addEventListener("beforeunload", ask);
     return () => window.removeEventListener("beforeunload", ask);
   }, [shown]);
+  const asking = blocker.status === "blocked";
+  useEffect(() => {
+    if (asking) stayButton.current?.focus();
+  }, [asking]);
 
   async function create(event: FormEvent) {
     event.preventDefault();
     if (bootstrapKey === "" || busy) return;
-    const sent = bootstrapKey;
-    setBootstrapKey("");
     setBusy(true);
     setError(null);
     try {
-      setCreated(await onCreate(sent));
+      setCreated(await onCreate(bootstrapKey));
+      setBootstrapKey("");
     } catch (failure) {
+      // A refused key is of no further use; after any other failure it need not be typed again.
+      if (failure instanceof ApiError && failure.status === 401) setBootstrapKey("");
       setError(messageFor(failure));
-    } finally {
       setBusy(false);
+      keyField.current?.focus();
+      return;
     }
+    setBusy(false);
   }
 
   async function proceed(value: string) {
     setBusy(true);
     setError(null);
+    used.current = true;
     try {
       await onContinue(value);
     } catch {
+      used.current = false;
       setError(t`Die Anmeldung mit dem neuen Token ist fehlgeschlagen.`);
       setBusy(false);
+      proceedButton.current?.focus();
     }
   }
 
@@ -101,13 +121,12 @@ export function BootstrapKeyCreated({ onCreate, onContinue }: Props) {
         <form onSubmit={(event) => void create(event)} className="flex flex-col gap-4">
           <TextField value={bootstrapKey} onChange={setBootstrapKey} name="bootstrap-key" type="password" autoComplete="off" className="flex flex-col gap-1.5">
             <Label className="font-semibold">{t`Bootstrap-Schlüssel`}</Label>
-            <Input className={`${FIELD} font-mono`} spellCheck={false} autoCapitalize="none" autoCorrect="off" enterKeyHint="go" />
+            <Input ref={keyField} className={`${FIELD} font-mono`} spellCheck={false} autoCapitalize="none" autoCorrect="off" enterKeyHint="go" />
           </TextField>
           {error ? <ErrorNote>{error}</ErrorNote> : null}
-          <Button type="submit" isDisabled={busy} className={PRIMARY_BUTTON}>
+          <BusyButton type="submit" busy={busy} isDisabled={busy} className={PRIMARY_BUTTON}>
             {t`Admin-Token anlegen`}
-            <BusyMark show={slow} />
-          </Button>
+          </BusyButton>
         </form>
         <p>
           <Link to="/sign-in" search={{ redirect: undefined }} className={TEXT_LINK}>
@@ -157,10 +176,23 @@ export function BootstrapKeyCreated({ onCreate, onContinue }: Props) {
         </Trans>
       </p>
       {error ? <ErrorNote>{error}</ErrorNote> : null}
-      <Button onPress={() => void proceed(created)} isDisabled={busy} className={PRIMARY_BUTTON}>
-        {t`Weiter zur Oberfläche`}
-        <BusyMark show={slow} />
-      </Button>
+      {asking ? (
+        <div role="alertdialog" aria-labelledby="leave-question" className="flex flex-col gap-3 rounded-r2 border border-line-strong bg-warn-soft p-3">
+          <p id="leave-question" className="font-semibold text-ink">{t`Seite verlassen? Das Token wird danach nicht mehr angezeigt.`}</p>
+          <div className="flex flex-wrap gap-3">
+            <Button ref={stayButton} onPress={blocker.reset} className={PRIMARY_BUTTON}>
+              {t`Hier bleiben`}
+            </Button>
+            <Button onPress={blocker.proceed} className={SECONDARY_BUTTON}>
+              {t`Trotzdem verlassen`}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <BusyButton ref={proceedButton} busy={busy} onPress={() => void proceed(created)} isDisabled={busy} className={PRIMARY_BUTTON}>
+          {t`Weiter zur Oberfläche`}
+        </BusyButton>
+      )}
     </AuthScreen>
   );
 }

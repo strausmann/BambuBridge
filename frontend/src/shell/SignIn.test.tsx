@@ -154,10 +154,61 @@ describe("sign-in", () => {
     await user.click(screen.getByRole("button", { name: "Anmelden" }));
     await screen.findByRole("alert");
     await waitFor(() => expect(field).toHaveFocus());
+  });
 
-    await user.click(screen.getByRole("button", { name: "Mit einmaliger Anmeldung (SSO) fortfahren" }));
+  it("after a failed single sign-on the focus stays on its button", async () => {
+    stubFetch({ "GET /api/v1/auth/session": signedOut, "POST /api/v1/auth/session": signedOut });
+    const user = userEvent.setup();
+    renderApp("/sign-in");
+    const sso = await screen.findByRole("button", { name: "Mit einmaliger Anmeldung (SSO) fortfahren" });
+    await user.click(sso);
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Die einmalige Anmeldung hat dich nicht erkannt."));
-    await waitFor(() => expect(field).toHaveFocus());
+    await waitFor(() => expect(sso).toHaveFocus());
+    expect(screen.getByLabelText("API-Token")).not.toHaveFocus();
+  });
+
+  it("empties the token field once the sign-in went through", async () => {
+    let signedIn = false;
+    stubFetch({
+      "GET /api/v1/auth/session": () => (signedIn ? jsonResponse(SESSION) : signedOut()),
+      "POST /api/v1/auth/session": () => {
+        signedIn = true;
+        return jsonResponse(SESSION, { status: 201 });
+      },
+      "GET /api/v1/info": () => jsonResponse(INFO),
+    });
+    const user = userEvent.setup();
+    renderApp("/sign-in");
+    // The element outlives the screen (the test holds it, as a closure in the page could).
+    const field = await screen.findByLabelText<HTMLInputElement>("API-Token");
+    await user.type(field, "bb_secret-token");
+    await user.click(screen.getByRole("button", { name: "Anmelden" }));
+    await screen.findByTestId("signed-in-user");
+    expect(field.value).toBe("");
+    expect(field.getAttribute("value") ?? "").toBe("");
+  });
+
+  it("marks the pressed button as busy for assistive technology, and the mark does not move the label", async () => {
+    let answer!: (response: Response) => void;
+    stubFetch({
+      "GET /api/v1/auth/session": signedOut,
+      "POST /api/v1/auth/session": () => new Promise<Response>((resolve) => (answer = resolve)),
+    });
+    const user = userEvent.setup();
+    renderApp("/sign-in");
+    await user.type(await screen.findByLabelText("API-Token"), "t");
+    const button = screen.getByRole("button", { name: "Anmelden" });
+    const sso = screen.getByRole("button", { name: "Mit einmaliger Anmeldung (SSO) fortfahren" });
+    expect(button).not.toHaveAttribute("aria-busy");
+    await user.click(button);
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(sso).not.toHaveAttribute("aria-busy");
+    // The mark hangs beside the label, out of the flow: appearing cannot shift the text.
+    const mark = await screen.findByTestId("busy-mark", undefined, { timeout: 1500 });
+    expect(mark.className).toContain("absolute");
+    answer(problemResponse(401, "invalid_token", "Invalid API token"));
+    await screen.findByRole("alert");
+    expect(button).not.toHaveAttribute("aria-busy");
   });
 
   it("lets a password manager fill the token field", async () => {
@@ -267,6 +318,54 @@ describe("sign-out", () => {
     const deletes = calls.filter((call) => call.method === "DELETE");
     expect(deletes).toHaveLength(2);
     expect(deletes[1]!.headers.get(CSRF_HEADER)).toBe("csrf-1");
+  });
+
+  it("Escape closes the message as well, and either way the focus goes to the sign-out button", async () => {
+    shell(() => problemResponse(503, "database_unavailable", "Database unavailable"));
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Protokoll" });
+    const signOut = screen.getByRole("button", { name: "Abmelden" });
+
+    await user.click(signOut);
+    await screen.findByRole("alert");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(signOut).toHaveFocus();
+
+    await user.click(signOut);
+    await screen.findByRole("alert");
+    await user.click(screen.getByRole("button", { name: "Meldung schließen" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(signOut).toHaveFocus();
+  });
+
+  it("a refused sign-out reads the session again, so the retry carries the current CSRF token", async () => {
+    let reads = 0;
+    const calls = stubFetch({
+      "GET /api/v1/auth/session": () => jsonResponse({ ...SESSION, csrf_token: reads++ === 0 ? "csrf-stale" : "csrf-fresh" }),
+      "GET /api/v1/info": () => jsonResponse(INFO),
+      "DELETE /api/v1/auth/session": (init) =>
+        new Headers(init.headers).get(CSRF_HEADER) === "csrf-fresh" ? new Response(null, { status: 204 }) : problemResponse(403, "csrf_failed", "CSRF check failed"),
+    });
+    const user = userEvent.setup();
+    renderApp("/protocol");
+    await screen.findByRole("heading", { name: "Protokoll" });
+
+    await user.click(screen.getByRole("button", { name: "Abmelden" }));
+    await screen.findByRole("alert");
+    await waitFor(() => expect(calls.filter((call) => call.method === "GET" && call.path === "/api/v1/auth/session")).toHaveLength(2));
+
+    await user.click(screen.getByRole("button", { name: "Abmelden" }));
+    expect(await screen.findByLabelText("API-Token")).toBeInTheDocument();
+  });
+
+  it("a sign-out that got no answer does not ask the unreachable server for the session", async () => {
+    const { calls } = shell(() => Promise.reject(new TypeError("Failed to fetch")));
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Protokoll" });
+    await user.click(screen.getByRole("button", { name: "Abmelden" }));
+    await screen.findByRole("alert");
+    expect(calls.filter((call) => call.method === "GET" && call.path === "/api/v1/auth/session")).toHaveLength(1);
   });
 
   it("ends the session here when the server says it is already gone (401)", async () => {

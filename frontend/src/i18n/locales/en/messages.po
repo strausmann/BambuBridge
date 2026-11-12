@@ -152,6 +152,10 @@ msgid "Helles Design"
 msgstr "Light theme"
 
 #: src/shell/BootstrapKeyCreated.tsx
+msgid "Hier bleiben"
+msgstr "Stay here"
+
+#: src/shell/BootstrapKeyCreated.tsx
 msgid "Kopieren fehlgeschlagen. Markiere das Token und kopiere es von Hand."
 msgstr "Copy failed. Select the token and copy it by hand."
 
@@ -188,6 +192,10 @@ msgstr "Check the connection and try again."
 msgid "Seite nicht gefunden"
 msgstr "Page not found"
 
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Seite verlassen? Das Token wird danach nicht mehr angezeigt."
+msgstr "Leave this page? The token will not be shown again."
+
 #: src/shell/Sidebar.tsx
 msgid "Server nicht erreichbar"
 msgstr "Server unreachable"
@@ -203,6 +211,10 @@ msgstr "Copy token"
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Token verloren? Auf dem Server legt <0>bambubridge admin create-key</0> ein neues an."
 msgstr "Lost the token? On the server, <0>bambubridge admin create-key</0> creates a new one."
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Trotzdem verlassen"
+msgstr "Leave anyway"
 
 #: src/pages/placeholders.tsx
 #: src/shell/nav.tsx

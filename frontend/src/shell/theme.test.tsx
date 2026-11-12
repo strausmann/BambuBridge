@@ -104,6 +104,28 @@ describe("theme-color", () => {
     expect(metas().map((meta) => meta.content)).toEqual([themes.light.bg, themes.dark.bg]);
   });
 
+  it("theme-init.js sets the bars for a stored light or dark theme before the app loads, with the token colours", () => {
+    const source = readFileSync(resolve(__dirname, "..", "..", "public", "theme-init.js"), "utf8");
+    const run = (stored: string | null) => {
+      metas().forEach((meta) => meta.remove());
+      for (const scheme of ["light", "dark"] as const) {
+        const meta = document.createElement("meta");
+        meta.name = "theme-color";
+        meta.media = `(prefers-color-scheme: ${scheme})`;
+        meta.content = themes[scheme].bg;
+        document.head.append(meta);
+      }
+      localStorage.clear();
+      if (stored !== null) localStorage.setItem(THEME_KEY, stored);
+      new Function(source)();
+      return metas().map((meta) => meta.content.toUpperCase());
+    };
+    expect(run("dark")).toEqual([themes.dark.bg.toUpperCase(), themes.dark.bg.toUpperCase()]);
+    expect(run("light")).toEqual([themes.light.bg.toUpperCase(), themes.light.bg.toUpperCase()]);
+    expect(run(null)).toEqual([themes.light.bg.toUpperCase(), themes.dark.bg.toUpperCase()]);
+    expect(run("sepia")).toEqual([themes.light.bg.toUpperCase(), themes.dark.bg.toUpperCase()]);
+  });
+
   it("does nothing without the meta elements", () => {
     expect(() => applyTheme("dark")).not.toThrow();
   });

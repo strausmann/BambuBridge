@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { apiFetch, setCsrfToken } from "../api/client";
 import { INFO, jsonResponse, problemResponse, renderApp, SESSION, stubFetch, testQueryClient } from "../test-utils";
 import { createQueryClient, shouldRetry } from "./queryClient";
-import { safeRedirect } from "./router";
+import { createFirstAdminToken, safeRedirect } from "./router";
 import { installAuthGuard, SESSION_KEY } from "./session";
 import { ApiError } from "../api/client";
 
@@ -107,6 +107,42 @@ describe("safeRedirect", () => {
     expect(safeRedirect("/settings/access?tab=1")).toBe("/settings/access?tab=1");
   });
 
+  it("returns the normalised path, so what was checked is what is used", () => {
+    expect(safeRedirect("/settings/../providers")).toBe("/providers");
+    expect(safeRedirect("/providers#top")).toBe("/providers#top");
+    expect(safeRedirect("/apiary")).toBe("/apiary");
+    expect(safeRedirect("/docs-of-mine")).toBe("/docs-of-mine");
+  });
+
+  it("rejects dot segments and backslashes that resolve to //host, in every spelling", () => {
+    for (const value of [
+      "/..//host/p",
+      "/.//host/p",
+      "/x/..//host/p",
+      "/x/../..//host/p",
+      "/.\\/host/p",
+      "/..\\/host/p",
+      "/\\host/p",
+      "/x\\..\\..\\/host",
+      "/%2e%2e//host/p",
+      "/%2E%2E//host/p",
+      "/.%2e//host/p",
+      "/%2e//host/p",
+      "/%5chost/p",
+      "/%5Chost/p",
+      "/x/%5c/host",
+      "/a\\b",
+    ]) {
+      expect(safeRedirect(value), value).toBeUndefined();
+    }
+  });
+
+  it("rejects paths the server owns and the public pages behind dot segments", () => {
+    for (const value of ["/api", "/api/", "/api/v1/info", "/auth/continue", "/auth", "/docs", "/docs/", "/docs/oauth2-redirect", "/openapi.json", "/x/../api/v1/info", "/%2e/auth/x", "/x/../sign-in", "/x/../bootstrap?a=1", "/sign-in#x"]) {
+      expect(safeRedirect(value), value).toBeUndefined();
+    }
+  });
+
   it("rejects other hosts, schemes, control characters and the public pages", () => {
     for (const value of ["//evil.example", "/\\evil.example", "https://evil.example", "javascript:alert(1)", "/\t/evil.example", "/sign-in", "/sign-in?redirect=/x", "/bootstrap", "", 7, null, undefined]) {
       expect(safeRedirect(value), String(value)).toBeUndefined();
@@ -121,5 +157,21 @@ describe("query client", () => {
     expect(shouldRetry(1, new ApiError(0, "network_error", "x"))).toBe(true);
     expect(shouldRetry(2, new ApiError(0, "network_error", "x"))).toBe(false);
     expect(createQueryClient().getDefaultOptions().queries?.staleTime).toBe(15_000);
+  });
+});
+
+describe("createFirstAdminToken", () => {
+  it("returns the token of the answer", async () => {
+    stubFetch({ "POST /api/v1/admin/api-keys": () => jsonResponse({ token: "bb_new" }, { status: 201 }) });
+    await expect(createFirstAdminToken("key")).resolves.toBe("bb_new");
+  });
+
+  it("fails when the answer holds no token, instead of showing an empty one", async () => {
+    for (const body of [{}, { token: "" }, { token: 7 }, { token: null }, null, []]) {
+      stubFetch({ "POST /api/v1/admin/api-keys": () => jsonResponse(body, { status: 201 }) });
+      await expect(createFirstAdminToken("key"), JSON.stringify(body)).rejects.toMatchObject({ code: "unexpected_content" });
+    }
+    stubFetch({ "POST /api/v1/admin/api-keys": () => new Response("", { status: 201 }) });
+    await expect(createFirstAdminToken("key")).rejects.toMatchObject({ code: "unexpected_content" });
   });
 });

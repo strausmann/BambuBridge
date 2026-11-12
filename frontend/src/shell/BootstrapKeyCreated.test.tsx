@@ -79,10 +79,10 @@ describe("first start", () => {
       "Der Server ist nicht erreichbar.",
       "Das Token konnte nicht angelegt werden.",
     ]) {
+      await user.clear(field);
       await user.type(field, "k");
       await user.click(screen.getByRole("button", { name: "Admin-Token anlegen" }));
       await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(expected));
-      expect(field).toHaveValue("");
     }
     expect(screen.queryByTestId("admin-token")).not.toBeInTheDocument();
   });
@@ -175,5 +175,94 @@ describe("first start", () => {
     stubFetch({ "GET /api/v1/auth/session": signedOut });
     renderApp("/bootstrap");
     expect(await screen.findByLabelText("Bootstrap-Schlüssel")).toHaveAttribute("autocomplete", "off");
+  });
+
+  async function tokenShown(sessionPost: () => Response = () => problemResponse(503, "database_unavailable", "Database unavailable")) {
+    stubFetch({
+      "GET /api/v1/auth/session": signedOut,
+      "POST /api/v1/admin/api-keys": () => jsonResponse(CREATED, { status: 201 }),
+      "POST /api/v1/auth/session": sessionPost,
+    });
+    const user = userEvent.setup();
+    // Reached through the in-app link, so "Back" stays inside the app.
+    const view = renderApp("/sign-in");
+    await user.click(await screen.findByRole("link", { name: "Erstes Admin-Token anlegen" }));
+    await user.type(await screen.findByLabelText("Bootstrap-Schlüssel"), "k");
+    await user.click(screen.getByRole("button", { name: "Admin-Token anlegen" }));
+    await screen.findByTestId("admin-token");
+    return { user, ...view };
+  }
+
+  it("asks before Back or an in-app link leaves the unused token, and staying keeps it", async () => {
+    const { user, router } = await tokenShown();
+
+    // (Back is asked the same way by the browser history; the browser tests cover it. The
+    // in-memory history of this test only asks for navigations.)
+    void router.navigate({ to: "/sign-in", search: { redirect: undefined } });
+    const question = await screen.findByRole("alertdialog");
+    expect(question).toHaveTextContent("Das Token wird danach nicht mehr angezeigt.");
+    expect(screen.getByTestId("admin-token")).toHaveTextContent("bb_abcd_plaintext-shown-once");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Hier bleiben" })).toHaveFocus());
+
+    await user.click(screen.getByRole("button", { name: "Hier bleiben" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/bootstrap");
+    expect(screen.getByTestId("admin-token")).toHaveTextContent("bb_abcd_plaintext-shown-once");
+
+    void router.navigate({ to: "/sign-in", search: { redirect: undefined } });
+    await screen.findByRole("alertdialog");
+    await user.click(screen.getByRole("button", { name: "Trotzdem verlassen" }));
+    expect(await screen.findByLabelText("API-Token")).toBeInTheDocument();
+    expect(screen.queryByTestId("admin-token")).not.toBeInTheDocument();
+  });
+
+  it("does not ask before the token exists, nor when it was used to sign in", async () => {
+    stubFetch({ "GET /api/v1/auth/session": signedOut });
+    const user = userEvent.setup();
+    renderApp("/bootstrap");
+    await user.click(await screen.findByRole("link", { name: "Zurück zur Anmeldung" }));
+    expect(await screen.findByLabelText("API-Token")).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("after a failed sign-in with the new token the focus is back on the continue button", async () => {
+    const { user } = await tokenShown();
+    const proceed = screen.getByRole("button", { name: "Weiter zur Oberfläche" });
+    await user.click(proceed);
+    await screen.findByRole("alert");
+    await waitFor(() => expect(proceed).toHaveFocus());
+  });
+
+  it("keeps the typed bootstrap key unless the server refused it", async () => {
+    const answers: (() => Response | Promise<Response>)[] = [
+      () => Promise.reject(new TypeError("Failed to fetch")),
+      () => problemResponse(429, "rate_limited", "Too many attempts"),
+      () => problemResponse(503, "database_unavailable", "Database unavailable"),
+      () => problemResponse(401, "invalid_bootstrap_key", "Invalid bootstrap key"),
+    ];
+    stubFetch({ "GET /api/v1/auth/session": signedOut, "POST /api/v1/admin/api-keys": () => answers.shift()!() });
+    const user = userEvent.setup();
+    renderApp("/bootstrap");
+    const field = await screen.findByLabelText("Bootstrap-Schlüssel");
+    await user.type(field, "typed-once");
+    for (const expected of ["Der Server ist nicht erreichbar.", "Zu viele Versuche.", "Das Token konnte nicht angelegt werden."]) {
+      await user.click(screen.getByRole("button", { name: "Admin-Token anlegen" }));
+      await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(expected));
+      expect(field).toHaveValue("typed-once");
+    }
+    await user.click(screen.getByRole("button", { name: "Admin-Token anlegen" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Der Bootstrap-Schlüssel wurde nicht akzeptiert."));
+    expect(field).toHaveValue("");
+    await waitFor(() => expect(field).toHaveFocus());
+  });
+
+  it("shows the error state when the server's answer holds no token", async () => {
+    stubFetch({ "GET /api/v1/auth/session": signedOut, "POST /api/v1/admin/api-keys": () => jsonResponse({ ...CREATED, token: "" }, { status: 201 }) });
+    const user = userEvent.setup();
+    renderApp("/bootstrap");
+    await user.type(await screen.findByLabelText("Bootstrap-Schlüssel"), "k");
+    await user.click(screen.getByRole("button", { name: "Admin-Token anlegen" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Das Token konnte nicht angelegt werden.");
+    expect(screen.queryByTestId("admin-token")).not.toBeInTheDocument();
   });
 });

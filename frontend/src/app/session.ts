@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useCallback, useEffect } from "react";
-import { apiFetch, AuthRequiredError, setCsrfToken, setOnAuthRequired } from "../api/client";
+import { ApiError, apiFetch, AuthRequiredError, setCsrfToken, setOnAuthRequired } from "../api/client";
 import type { components } from "../api/schema.gen";
 
 export type InfoData = components["schemas"]["Info"];
@@ -120,6 +120,9 @@ export function useSession(): Session {
     // Ending it here alone would show "signed out" above a cookie that still works.
     onError: (error) => {
       if (error instanceof AuthRequiredError) endSession(queryClient);
+      // The server answered and refused (for instance a CSRF token that went stale): read the
+      // session again, so a second attempt carries the current token. No answer, no question.
+      else if (error instanceof ApiError && error.status !== 0) void queryClient.invalidateQueries({ queryKey: SESSION_KEY });
     },
   });
 

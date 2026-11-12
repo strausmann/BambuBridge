@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Button, type ButtonProps } from "react-aria-components";
 
 /** How long a request may take before the button says it is still working. */
 export const BUSY_DELAY_MS = 300;
@@ -20,19 +21,59 @@ export function useDelayedBusy(busy: boolean, delay = BUSY_DELAY_MS): boolean {
 }
 
 /**
- * Goes next to a button's label, which stays as it is. A turning ring, or an ellipsis for people
- * who asked for reduced motion. Decorative: the button is disabled while busy and the result is
- * announced by the screen that follows or by an error line.
+ * A button's label with room for the busy mark. The label stays as it is; the mark (a turning
+ * ring, or an ellipsis for people who asked for reduced motion) hangs beside it, out of the
+ * flow, so its appearing cannot move the text. Decorative: the button carries `aria-busy`.
  */
-export function BusyMark({ show }: { show: boolean }) {
-  if (!show) return null;
+function BusyLabel({ show, children }: { show: boolean; children: ReactNode }) {
   return (
-    <span data-testid="busy-mark" aria-hidden="true" className="inline-flex">
-      <svg viewBox="0 0 16 16" width="16" height="16" className="busy-ring motion-reduce:hidden">
-        <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.35" strokeWidth="2" />
-        <path d="M8 2a6 6 0 0 1 6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      </svg>
-      <span className="hidden motion-reduce:inline">…</span>
+    <span className="relative">
+      {children}
+      {show ? (
+        <span data-testid="busy-mark" aria-hidden="true" className="absolute top-1/2 left-full ml-2 inline-flex -translate-y-1/2">
+          <svg viewBox="0 0 16 16" width="16" height="16" className="busy-ring motion-reduce:hidden">
+            <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.35" strokeWidth="2" />
+            <path d="M8 2a6 6 0 0 1 6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+          <span className="hidden motion-reduce:inline">…</span>
+        </span>
+      ) : null}
     </span>
+  );
+}
+
+interface BusyButtonProps extends Omit<ButtonProps, "children"> {
+  /** This button's request is running. */
+  busy: boolean;
+  children: ReactNode;
+  ref?: RefObject<HTMLButtonElement | null>;
+}
+
+/**
+ * A button that says when its request is running: `aria-busy` at once, the mark beside the label
+ * once the request takes longer than a moment. The button library does not pass `aria-busy`
+ * through, so it is set on the element.
+ */
+export function BusyButton({ busy, children, ref, ...props }: BusyButtonProps) {
+  const own = useRef<HTMLButtonElement>(null);
+  const slow = useDelayedBusy(busy);
+
+  useEffect(() => {
+    const button = own.current;
+    if (!button) return;
+    if (busy) button.setAttribute("aria-busy", "true");
+    else button.removeAttribute("aria-busy");
+  }, [busy]);
+
+  return (
+    <Button
+      {...props}
+      ref={(element) => {
+        own.current = element;
+        if (ref) ref.current = element;
+      }}
+    >
+      <BusyLabel show={slow}>{children}</BusyLabel>
+    </Button>
   );
 }
