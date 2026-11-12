@@ -37,12 +37,25 @@ def test_generated_tokens_are_unique_and_use_base62():
         assert set(value.removeprefix(TOKEN_PREFIX)) <= alphabet
 
 
+@pytest.mark.production_bcrypt_cost
 def test_hash_uses_bcrypt_cost_12_and_verifies():
+    """Pins the shipped cost: the suite lowers it everywhere else (``cheap_bcrypt``)."""
+    assert tokens.BCRYPT_ROUNDS == 12
     plaintext, _ = generate_token()
     hashed = hash_token(plaintext)
     assert hashed.startswith("$2b$12$")
     assert plaintext not in hashed
     assert bcrypt.checkpw(plaintext.encode(), hashed.encode())
+
+
+@pytest.mark.production_bcrypt_cost
+def test_dummy_hash_uses_bcrypt_cost_12():
+    """The dummy check for an unknown prefix must cost as much as a real one."""
+    assert tokens._dummy_hash().startswith("$2b$12$")
+
+
+def test_suite_lowers_bcrypt_cost_outside_marked_tests():
+    assert hash_token(generate_token()[0]).startswith("$2b$04$")
 
 
 async def test_verify_token_accepts_match_and_rejects_other():

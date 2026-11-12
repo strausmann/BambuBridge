@@ -188,6 +188,7 @@ async def test_created_token_is_owned_by_the_caller(
     assert created.owner_user_id == caller.owner_user_id
 
 
+@pytest.mark.production_bcrypt_cost
 async def test_hash_is_bcrypt_in_database(admin_client: httpx.AsyncClient, engine: AsyncEngine):
     r = await admin_client.post(BASE, json={"name": "x", "scope": "read"})
     row = await _key_row(engine, r.json()["token"])
@@ -400,6 +401,7 @@ async def test_valid_uncached_token_passes_while_its_prefix_is_over_the_failure_
     assert (await client.get(BASE, headers={KEY_HEADER: real})).status_code == 200
 
 
+@pytest.mark.production_bcrypt_cost
 async def test_unknown_prefix_runs_a_dummy_bcrypt_check(
     client: httpx.AsyncClient, admin_token: str, monkeypatch: pytest.MonkeyPatch
 ):
