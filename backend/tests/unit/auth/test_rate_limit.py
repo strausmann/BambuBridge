@@ -84,20 +84,3 @@ def test_limit_must_be_positive():
     limiter = SlidingWindowRateLimiter(clock=FakeClock())
     with pytest.raises(ValueError, match="limit"):
         limiter.hit("k", limit=0)
-
-
-def test_retry_after_peeks_without_recording():
-    clock = FakeClock()
-    limiter = SlidingWindowRateLimiter(clock=clock)
-    assert limiter.retry_after("k", limit=2) == 0
-    limiter.hit("k", limit=2)
-    clock.now += 10
-    limiter.hit("k", limit=2)
-    assert limiter.retry_after("k", limit=2) == 50
-    assert limiter.retry_after("k", limit=2) == 50  # peeking records nothing
-    assert limiter.retry_after("k", limit=1) == 60  # the newest hit decides for limit 1
-    assert limiter.retry_after("k", limit=3) == 0
-    clock.now += 50
-    assert limiter.retry_after("k", limit=2) == 0
-    with pytest.raises(ValueError, match="limit"):
-        limiter.retry_after("k", limit=0)

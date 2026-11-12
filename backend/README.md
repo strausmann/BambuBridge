@@ -54,11 +54,11 @@ The first admin token comes from one of two places:
 Each token has a sliding 60-second rate limit (`rate_limit_per_minute`, default 60); excess
 requests get 429 with `Retry-After`. Failed checks (wrong token bodies) have a separate
 budget per presented prefix (10 per minute, then 429; the same for unknown prefixes, so the
-answer does not reveal whether a prefix exists). While a prefix is over that budget, requests
-for it get 429 without any bcrypt work; only a token verified within the last five minutes
-still gets through, so an uncached correct token waits for the window too. Failed checks never
-use up the token's own request budget. At most four bcrypt checks run at once. The
-counters live in process memory: they are per process and start fresh after a restart.
+answer does not reveal whether a prefix exists). The budget changes the status code of a
+failed check, not its cost: every attempt is checked with bcrypt, so a correct token is always
+accepted, even while its prefix is under attack. At most four bcrypt checks run at once; further
+requests queue. Protecting CPU against request floods is the job of the reverse proxy in front of
+BambuBridge. The counters live in process memory: they are per process and start fresh after a restart.
 `last_used_at` is updated at most once per minute.
 
 Errors are problem details (`application/problem+json`) with a stable `error_code`, for example
