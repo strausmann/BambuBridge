@@ -130,6 +130,7 @@ requirements.txt config.example.yaml README.md LICENSE .gitignore`.
 bereits entfernt.
 
 **Lizenz-Entscheidung (wichtig):**
+> **Überholt (2026-11-12):** Das Projekt steht seit dem Lizenz-PR unter **AGPL-3.0-or-later** (wie Label Printer Hub), mit CLA (`CLA.md`). Die folgenden MIT-Überlegungen sind der historische Stand.
 - Der **App-Code ist Eigenentwicklung** → kann **MIT** sein. Empfehlung: neues Repo **MIT**,
   `LICENSE` hinzufügen.
 - **Nicht** mitliefern: aus AGPL-Profilen **generierte** Daten (`catalog.json`) oder verbatim
@@ -146,7 +147,7 @@ bereits entfernt.
 bambu-spoolman-bridge/
 ├── app/  web/  scripts/  docs/  analysis/
 ├── Dockerfile  docker-compose.yml  requirements.txt  config.example.yaml
-├── LICENSE (MIT)  README.md (aus README.md + HANDOVER-Auszug)
+├── LICENSE (AGPL-3.0-or-later)  README.md (aus README.md + HANDOVER-Auszug)
 ```
 
 ---

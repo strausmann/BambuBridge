@@ -658,10 +658,12 @@ druckt auf dem **Brother**-Etikettendrucker (PT-/QL-Serie) ein Label.
 
 ### 11.1 Lizenzprüfung (Stand der Recherche)
 
+> **Überholt (2026-11-12):** BambuBridge selbst ist jetzt **AGPL-3.0-or-later**; die Empfehlung „eigene Beiträge MIT halten“ unten gilt nicht mehr. Ein Fork von `drndos/openspoolman` (MIT) bliebe lizenzrechtlich möglich (MIT-Code darf in ein AGPL-Werk einfließen), ist aber nicht der gewählte Weg.
+
 | Projekt | Lizenz | Konsequenz für uns |
 |---------|--------|--------------------|
 | **`drndos/openspoolman`** | **MIT** ✅ | **Idealer Fork-Basis-Kandidat** — frei forkbar, einfacher Upstream-PR, kombinierbar mit MIT-Code. |
-| **`strausmann/Label-Printer-Hub`** | **MIT** ✅ (deins) | frei integrierbar. |
+| **`strausmann/Label-Printer-Hub`** | **AGPL-3.0-or-later** (bis 1.0.3 MIT) ✅ (deins) | frei integrierbar. |
 | **`MrBambuSpoolPal`** | **GPL-3.0** ⚠️ | Code-Übernahme erzwingt GPL-3.0. → **Nur Interop** (gleiche Spoolman-Felder §4.2), **keinen Code linken**; App bleibt eigenständig. |
 | **`spuder/OpenSpool`** | **Custom/Mehrfach** (HW: OSHWA; SW: `LICENSE-Software.txt`) ⚠️ | **Format/Protokoll** offen nutzbar; vor Übernahme von **Firmware-Code** die Custom-SW-Lizenz genau lesen. |
 | **Bambu `libbambu_networking`** | AGPLv3-Streit (closed) ⛔ | nicht einbinden; nur RE-Erkenntnisse aus dem Spec-Dokument nutzen. |

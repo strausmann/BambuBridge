@@ -1,5 +1,8 @@
 # Bambu ↔ Spoolman Bridge (Prototype)
 
+[![CLA assistant](https://cla-assistant.io/readme/badge/strausmann/BambuBridge)](https://cla-assistant.io/strausmann/BambuBridge)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
 Local Docker service that ingests AMS/RFID/consumption telemetry from Bambu Lab
 printers via **LAN MQTT** and syncs it to **Spoolman**, with an onboarding PWA
 (QR quick-bind + Web NFC for third-party tags) and an optional **Label-Printer-Hub**
@@ -122,11 +125,13 @@ Web NFC/camera — front it with a reverse proxy (concept §12).
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE). Chosen to ease upstreaming into `drndos/openspoolman`
-(MIT). Note: filament presets generated from BambuStudio/OrcaSlicer profiles are
-**AGPL-3.0** at the source and are produced locally (not redistributed here);
-SpoolmanDB data is MIT and fetched at runtime. See the third-party notes in `LICENSE`
-and concept §11.
+BambuBridge is licensed under the **GNU Affero General Public License, version 3 or later** (`AGPL-3.0-or-later`) — see [`LICENSE`](LICENSE).
+
+Release 0.1.0 was published under MIT; from the next release on the project is AGPL-3.0-or-later. Anyone who received 0.1.0 keeps the MIT terms for that release.
+
+Note: filament presets generated from BambuStudio/OrcaSlicer profiles are **AGPL-3.0** at the source and are produced locally (not redistributed here); SpoolmanDB data is MIT and fetched at runtime. The closed-source Bambu Lab network plugin (`libbambu_networking.*`) is neither included nor redistributed. See concept §11.
+
+Contributions require agreement to the [Contributor License Agreement](CLA.md) (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ## Repository layout
 
