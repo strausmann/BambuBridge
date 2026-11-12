@@ -11,6 +11,10 @@ msgstr ""
 msgid "Abmelden"
 msgstr "Abmelden"
 
+#: src/shell/TopBar.tsx
+msgid "Abmelden fehlgeschlagen, die Sitzung ist noch offen"
+msgstr "Abmelden fehlgeschlagen, die Sitzung ist noch offen"
+
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Admin-Token"
 msgstr "Admin-Token"
@@ -163,6 +167,10 @@ msgstr "Lädt …"
 msgid "Melde dich mit einem API-Token an."
 msgstr "Melde dich mit einem API-Token an."
 
+#: src/shell/TopBar.tsx
+msgid "Meldung schließen"
+msgstr "Meldung schließen"
+
 #: src/shell/SignIn.tsx
 msgid "Mit einmaliger Anmeldung (SSO) fortfahren"
 msgstr "Mit einmaliger Anmeldung (SSO) fortfahren"
@@ -191,6 +199,10 @@ msgstr "Systemdesign"
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Token kopieren"
 msgstr "Token kopieren"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Token verloren? Auf dem Server legt <0>bambubridge admin create-key</0> ein neues an."
+msgstr "Token verloren? Auf dem Server legt <0>bambubridge admin create-key</0> ein neues an."
 
 #: src/pages/placeholders.tsx
 #: src/shell/nav.tsx

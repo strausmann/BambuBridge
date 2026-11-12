@@ -1,2 +1,7 @@
+# pnpm installs a release only after it has been public for a while (minimumReleaseAge), so a
+# freshly published, possibly compromised version does not reach a lockfile. This exact version
+# was younger than that when the lockfile was written and is pinned in package.json; pnpm added
+# the exclusion itself. Remove the entry with the next update of @testing-library/user-event,
+# or once `pnpm install --frozen-lockfile` passes without it.
 minimumReleaseAgeExclude:
   - '@testing-library/user-event@14.6.10'

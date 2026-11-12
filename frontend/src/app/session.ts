@@ -37,6 +37,10 @@ export interface Session {
   signIn: (token: string) => Promise<void>;
   /** Ask the server's identity providers (trusted single sign-on headers). */
   signInWithSso: () => Promise<void>;
+  /**
+   * Ends the session on the server, then here. Rejects when the server did not confirm it (no
+   * answer, 5xx, a refusal): the session is then still open and the shell stays as it is.
+   */
   signOut: () => Promise<void>;
 }
 
@@ -100,6 +104,8 @@ export function useSession(): Session {
     // The sign-in answer already carries the session (user, scope, CSRF token).
     mutationFn: (token: string | null) =>
       apiFetch<SessionData>(SESSION_PATH, { method: "POST", skipAuthHandler: true, ...(token === null ? {} : { json: { token } }) }),
+    // The variables are the token: nothing keeps the mutation once it settled (see `openSession`).
+    gcTime: 0,
     onSuccess: (next) => {
       resetUserData(queryClient);
       storeSession(queryClient, next);
@@ -108,15 +114,29 @@ export function useSession(): Session {
 
   const close = useMutation({
     mutationFn: () => apiFetch<void>(SESSION_PATH, { method: "DELETE", skipAuthHandler: true }),
-    // A failed sign-out (already expired, server gone) still ends the session here.
-    onSettled: () => endSession(queryClient),
+    // Confirmed by the server (204), or already gone there (401, login redirect): over here too.
+    onSuccess: () => endSession(queryClient),
+    // Anything else (no answer, 5xx, a refused request) leaves the session open on the server.
+    // Ending it here alone would show "signed out" above a cookie that still works.
+    onError: (error) => {
+      if (error instanceof AuthRequiredError) endSession(queryClient);
+    },
   });
 
-  const { mutateAsync: openAsync } = open;
+  const { mutateAsync: openAsync, reset: resetOpen } = open;
   const { mutateAsync: closeAsync } = close;
-  const signIn = useCallback((token: string) => openAsync(token).then(() => undefined), [openAsync]);
-  const signInWithSso = useCallback(() => openAsync(null).then(() => undefined), [openAsync]);
-  const signOut = useCallback(() => closeAsync().then(() => undefined, () => undefined), [closeAsync]);
+  // `reset` detaches this hook from the settled mutation, so `gcTime: 0` removes it, and with it
+  // the token, from the mutation cache; an observed mutation is never collected.
+  const openSession = useCallback((token: string | null) => openAsync(token).then(() => undefined).finally(resetOpen), [openAsync, resetOpen]);
+  const signIn = useCallback((token: string) => openSession(token), [openSession]);
+  const signInWithSso = useCallback(() => openSession(null), [openSession]);
+  const signOut = useCallback(
+    () =>
+      closeAsync().catch((error: unknown) => {
+        if (!(error instanceof AuthRequiredError)) throw error;
+      }),
+    [closeAsync],
+  );
 
   return {
     isPending: query.isPending,

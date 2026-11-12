@@ -93,6 +93,12 @@ export const EDGE_PAIRS: readonly (readonly [edge: Role, surface: Role])[] = [
   ["line-strong", "bg"], ["line-strong", "surface"], ["line-strong", "sunken"],
 ];
 
+/**
+ * The theme switch marks its chosen option with a raised thumb. Thumb and track differ too little
+ * to carry the state alone, so the thumb has a ring; the ring must reach 3:1 on both sides.
+ */
+export const THUMB_RING = { edge: "line-strong", track: "sunken", thumb: "surface" } as const satisfies Record<string, Role>;
+
 function luminance(hex: string): number {
   const channels = [1, 3, 5].map((i) => {
     const c = parseInt(hex.slice(i, i + 2), 16) / 255;

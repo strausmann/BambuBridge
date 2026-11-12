@@ -1,3 +1,5 @@
+import { themes } from "../design/tokens";
+
 export type ThemeChoice = "system" | "light" | "dark";
 
 export const THEME_KEY = "bb.theme";
@@ -24,11 +26,23 @@ export function storeTheme(choice: ThemeChoice): void {
   }
 }
 
+/**
+ * The browser paints its own bars (status bar, address bar) in the `theme-color`. index.html has
+ * one per colour scheme of the device; a chosen theme overrides both, `system` puts them back.
+ */
+function applyThemeColor(choice: ThemeChoice): void {
+  for (const meta of document.head.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
+    const scheme = meta.media.includes("dark") ? "dark" : "light";
+    meta.content = themes[choice === "system" ? scheme : choice].bg;
+  }
+}
+
 /** `system` removes the attribute so `prefers-color-scheme` decides (tokens.css). */
 export function applyTheme(choice: ThemeChoice): void {
   const root = document.documentElement;
   if (choice === "system") root.removeAttribute("data-theme");
   else root.setAttribute("data-theme", choice);
+  applyThemeColor(choice);
 }
 
 type TransitionDocument = Document & { startViewTransition?: (update: () => void) => unknown };

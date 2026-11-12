@@ -3,7 +3,16 @@
 @import "./design/tokens.css";
 
 /* Short viewports (a phone in landscape, or any phone with the on-screen keyboard open). */
-@custom-variant short (@media (max-height: 560px));
+/* `[data-short]` is the same state measured by shell/useShortViewport.ts, for browsers whose
+   layout viewport does not shrink with the keyboard (iOS Safari). Keep 560 px equal there. */
+@custom-variant short {
+  @media (max-height: 560px) {
+    @slot;
+  }
+  &:where([data-short], [data-short] *) {
+    @slot;
+  }
+}
 
 @layer base {
   html {
@@ -36,6 +45,12 @@
   [role="button"] {
     -webkit-user-select: none;
     user-select: none;
+  }
+  /* Navigation entries are controls: a long press must not select their label or open the link callout. */
+  nav a {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
   }
   input,
   textarea,
@@ -75,6 +90,17 @@
     transform: scale(0.97);
   }
 
+  /* Busy mark in a button (shell/Busy.tsx). Constant motion: linear. With reduced motion the
+     ring is replaced by an ellipsis instead of being stopped mid-turn. */
+  .busy-ring {
+    animation: busy-turn 700ms linear infinite;
+  }
+  @keyframes busy-turn {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
   /* The logo exists in a light and a dark drawing; the theme (system or chosen) picks one. */
   .logo-dark {
     display: none;
@@ -102,5 +128,5 @@
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation-duration: 200ms;
-  animation-timing-function: ease;
+  animation-timing-function: var(--ease-out);
 }

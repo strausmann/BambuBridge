@@ -185,3 +185,114 @@ test.describe("narrow and short viewports", () => {
     await expect(field).toBeInViewport({ ratio: 1 });
   });
 });
+
+/** Distance in px between the text of a control and the control's own border box, smallest side. */
+async function labelInset(page: Page, name: string): Promise<number> {
+  return page.getByRole("button", { name }).evaluate((button) => {
+    const range = document.createRange();
+    range.selectNodeContents(button);
+    const text = range.getBoundingClientRect();
+    const box = button.getBoundingClientRect();
+    return Math.min(text.left - box.left, box.right - text.right, text.top - box.top, box.bottom - text.bottom);
+  });
+}
+
+test.describe("fix round 1", () => {
+  for (const width of [320, 375]) {
+    test(`the single sign-on label keeps clear of the button's border at ${width} px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 780 });
+      await page.goto(SIGN_IN);
+      const name = "Mit einmaliger Anmeldung (SSO) fortfahren";
+      await expect(page.getByRole("button", { name })).toBeVisible();
+      expect(await labelInset(page, name)).toBeGreaterThanOrEqual(8);
+      expect(await page.getByRole("button", { name }).evaluate((b) => b.scrollHeight <= b.clientHeight && b.scrollWidth <= b.clientWidth)).toBe(true);
+      expect(await smallTargets(page)).toEqual([]);
+    });
+  }
+
+  test("a long press on a navigation entry selects no text and opens no link callout", async ({ page }) => {
+    const unselectable = () =>
+      page.evaluate(() =>
+        [...document.querySelectorAll<HTMLElement>("nav a")]
+          .filter((link) => link.getBoundingClientRect().width > 0)
+          .map((link) => {
+            const style = getComputedStyle(link);
+            return style.userSelect === "none" || style.webkitUserSelect === "none";
+          }),
+      );
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(SIGNED_IN);
+    await expect(page.locator("aside")).toBeVisible();
+    expect(await unselectable()).toEqual([true, true, true, true]);
+    await page.setViewportSize({ width: 375, height: 780 });
+    await expect(page.locator("[data-tabbar]")).toBeVisible();
+    expect(await unselectable()).toEqual([true, true, true, true]);
+  });
+
+  test("iOS: a tall layout viewport with a short visual viewport still puts the sign-in at the top", async ({ page }) => {
+    // iOS Safari keeps the layout viewport when the keyboard opens; only window.visualViewport shrinks.
+    await page.addInitScript(() => {
+      const fake = Object.assign(new EventTarget(), { height: 320, width: 390, offsetTop: 0, offsetLeft: 0, pageTop: 0, pageLeft: 0, scale: 1 });
+      Object.defineProperty(window, "visualViewport", { value: fake, configurable: true });
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(SIGN_IN);
+    await expect(page.locator("main[data-short]")).toBeVisible();
+    const logo = (await page.locator('[data-logo="lockup"]').boundingBox())!;
+    expect(logo.y).toBeLessThan(40);
+  });
+
+  test("without the keyboard the same phone centres the sign-in", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(SIGN_IN);
+    await expect(page.getByRole("heading", { name: "Anmelden" })).toBeVisible();
+    await expect(page.locator("main[data-short]")).toHaveCount(0);
+    const logo = (await page.locator('[data-logo="lockup"]').boundingBox())!;
+    expect(logo.y).toBeGreaterThan(40);
+  });
+
+  test("a failed sign-out keeps the shell and shows the message inside the phone's width", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 780 });
+    await page.goto(`${SIGNED_IN}&signout=fail`);
+    await page.getByRole("button", { name: "Abmelden" }).click();
+    const alert = page.getByRole("alert");
+    await expect(alert).toHaveText("Abmelden fehlgeschlagen, die Sitzung ist noch offen");
+    await expect(alert).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole("heading", { name: "Übersicht" })).toBeVisible();
+    // It sits between the content's heading and the tab bar and covers neither.
+    const box = (await alert.boundingBox())!;
+    const heading = (await page.getByRole("heading", { name: "Übersicht" }).boundingBox())!;
+    const bar = (await page.locator("[data-tabbar]").boundingBox())!;
+    expect(box.y).toBeGreaterThan(heading.y + heading.height);
+    expect(box.y + box.height).toBeLessThanOrEqual(bar.y);
+    expect(await overflowsSideways(page)).toBe(false);
+    expect(await smallTargets(page)).toEqual([]);
+    const shots = process.env.E2E_SCREENSHOT_DIR;
+    if (shots && test.info().project.name === "chromium") await page.screenshot({ path: `${shots}/phone-sign-out-failed.png` });
+    await page.getByRole("button", { name: "Meldung schließen" }).click();
+    await expect(alert).toHaveCount(0);
+  });
+
+  test("the chosen theme option has a visible ring", async ({ page }) => {
+    await page.goto(SIGN_IN);
+    const thumb = page.getByRole("radiogroup", { name: "Design" }).locator("span[aria-hidden]").first();
+    const border = await thumb.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { width: parseFloat(style.borderTopWidth), colour: style.borderTopColor, track: getComputedStyle(element.parentElement!).backgroundColor };
+    });
+    expect(border.width).toBeGreaterThanOrEqual(1);
+    expect(border.colour).not.toBe(border.track);
+  });
+
+  test("the browser's own bars follow a chosen theme", async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
+    await page.goto(SIGN_IN);
+    const colours = () => page.evaluate(() => [...document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')].map((meta) => meta.content.toUpperCase()));
+    expect(await colours()).toEqual(["#F3F7FB", "#0D1218"]);
+    await page.getByRole("radio", { name: "Dunkles Design" }).click({ force: true });
+    await expect.poll(colours).toEqual(["#0D1218", "#0D1218"]);
+    await page.getByRole("radio", { name: "Systemdesign" }).click({ force: true });
+    await expect.poll(colours).toEqual(["#F3F7FB", "#0D1218"]);
+  });
+});
+

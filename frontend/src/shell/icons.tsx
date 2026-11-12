@@ -87,3 +87,9 @@ export const SystemIcon = (props: IconProps) => (
     <path d="M9 20h6M12 16v4" />
   </Icon>
 );
+
+export const CloseIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M6 6l12 12M18 6 6 18" />
+  </Icon>
+);

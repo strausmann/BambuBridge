@@ -117,4 +117,63 @@ describe("first start", () => {
     expect(await screen.findByLabelText("API-Token")).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/sign-in");
   });
+
+  it("warns before the page is left while the new token is on screen, and names the way back in", async () => {
+    stubFetch({
+      "GET /api/v1/auth/session": signedOut,
+      "POST /api/v1/admin/api-keys": () => jsonResponse(CREATED, { status: 201 }),
+      "POST /api/v1/auth/session": () => problemResponse(503, "database_unavailable", "Database unavailable"),
+    });
+    const leaving = () => {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    const user = userEvent.setup();
+    const view = renderApp("/bootstrap");
+
+    await user.type(await screen.findByLabelText("Bootstrap-Schlüssel"), "k");
+    expect(leaving()).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Admin-Token anlegen" }));
+    await screen.findByTestId("admin-token");
+
+    expect(leaving()).toBe(true);
+    expect(screen.getByText(/bambubridge admin create-key/)).toBeInTheDocument();
+
+    // A sign-in that failed leaves the token unused: still guarded.
+    await user.click(screen.getByRole("button", { name: "Weiter zur Oberfläche" }));
+    await screen.findByRole("alert");
+    expect(leaving()).toBe(true);
+
+    view.unmount();
+    expect(leaving()).toBe(false);
+  });
+
+  it("stops warning once the token was used to sign in", async () => {
+    let signedIn = false;
+    stubFetch({
+      "GET /api/v1/auth/session": () => (signedIn ? jsonResponse(SESSION) : signedOut()),
+      "POST /api/v1/admin/api-keys": () => jsonResponse(CREATED, { status: 201 }),
+      "POST /api/v1/auth/session": () => {
+        signedIn = true;
+        return jsonResponse(SESSION, { status: 201 });
+      },
+      "GET /api/v1/info": () => jsonResponse(INFO),
+    });
+    const user = userEvent.setup();
+    renderApp("/bootstrap");
+    await user.type(await screen.findByLabelText("Bootstrap-Schlüssel"), "k");
+    await user.click(screen.getByRole("button", { name: "Admin-Token anlegen" }));
+    await user.click(await screen.findByRole("button", { name: "Weiter zur Oberfläche" }));
+    await screen.findByTestId("signed-in-user");
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("the bootstrap key is not offered to a password manager", async () => {
+    stubFetch({ "GET /api/v1/auth/session": signedOut });
+    renderApp("/bootstrap");
+    expect(await screen.findByLabelText("Bootstrap-Schlüssel")).toHaveAttribute("autocomplete", "off");
+  });
 });

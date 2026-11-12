@@ -1,9 +1,10 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import { Link } from "@tanstack/react-router";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Button, Input, Label, TextField } from "react-aria-components";
 import { ApiError } from "../api/client";
 import { AuthScreen, ErrorNote } from "./AuthScreen";
+import { BusyMark, useDelayedBusy } from "./Busy";
 import { FIELD, PRIMARY_BUTTON, SECONDARY_BUTTON, TEXT_LINK } from "./ui";
 
 interface Props {
@@ -28,7 +29,8 @@ function useCreateMessage() {
 /**
  * First start: the one-time bootstrap key (`BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY`) can do one thing,
  * create the first admin token. The token is shown exactly once; it lives only in this
- * component's state and is gone after "Continue" or a reload.
+ * component's state and is gone after "Continue" or a reload. While it is on screen and was not
+ * yet used to sign in, the browser asks before the page is closed or reloaded.
  */
 export function BootstrapKeyCreated({ onCreate, onContinue }: Props) {
   const { t } = useLingui();
@@ -38,6 +40,15 @@ export function BootstrapKeyCreated({ onCreate, onContinue }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copy, setCopy] = useState<"idle" | "done" | "failed">("idle");
+  const slow = useDelayedBusy(busy);
+
+  const shown = created !== null;
+  useEffect(() => {
+    if (!shown) return;
+    const ask = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", ask);
+    return () => window.removeEventListener("beforeunload", ask);
+  }, [shown]);
 
   async function create(event: FormEvent) {
     event.preventDefault();
@@ -95,6 +106,7 @@ export function BootstrapKeyCreated({ onCreate, onContinue }: Props) {
           {error ? <ErrorNote>{error}</ErrorNote> : null}
           <Button type="submit" isDisabled={busy} className={PRIMARY_BUTTON}>
             {t`Admin-Token anlegen`}
+            <BusyMark show={slow} />
           </Button>
         </form>
         <p>
@@ -139,9 +151,15 @@ export function BootstrapKeyCreated({ onCreate, onContinue }: Props) {
           Entferne <code>BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY</code> aus dem Container; der Schlüssel wirkt nicht mehr, sobald dieses Token existiert.
         </Trans>
       </p>
+      <p className="text-small text-ink-2">
+        <Trans>
+          Token verloren? Auf dem Server legt <code>bambubridge admin create-key</code> ein neues an.
+        </Trans>
+      </p>
       {error ? <ErrorNote>{error}</ErrorNote> : null}
       <Button onPress={() => void proceed(created)} isDisabled={busy} className={PRIMARY_BUTTON}>
         {t`Weiter zur Oberfläche`}
+        <BusyMark show={slow} />
       </Button>
     </AuthScreen>
   );

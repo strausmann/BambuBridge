@@ -25,14 +25,47 @@ function withoutComments(file: string, text: string): string {
 }
 
 /**
- * Absolute URLs that are names, not addresses anything is loaded from. Each entry is an exact
- * prefix with its reason; a new URL in the bundle fails the test until it is judged here.
+ * Absolute URLs that are names, not addresses anything is loaded from. Each entry has its reason;
+ * a new URL in the bundle fails the test until it is judged here. `prefix` entries end in a `/`,
+ * so they cannot be continued into another host; `exact` is the whole URL and nothing after it.
  */
-const NOT_LOADED: { prefix: string; why: string }[] = [
-  { prefix: "http://www.w3.org/", why: "XML namespaces (SVG, MathML, XLink, XHTML) that React and the SVG files name" },
-  { prefix: "https://react.dev/errors/", why: "link in React's production error messages" },
-  { prefix: "http://localhost", why: "base for parsing relative URLs in TanStack Router, never requested" },
+const NOT_LOADED: { url: string; match: "prefix" | "exact"; why: string }[] = [
+  { url: "http://www.w3.org/", match: "prefix", why: "XML namespaces (SVG, MathML, XLink, XHTML) that React and the SVG files name" },
+  { url: "https://react.dev/errors/", match: "prefix", why: "link in React's production error messages" },
+  { url: "http://localhost", match: "exact", why: "base for parsing relative URLs in TanStack Router, never requested" },
 ];
+
+/** The entry that covers `url`, if any. */
+function notLoaded(url: string): (typeof NOT_LOADED)[number] | undefined {
+  return NOT_LOADED.find((entry) => (entry.match === "exact" ? url === entry.url : url.startsWith(entry.url)));
+}
+
+/**
+ * Hashes in the backend's CSP list that this bundle does not produce, each with its reason. Every
+ * other hash of the list must be produced by the bundle; an entry here that the bundle does
+ * produce is stale and fails the test.
+ */
+const NOT_IN_THIS_BUNDLE: { hash: string; why: string }[] = [
+  {
+    hash: "gYiS/BvZvRcK27JIXTuwhZ3hs2+VJ1X+2gUlE+farlg=",
+    why: "react-aria's iOS scroll lock (overscroll-behavior), injected while a modal is open; the shell has no modal yet, so the code is not in the bundle",
+  },
+];
+
+describe("the URL allow-list", () => {
+  it("has no prefix that could be continued into another host", () => {
+    for (const entry of NOT_LOADED) if (entry.match === "prefix") expect(entry.url, entry.url).toMatch(/^https?:\/\/[^/]+\//);
+  });
+
+  it("takes http://localhost only as the whole URL", () => {
+    expect(notLoaded("http://localhost")?.url).toBe("http://localhost");
+    for (const url of ["http://localhost.evil.example/x.js", "http://localhost:8080/api", "http://localhost/x", "http://localhostile.example"]) {
+      expect(notLoaded(url), url).toBeUndefined();
+    }
+    expect(notLoaded("http://www.w3.org/2000/svg")).toBeDefined();
+    expect(notLoaded("http://www.w3.org.evil.example/")).toBeUndefined();
+  });
+});
 
 describe.skipIf(!required && !existsSync(dist))("built output", () => {
   it("exists", () => {
@@ -66,14 +99,14 @@ describe.skipIf(!required && !existsSync(dist))("built output", () => {
     for (const file of walk(dist, ".js", ".css", ".html", ".svg")) {
       const text = withoutComments(file, readFileSync(file, "utf8"));
       for (const m of text.matchAll(/https?:\/\/[^\s"'`<>)\\]*/gi)) {
-        const known = NOT_LOADED.find(({ prefix }) => m[0].startsWith(prefix));
-        if (known) used.add(known.prefix);
+        const known = notLoaded(m[0]);
+        if (known) used.add(known.url);
         else offenders.push(`${rel(file)}: ${m[0]}`);
       }
     }
     expect(offenders).toEqual([]);
     // An entry nothing matches any more is stale: remove it, so the list never grows on its own.
-    expect(NOT_LOADED.map(({ prefix }) => prefix).filter((prefix) => !used.has(prefix))).toEqual([]);
+    expect(NOT_LOADED.map(({ url }) => url).filter((url) => !used.has(url))).toEqual([]);
   });
 
   it("index.html has no inline script and no inline style; theme-init.js is a file of this origin", () => {
@@ -125,7 +158,7 @@ describe.skipIf(!required && !existsSync(dist))("built output", () => {
     }
   });
 
-  it("csp: every inline style the bundle can inject is allowed by its hash, and nothing broader", () => {
+  it("csp: the backend's style hashes and the inline styles of the bundle are the same set, and nothing broader is allowed", () => {
     const source = readFileSync(backendCspFile, "utf8");
     // The policy itself (the `CSP = (...)` expression), not the prose around it.
     const policy = /^CSP = \(\n([\s\S]*?)^\)/m.exec(source);
@@ -166,11 +199,19 @@ describe.skipIf(!required && !existsSync(dist))("built output", () => {
     }
     expect(unaccounted, "a style element is created without a visible text: add a hash or remove it").toEqual([]);
     expect(found.length, "react-aria's inline styles were expected").toBeGreaterThanOrEqual(1);
-    const missing = found
-      .map(({ file, text }) => ({ file, text, hash: createHash("sha256").update(text).digest("base64") }))
+    const produced = found.map(({ file, text }) => ({ file, text, hash: createHash("sha256").update(text).digest("base64") }));
+    const missing = produced
       .filter(({ hash }) => !allowed.includes(hash))
       .map(({ file, text, hash }) => `${rel(file)}: sha256-${hash} for ${JSON.stringify(text)}`);
     expect(missing, "inline style without a CSP hash in backend/app/web/security_headers.py").toEqual([]);
+
+    // The other direction: a hash the bundle does not produce allows a style nobody ships.
+    const producedHashes = new Set(produced.map(({ hash }) => hash));
+    const excused = NOT_IN_THIS_BUNDLE.map(({ hash }) => hash);
+    const unused = allowed.filter((hash) => !producedHashes.has(hash) && !excused.includes(hash));
+    expect(unused, "hash in the backend CSP list that no inline style of the bundle has: remove it there").toEqual([]);
+    expect(excused.filter((hash) => producedHashes.has(hash)), "the bundle now produces this style: remove it from NOT_IN_THIS_BUNDLE").toEqual([]);
+    expect(excused.filter((hash) => !allowed.includes(hash)), "not in the backend CSP list any more: remove it from NOT_IN_THIS_BUNDLE").toEqual([]);
   });
 
   it("csp: the bundle sets no style attribute through markup strings", () => {

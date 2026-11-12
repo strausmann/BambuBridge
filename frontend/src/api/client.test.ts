@@ -109,11 +109,41 @@ describe("apiFetch", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it("treats a 200 that is not JSON (a proxy's login page) as sign-in required", async () => {
-    fetchMock.mockResolvedValue(new Response("<html>login</html>", { status: 200, headers: { "Content-Type": "text/html" } }));
+  it("treats a 200 with an HTML body (a proxy's login page) as sign-in required", async () => {
+    const handler = vi.fn();
+    setOnAuthRequired(handler);
+    fetchMock.mockResolvedValue(new Response("<html>login</html>", { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } }));
     const error = await apiFetch("/api/v1/settings").catch((e: unknown) => e);
     expect(error).toBeInstanceOf(AuthRequiredError);
     expect(error).toMatchObject({ code: "unexpected_content" });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("an answer that is neither JSON nor HTML is an error of its own, not a missing sign-in", async () => {
+    const handler = vi.fn();
+    setOnAuthRequired(handler);
+    fetchMock.mockResolvedValue(new Response("ok", { status: 200, headers: { "Content-Type": "text/plain" } }));
+    const error = await apiFetch("/api/v1/settings").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).not.toBeInstanceOf(AuthRequiredError);
+    expect(error).toMatchObject({ status: 200, code: "unexpected_content" });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("returns undefined for an empty 2xx body, whatever its content type", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 200 }));
+    await expect(apiFetch("/api/v1/thing", { method: "POST" })).resolves.toBeUndefined();
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 202, headers: { "Content-Type": "application/json" } }));
+    await expect(apiFetch("/api/v1/thing", { method: "POST" })).resolves.toBeUndefined();
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 205 }));
+    await expect(apiFetch("/api/v1/thing", { method: "POST" })).resolves.toBeUndefined();
+  });
+
+  it("a JSON answer that does not parse is an error, not a missing sign-in", async () => {
+    fetchMock.mockResolvedValue(new Response("{not json", { status: 200, headers: { "Content-Type": "application/json" } }));
+    const error = await apiFetch("/api/v1/settings").catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(AuthRequiredError);
+    expect(error).toMatchObject({ status: 200, code: "unexpected_content" });
   });
 
   it("skipAuthHandler: the 401 is thrown but the handler stays quiet", async () => {

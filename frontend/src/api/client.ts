@@ -30,7 +30,7 @@ export class ApiError extends Error {
 /**
  * The request needs a sign-in: a 401, a redirect to a login page (a proxy in front of the API
  * answers with one once its own session ended; `redirect: "manual"` makes it visible instead of
- * following it), or a "successful" answer that is not JSON (the login page itself).
+ * following it), or a "successful" answer that is an HTML page (the login page itself).
  */
 export class AuthRequiredError extends ApiError {
   constructor(code: string | null, detail: string, status = 401) {
@@ -101,6 +101,10 @@ function isJson(response: Response): boolean {
   return /json/i.test(response.headers.get("Content-Type") ?? "");
 }
 
+function isHtml(response: Response): boolean {
+  return /^\s*text\/html\b/i.test(response.headers.get("Content-Type") ?? "");
+}
+
 async function readJson(response: Response): Promise<unknown> {
   if (!isJson(response)) return undefined;
   try {
@@ -155,6 +159,15 @@ export async function apiFetch<T>(path: string, init: ApiInit = {}): Promise<T> 
     throw new ApiError(response.status, code, detail, extensions);
   }
   if (response.status === 204) return undefined as T;
-  if (!isJson(response)) throw authRequired(new AuthRequiredError("unexpected_content", "Sign-in required"));
-  return (await response.json()) as T;
+  // The API never answers with a page: HTML here is the login page of a proxy in front of it.
+  if (isHtml(response)) throw authRequired(new AuthRequiredError("unexpected_content", "Sign-in required"));
+  const text = await response.text();
+  if (text === "") return undefined as T;
+  const unexpected = () => new ApiError(response.status, "unexpected_content", "Unexpected answer from the server");
+  if (!isJson(response)) throw unexpected();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw unexpected();
+  }
 }

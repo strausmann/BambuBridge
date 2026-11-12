@@ -2,15 +2,21 @@ import type { ReactNode } from "react";
 import { LanguageSwitch } from "./LanguageSwitch";
 import { Logo } from "./Logo";
 import { ThemeSwitch } from "./ThemeSwitch";
+import { useShortViewport } from "./useShortViewport";
 
 /**
  * Frame of the screens before the shell (sign-in, first start): logo, one panel, theme and
  * language. On a short viewport (on-screen keyboard open) the panel sits at the top and the
- * page scrolls, so the focused field and the button below it stay reachable.
+ * page scrolls, so the focused field and the button below it stay reachable. "Short" comes from
+ * the media query and, for iOS, from the visual viewport (`useShortViewport`).
  */
 export function AuthScreen({ children }: { children: ReactNode }) {
+  const short = useShortViewport();
   return (
-    <main className="grid min-h-dvh place-items-center px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] short:place-items-start short:justify-items-center">
+    <main
+      data-short={short || undefined}
+      className="grid min-h-dvh place-items-center pt-[max(1rem,env(safe-area-inset-top))] pr-[max(1rem,env(safe-area-inset-right))] pb-[max(1rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] short:place-items-start short:justify-items-center"
+    >
       <div className="flex w-full max-w-md min-w-0 flex-col gap-6">
         <Logo className="block h-10" />
         <section className="flex flex-col gap-5 rounded-r3 border border-line bg-surface p-6">{children}</section>

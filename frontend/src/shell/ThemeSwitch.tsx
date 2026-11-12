@@ -6,7 +6,8 @@ import { isTheme, readTheme, storeTheme, switchTheme, type ThemeChoice } from ".
 
 /**
  * System / light / dark, remembered in `localStorage` (`bb.theme`) and set as `data-theme`.
- * The raised thumb slides to the chosen option (transform only); the page itself cross-fades
+ * The raised thumb slides to the chosen option (transform only); its ring is what makes the
+ * chosen state visible (3:1 against the track, `THUMB_RING` in design/tokens.ts); the page itself cross-fades
  * (`switchTheme`). The position comes from `data-choice`, not from an inline style (CSP).
  */
 export function ThemeSwitch() {
@@ -35,7 +36,7 @@ export function ThemeSwitch() {
     >
       <span
         aria-hidden="true"
-        className="pointer-events-none absolute top-0.5 left-0.5 size-11 rounded-r1 bg-surface transition-transform duration-200 ease-out group-data-[choice=dark]/theme:translate-x-[200%] group-data-[choice=light]/theme:translate-x-full"
+        className="pointer-events-none absolute top-0.5 left-0.5 size-11 rounded-r1 border border-line-strong bg-surface transition-transform duration-200 ease-out group-data-[choice=dark]/theme:translate-x-[200%] group-data-[choice=light]/theme:translate-x-full"
       />
       {options.map((option) => (
         <Radio
