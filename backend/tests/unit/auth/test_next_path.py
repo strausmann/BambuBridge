@@ -67,3 +67,25 @@ def test_dot_segments_that_resolve_to_another_host_become_root(value: str):
 @pytest.mark.parametrize("value", ["/a/./b", "/a/../b", "/./printers", "/a/..", "/.well-known/x"])
 def test_harmless_dot_segments_are_kept(value: str):
     assert safe_next(value) == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # A browser keeps an encoded ``?``/``#`` in the path but resolves the encoded dot
+        # segments after it, so each of these has the pathname ``//evil.test/x``.
+        "/a%3f/%2e%2e//evil.test/x",
+        "/a%3F/%2E%2E//evil.test/x",
+        "/a%23/%2e%2e//evil.test/x",
+        "/a%3f/.%2e//evil.test/x",
+        "/a%23/%2e.//evil.test/x",
+        "/a%253f/%252e%252e//evil.test/x",
+    ],
+)
+def test_encoded_query_or_fragment_marks_in_the_path_become_root(value: str):
+    assert safe_next(value) == "/"
+
+
+@pytest.mark.parametrize("value", ["/search?q=%3F", "/printers#a%23b", "/a?next=%23x"])
+def test_encoded_marks_in_the_query_or_fragment_are_kept(value: str):
+    assert safe_next(value) == value

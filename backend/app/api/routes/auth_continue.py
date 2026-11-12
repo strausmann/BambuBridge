@@ -32,6 +32,10 @@ MAX_NEXT_LENGTH = 2048
 _DECODE_ROUNDS = 3
 # Characters a browser removes from a URL before parsing it.
 _BROWSER_STRIPPED = re.compile(r"[\t\n\r]")
+# An encoded ``?`` or ``#`` in the path: a browser keeps it in the path, but one more round
+# of decoding here would move the rest into the query or fragment and hide dot segments
+# that the browser resolves (``/a%3f/%2e%2e//host`` has the pathname ``//host``).
+_ENCODED_QUERY_OR_FRAGMENT = re.compile(r"%(3f|23)", re.IGNORECASE)
 
 
 def _has_control(text: str) -> bool:
@@ -59,7 +63,7 @@ def _looks_absolute(path: str) -> bool:
     if not path.startswith("/") or path.startswith(("//", "/\\")):
         return True
     parts = urlsplit(path)
-    if parts.scheme or parts.netloc:
+    if parts.scheme or parts.netloc or _ENCODED_QUERY_OR_FRAGMENT.search(parts.path):
         return True
     # ``/.//host`` resolves to the path ``//host``: same origin today, but a page that
     # navigates to its own pathname would leave the site.
@@ -73,10 +77,11 @@ def safe_next(value: str | None) -> str:
     tabs and newlines, so ``/\t/evil`` would become ``//evil``). Refused besides: anything
     not starting with a single ``/``; ``//host`` and ``/\host`` (which browsers treat as
     another host), also when it only appears after resolving dot segments (``/.//host``,
-    ``/x/..//host``); a scheme or authority. These shape checks are repeated after up to three
-    rounds of percent-decoding (with tabs and newlines removed, as a browser would, and
-    no other control character allowed), so
-    encoded variants such as ``/%2F%2Fevil`` or ``/%5Cevil`` are refused as well.
+    ``/x/..//host``); a scheme or authority; an encoded ``?`` or ``#`` in the path. These
+    shape checks are repeated after up to three rounds of percent-decoding (with tabs and
+    newlines removed, as a browser would, and no other control character allowed), so
+    encoded variants such as ``/%2F%2Fevil``, ``/%5Cevil`` or ``/a%253f/...`` are refused
+    as well.
     """
     if not value or len(value) > MAX_NEXT_LENGTH:
         return "/"
