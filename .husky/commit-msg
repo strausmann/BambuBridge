@@ -1,1 +1,4 @@
-npx --no -- commitlint --edit "$1"
+#!/bin/sh
+# Lints the commit message in a container (see Makefile). Skip with HUSKY=0.
+[ "${HUSKY-}" = "0" ] && exit 0
+exec make --no-print-directory commitlint-msg MSG="$1"

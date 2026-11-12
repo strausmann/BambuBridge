@@ -19,7 +19,7 @@ If a change alters an endpoint, field or configuration, update the affected code
 
 ## Commits — Conventional Commits (enforced)
 Format `type(scope): subject`. Scope is **mandatory** — see [`.github/SCOPES.md`](.github/SCOPES.md)
-for the catalog and the release-impact table. commitlint runs on `commit-msg` (husky) and in CI.
+for the catalog and the release-impact table. commitlint runs on `commit-msg` (after `make hooks`, see below) and in CI.
 
 Examples:
 ```
@@ -32,12 +32,36 @@ Do **not** add AI attribution (`Co-Authored-By`, `Claude-Session`, "Generated wi
 or PRs — see `CLAUDE.md` R2.
 
 ## Local setup & gates
+Everything runs in containers that match CI; nothing is installed on the host. You need **Docker**,
+**GNU make** and **git** — no Python, uv or Node on the host.
+
 ```bash
-# Repository tooling (commit lint, git hooks) — Node >= 26
-npm install          # sets up the husky commit-msg hook
+make hooks      # once per clone: activates the git hooks (sets core.hooksPath to .husky)
+make ci-fast    # ruff check, ruff format --check, mypy, commitlint for origin/main..HEAD - no database
+make ci         # the steps of CI job "backend", against a local test Postgres
+make ci-db-stop # stop the test Postgres
 ```
-The gates for `backend/` (Python) and `frontend/` (Node) are documented next to the code once those
-directories exist. Do not install extra dev tooling on the host — run it in containers matching CI.
+
+- **Hooks.** A fresh clone has no active hooks until `make hooks` has run. After that, `commit-msg`
+  lints the commit message with commitlint and `pre-push` runs `make ci-fast`. Both start containers,
+  so Docker must be running; the first run downloads the images and dependencies. `HUSKY=0` skips
+  both hooks, `git push --no-verify` skips the pre-push check. (`npm install` on a host with Node
+  activates the same hooks through husky.)
+- **`make ci`** runs the same commands with the same thresholds as job `backend` in
+  `.github/workflows/ci.yml` (`uv sync --frozen`, ruff, mypy, pytest with branch coverage of at least
+  80 %, and at least 90 % for `app/auth/*` and `app/security/*`). Run it before you open or update a
+  pull request. When that job changes, change the `ci` target in the `Makefile` in the same PR.
+- **Test database.** `make ci` starts the container `bambubridge-ci-postgres` (`postgres:18.6-trixie`,
+  published on `127.0.0.1:55432`, override with `CI_DB_PORT=…`) on first use and leaves it running for
+  the next run; `make ci-db-stop` removes it. It holds test data only. Every test run creates its own
+  databases on that server and drops them at the end, so several runs can share it.
+- **Caches.** uv downloads, the virtual environment and the npm cache live in the gitignored `.cache/`
+  of your clone; delete the directory to start from scratch.
+- **Extra pytest arguments:** `make ci PYTEST_ARGS="-x -k tokens"`. For a quicker local run use
+  `make ci PYTEST_ARGS="-n auto"` (pytest-xdist; each worker gets its own database). CI runs the suite
+  without `-n`, and so does plain `make ci`.
+
+The gates for `frontend/` (Node) are documented next to the code once that directory exists.
 
 ## AI code review (Gemini / Copilot)
 Every PR is reviewed by AI bots. **Each finding must be resolved** — either **fixed** (note it on the

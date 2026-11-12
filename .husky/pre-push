@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs the fast CI checks in containers before a push (see Makefile).
+# Skip with HUSKY=0 or "git push --no-verify".
+[ "${HUSKY-}" = "0" ] && exit 0
+exec make --no-print-directory ci-fast
