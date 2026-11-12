@@ -36,7 +36,6 @@ async def _versions(url: str) -> list[str]:
 @pytest.fixture
 def fresh_database_url() -> Iterator[str]:
     name = unique_database_name("env")
-    asyncio.run(_admin(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
     asyncio.run(_admin(f'CREATE DATABASE "{name}"'))
     try:
         yield url_for_database(admin_url(), name)

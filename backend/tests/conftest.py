@@ -97,7 +97,6 @@ def _alembic_config(url: str) -> Config:
 def test_database_url() -> Iterator[str]:
     """Create a database for this run (and worker), migrate it to head, drop it at the end."""
     name = unique_database_name("test")
-    asyncio.run(_admin_statement(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
     asyncio.run(_admin_statement(f'CREATE DATABASE "{name}"'))
     url = url_for_database(admin_url(), name)
     try:
@@ -111,7 +110,6 @@ def test_database_url() -> Iterator[str]:
 def scratch_database_url() -> Iterator[str]:
     """An empty throw-away database for tests that migrate up and down."""
     name = unique_database_name("scratch")
-    asyncio.run(_admin_statement(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
     asyncio.run(_admin_statement(f'CREATE DATABASE "{name}"'))
     try:
         yield url_for_database(admin_url(), name)
