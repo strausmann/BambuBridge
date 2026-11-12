@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 
 MAX_WORKER_ID_LENGTH = 200
+# ``event_deliveries.id`` is a ``bigint`` from a sequence.
+MAX_DELIVERY_ID = 2**63 - 1
 
 SUBSCRIBER_NAME = re.compile(r"[a-z][a-z0-9_]{0,63}", re.ASCII)
 
@@ -46,3 +48,8 @@ def check_worker(worker: object) -> str:
             "without NUL or surrogate characters"
         )
     return worker
+
+
+def is_delivery_id(value: object) -> bool:
+    """A positive integer that fits the ``bigint`` id column; ``bool`` is not an id."""
+    return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_DELIVERY_ID

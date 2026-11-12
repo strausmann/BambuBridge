@@ -29,14 +29,9 @@ async def set_local_lock_timeout(session: AsyncSession, value: str) -> str:
 
     Call it again with the returned value to put the caller's setting back.
     """
-    # The subquery (kept apart by OFFSET 0) reads the old value before the new one is set.
-    previous = await session.scalar(
-        text(
-            "SELECT p.previous FROM (SELECT current_setting('lock_timeout') AS previous OFFSET 0) "
-            "AS p WHERE set_config('lock_timeout', :value, true) IS NOT NULL"
-        ),
-        {"value": value},
-    )
+    # Two statements: read, then set. Nothing depends on the order inside one statement.
+    previous = await session.scalar(text("SELECT current_setting('lock_timeout')"))
+    await session.execute(text("SELECT set_config('lock_timeout', :value, true)"), {"value": value})
     return str(previous)
 
 

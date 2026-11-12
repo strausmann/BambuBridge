@@ -8,8 +8,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from sqlalchemy import select, text, update
+from sqlalchemy import event, select, text, update
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.events import outbox
@@ -340,3 +341,73 @@ async def test_claim_reads_a_large_backlog_in_order_from_the_index(db_session: A
     below = _nodes(limit)
     assert "ix_event_deliveries_claim" in {n.get("Index Name") for n in below}, below
     assert not {"Sort", "Seq Scan", "Bitmap Heap Scan"} & {n["Node Type"] for n in below}, below
+
+
+@pytest.mark.parametrize(
+    "ids",
+    [["1"], [True], [1.0], [None], [0], [-1], [2**63], "12", [1] * 1001],
+    ids=["str", "bool", "float", "none", "zero", "negative", "too-big", "text", "too-many"],
+)
+async def test_complete_takes_up_to_1000_delivery_ids(
+    ids: object, service: EventService, db_session: AsyncSession
+):
+    await _emit_committed(service, db_session, 1)
+    (delivery,) = await outbox.claim(db_session, "sse", "worker-a")
+    with pytest.raises(ValueError, match="ids"):
+        await outbox.complete(db_session, "worker-a", ids)  # type: ignore[arg-type]
+    # Refused before anything was sent: the transaction and the lease are intact.
+    assert await outbox.complete(db_session, "worker-a", [delivery.id]) == 1
+
+
+@pytest.mark.parametrize("bad", ["1", True, 1.0, None, 0, -1, 2**63])
+async def test_fail_takes_one_delivery_id(
+    bad: object, service: EventService, db_session: AsyncSession
+):
+    await _emit_committed(service, db_session, 1)
+    (delivery,) = await outbox.claim(db_session, "sse", "worker-a")
+    with pytest.raises(ValueError, match="id"):
+        await outbox.fail(db_session, "worker-a", bad, "boom")  # type: ignore[arg-type]
+    assert await outbox.fail(db_session, "worker-a", delivery.id, "boom") is True
+
+
+async def test_complete_sends_the_ids_as_one_array(db_session: AsyncSession):
+    await db_session.execute(_BACKLOG, {"count": 1000, "status": "pending"})
+    await db_session.commit()
+    claimed = await outbox.claim(db_session, "sse", "worker-a", limit=1000)
+    await db_session.commit()
+    seen: list[Any] = []
+
+    def record(_conn: Any, _cursor: Any, statement: str, parameters: Any, *_: Any) -> None:
+        if statement.lstrip().upper().startswith("UPDATE"):
+            seen.append(parameters)
+
+    engine = db_session.get_bind()
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        done = await outbox.complete(db_session, "worker-a", [d.id for d in claimed])
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    await db_session.commit()
+
+    assert done == 1000
+    # One array parameter, however long the list: the statement does not grow with it.
+    (parameters,) = seen
+    assert len(parameters) < 10, len(parameters)
+    assert [len(p) for p in parameters if isinstance(p, list)] == [1000]
+
+
+@pytest.mark.parametrize("status", ["done", "failed"])
+async def test_only_a_pending_delivery_can_carry_a_lease(
+    status: str, service: EventService, db_session: AsyncSession
+):
+    await _emit_committed(service, db_session, 1)
+    (delivery,) = await outbox.claim(db_session, "sse", "worker-a")
+    await db_session.commit()
+
+    with pytest.raises(IntegrityError) as exc:
+        await db_session.execute(
+            update(EventDelivery).where(EventDelivery.id == delivery.id).values(status=status)
+        )
+    assert getattr(exc.value.orig, "sqlstate", None) == "23514"  # check_violation
+    assert "ck_event_deliveries_lease_pending" in str(exc.value.orig)
+    await db_session.rollback()

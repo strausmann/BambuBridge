@@ -15,9 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.events import service as service_module
 from app.events.service import (
     MAX_DEDUP_KEY_LENGTH,
+    MAX_EVENT_TYPE_LENGTH,
     MAX_PAYLOAD_BYTES,
     MAX_PAYLOAD_DEPTH,
     EventService,
+    InvalidEventTypeError,
     SourceBusyError,
 )
 from tests.integration.events.conftest import EVENT_TYPE, SOURCE_A, SOURCE_B, counts, emit
@@ -268,3 +270,37 @@ async def test_emit_leaves_the_callers_lock_timeout_alone(
     await db_session.execute(text("SET LOCAL lock_timeout = '1234ms'"))
     assert await emit(service, db_session) is not None
     assert (await db_session.execute(text("SHOW lock_timeout"))).scalar_one() == "1234ms"
+
+
+async def test_emit_limits_the_event_type_to_200_characters(
+    service: EventService,
+    db_session: AsyncSession,
+    sessions: async_sessionmaker[AsyncSession],
+):
+    assert MAX_EVENT_TYPE_LENGTH == 200
+    prefix = "integration.demo."
+    longest = prefix + "a" * (MAX_EVENT_TYPE_LENGTH - len(prefix))
+    await db_session.execute(text("SELECT 1"))
+
+    with pytest.raises(InvalidEventTypeError) as exc:
+        await _emit(service, db_session, type=longest + "a")
+
+    assert "aaaa" not in str(exc.value)
+    assert await _emit(service, db_session, type=longest) is not None
+    await db_session.commit()
+    assert await counts(sessions) == (1, 1)
+
+
+async def test_emit_limits_the_schema_version_to_the_integer_column(
+    service: EventService,
+    db_session: AsyncSession,
+    sessions: async_sessionmaker[AsyncSession],
+):
+    await db_session.execute(text("SELECT 1"))
+    for version in (2**31, 2**63, 10**30):
+        with pytest.raises(ValueError, match="schema_version"):
+            await _emit(service, db_session, schema_version=version)
+
+    assert await _emit(service, db_session, schema_version=2**31 - 1) is not None
+    await db_session.commit()
+    assert await counts(sessions) == (1, 1)

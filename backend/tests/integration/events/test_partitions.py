@@ -329,3 +329,13 @@ async def test_ensure_partitions_restores_the_lock_timeout_when_nothing_is_missi
     await db_session.execute(text("SET LOCAL lock_timeout = '1234ms'"))
     assert await ensure_partitions(db_session, datetime.now(UTC)) == []
     assert (await db_session.execute(text("SHOW lock_timeout"))).scalar_one() == "1234ms"
+
+
+async def test_set_local_lock_timeout_returns_the_value_it_replaced(db_session: AsyncSession):
+    await db_session.execute(text("SET LOCAL lock_timeout = '1234ms'"))
+    assert await events_repo.set_local_lock_timeout(db_session, "250ms") == "1234ms"
+    assert await events_repo.set_local_lock_timeout(db_session, "1234ms") == "250ms"
+    assert (await db_session.execute(text("SHOW lock_timeout"))).scalar_one() == "1234ms"
+    await db_session.rollback()
+    # SET LOCAL: gone with the transaction.
+    assert (await db_session.execute(text("SHOW lock_timeout"))).scalar_one() == "0"

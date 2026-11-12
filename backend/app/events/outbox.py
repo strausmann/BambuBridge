@@ -20,8 +20,21 @@ the worker for as long as it runs, for example a UUID made at its start.
 next claim takes the delivery over and counts one attempt for it. After ``MAX_ATTEMPTS``
 attempts (failures and lost leases together) the delivery is set to ``failed`` and no longer
 handed out, so a delivery that kills its workers cannot stay first in line for ever. Commit
-right after :func:`claim`: a claim that is rolled back (or whose worker dies before the
-commit) leaves no lease and is not counted.
+right after :func:`claim`: a claim that is rolled back, or whose worker dies inside
+:func:`claim` or before the commit, leaves no lease and is not counted. Nothing was
+processed under a stored lease then, so the delivery is simply free again.
+
+**At least once.** A delivery can reach its handler more than once: a worker that dies
+after the side effect and before its ``complete`` is committed leaves a lease that runs out,
+and the next worker runs the handler again. Handlers must be idempotent (for example by
+keying their effect on the event id).
+
+**Batch size.** There is no lease renewal, on purpose: a worker either finishes its batch
+inside ``LEASE_SECONDS`` or loses what is left of it. The rest of a batch that takes longer
+is taken over by another worker of the same subscriber while the first one is still at
+work, so those handlers run twice, and each take-over counts an attempt. Choose ``limit``
+so that a whole batch is done well inside the lease; with slow handlers or a small
+container (little CPU, little memory) take a small ``limit`` rather than the default.
 
 **Short transactions.** Besides the row locks, an open claim transaction holds a read lock
 on ``events``, and creating a monthly partition needs that table exclusively for a moment.
@@ -42,11 +55,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import text, update
+from sqlalchemy import BigInteger, any_, bindparam, text, update
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.events.validation import check_subscriber, check_worker, make_storable
+from app.events.validation import check_subscriber, check_worker, is_delivery_id, make_storable
 from app.models.event import Event
 from app.models.event_delivery import EventDelivery
 from app.repositories import events as events_repo
@@ -168,15 +182,24 @@ async def complete(session: AsyncSession, worker: str, ids: Sequence[int]) -> in
 
     Only pending deliveries that ``worker`` holds are changed. A smaller number than
     ``len(ids)`` means the rest was taken over by another worker after the lease ran out (or
-    was completed or failed before).
+    was completed or failed before). ``ids`` is a list or tuple of at most
+    ``MAX_CLAIM_LIMIT`` delivery ids (integers as returned by :func:`claim`); anything else
+    raises ``ValueError`` before a statement is sent.
     """
     check_worker(worker)
+    if (
+        not isinstance(ids, list | tuple)
+        or len(ids) > MAX_CLAIM_LIMIT
+        or not all(is_delivery_id(item) for item in ids)
+    ):
+        raise ValueError(f"ids must be a list of at most {MAX_CLAIM_LIMIT} delivery ids (integers)")
     if not ids:
         return 0
     result = await session.execute(
         update(EventDelivery)
         .where(
-            EventDelivery.id.in_(ids),
+            # One array parameter: the statement is the same for 1 and for 1000 ids.
+            EventDelivery.id == any_(bindparam("ids", list(ids), type_=ARRAY(BigInteger))),
             EventDelivery.status == "pending",
             EventDelivery.claimed_by == worker,
         )
@@ -212,6 +235,8 @@ async def fail(session: AsyncSession, worker: str, id: int, error: str) -> bool:
     Pass a short reason, never payload contents or secrets.
     """
     check_worker(worker)
+    if not is_delivery_id(id):
+        raise ValueError("id must be a delivery id (integer)")
     reason = make_storable(error)[:MAX_ERROR_LENGTH]
     result = await session.execute(
         _FAIL, {"id": id, "worker": worker, "error": reason, "max_attempts": MAX_ATTEMPTS}

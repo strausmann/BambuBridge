@@ -24,6 +24,8 @@ class EventDelivery(Base):
     __table_args__ = (
         CheckConstraint("status IN ('pending', 'done', 'failed')", name="status"),
         CheckConstraint("(claimed_by IS NULL) = (claimed_until IS NULL)", name="lease"),
+        # Only a pending delivery belongs to a worker; done and failed ones carry no lease.
+        CheckConstraint("status = 'pending' OR claimed_by IS NULL", name="lease_pending"),
         # The order in which ``claim`` hands deliveries out.
         Index("ix_event_deliveries_claim", "subscriber", "status", "event_occurred_at", "id"),
     )

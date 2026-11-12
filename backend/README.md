@@ -122,7 +122,8 @@ was committed. `emit` does not commit; the caller does.
   lower case, for example `integration.demo.tick`. Other names are rejected.
 - **Input checks:** `emit` refuses, with a `ValueError` and before it sends anything to the
   database, what PostgreSQL would refuse or what is beyond the limits: a payload that is not
-  a dict of JSON values, a NUL or surrogate character in any string, `NaN` or infinite
+  a dict of JSON values, a type name of more than 200 characters, a `schema_version`
+  outside 1 to 2147483647, a NUL or surrogate character in any string, `NaN` or infinite
   numbers, more than 32 levels of nesting, more than 64 KiB of JSON text; a `dedup_key` that
   is empty, longer than 200 characters or holds such a character; a source or correlation id
   that is not a `UUID` (the text form is not taken). The caller's transaction stays usable,
@@ -146,7 +147,14 @@ was committed. `emit` does not commit; the caller does.
   the result of a worker that took the delivery over. A failed delivery is retried after 2,
   4, 8 ... seconds. A lease that runs out without a result (the worker died) counts as an
   attempt as well, and the delivery goes to the next claim. After the tenth attempt a
-  delivery is set to `failed`.
+  delivery is set to `failed`. A worker that dies inside `claim` or before that first commit
+  leaves no lease and is not counted.
+  Delivery is **at least once**: a worker that dies after its side effect and before the
+  commit of `complete` makes the next worker run the handler again, so handlers must be
+  idempotent. A lease is not renewed, on purpose. Size a batch so that it is finished well
+  inside the 5 minutes: what is left after that is taken over by another worker of the same
+  subscriber, runs twice and counts an attempt. With slow handlers or a small container use
+  a small `limit`.
   Keep transactions short (claim, commit, process, complete or fail, commit): while one is
   open, no new monthly partition can be created.
 - **Partitions:** `events` is partitioned by month (`events_y2026m12`). The server creates
@@ -155,7 +163,9 @@ was committed. `emit` does not commit; the caller does.
   moment; if a long transaction still uses it, the server gives up after 3 seconds and
   tries again a minute later, so writers are never held up for longer than that. If
   another object already carries the name of a partition, the server logs an error on every
-  run and leaves that month out until the object is removed.
+  run and leaves that month out until the object is removed. Such a run still counts as
+  successful: for now the log line (`cannot create partition ...`) is the only place where
+  this shows, it is not part of `/readiness` yet.
 
 ## Health checks
 

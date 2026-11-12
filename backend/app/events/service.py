@@ -28,6 +28,9 @@ EVENT_TYPE_PATTERN = re.compile(
 MAX_PAYLOAD_BYTES = 64 * 1024
 MAX_PAYLOAD_DEPTH = 32
 MAX_DEDUP_KEY_LENGTH = 200
+MAX_EVENT_TYPE_LENGTH = 200
+# ``events.schema_version`` is an ``integer`` column.
+MAX_SCHEMA_VERSION = 2**31 - 1
 
 # How long ``emit`` waits for the lock of its source before it gives up.
 SOURCE_LOCK_TIMEOUT_SECONDS = 5.0
@@ -168,7 +171,8 @@ class EventService:
 
         Everything is checked before the first statement is sent, so a refused call leaves
         the caller's transaction as it was. Raises :class:`InvalidEventTypeError` for a type
-        name outside the naming scheme and ``ValueError`` for
+        name outside the naming scheme or longer than ``MAX_EVENT_TYPE_LENGTH`` (200)
+        characters, and ``ValueError`` for
 
         - a ``source_instance_id`` or ``correlation_id`` that is neither a ``UUID`` nor
           ``None`` (the text form of a UUID is not taken: it would be a different source for
@@ -179,15 +183,19 @@ class EventService:
           JSON text;
         - a ``dedup_key`` that is empty, longer than ``MAX_DEDUP_KEY_LENGTH`` (200)
           characters or holds a NUL or surrogate character;
-        - a ``schema_version`` that is not an integer of at least 1.
+        - a ``schema_version`` that is not an integer from 1 to 2147483647.
 
         The messages never quote a value. A missing partition for the current month is a
         database error (there is no default partition); see :mod:`app.events.partitions`.
         """
-        if not isinstance(type, str) or not EVENT_TYPE_PATTERN.fullmatch(type):
+        if (
+            not isinstance(type, str)
+            or len(type) > MAX_EVENT_TYPE_LENGTH
+            or not EVENT_TYPE_PATTERN.fullmatch(type)
+        ):
             raise InvalidEventTypeError(
                 "event type must match (account|inventory|integration|display)"
-                ".<subject>.<action> in lower case"
+                f".<subject>.<action> in lower case, {MAX_EVENT_TYPE_LENGTH} characters at most"
             )
         if source_instance_id is not None and not isinstance(source_instance_id, UUID):
             raise ValueError("source_instance_id must be a UUID or None")
@@ -197,9 +205,9 @@ class EventService:
         if (
             isinstance(schema_version, bool)
             or not isinstance(schema_version, int)
-            or schema_version < 1
+            or not 1 <= schema_version <= MAX_SCHEMA_VERSION
         ):
-            raise ValueError("schema_version must be an integer of at least 1")
+            raise ValueError(f"schema_version must be an integer from 1 to {MAX_SCHEMA_VERSION}")
         if dedup_key is not None:
             _check_dedup_key(dedup_key)
         try:
