@@ -5,8 +5,8 @@ a file of the build is served from it; any other path gets ``index.html`` so cli
 routes survive a reload, except paths the server owns: ``/api/...``, ``/auth/...``,
 ``/docs`` and ``/openapi.json`` keep their JSON 404, and a missing ``/assets/...`` file is
 a real 404 (a browser that asked for a script must not get HTML). The route takes every
-method so that an unknown path answers 404 for any method; note that this also turns the 405
-for a wrong method on a known path into 404 while the web UI is mounted.
+method so that an unknown path answers 404 for any method; a wrong method on a path another
+route knows still answers 405 with an ``Allow`` header, as without the web UI.
 
 Without ``index.html`` in the build directory the server runs API-only: one warning, no
 route.
@@ -20,6 +20,8 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, Response
 from starlette.exceptions import HTTPException
+from starlette.routing import Match
+from starlette.types import Scope
 
 from app.web.security_headers import NO_CACHE
 
@@ -38,6 +40,26 @@ def is_reserved(path: str) -> bool:
     return any(path == name or path.startswith(name + "/") for name in _RESERVED)
 
 
+def _allowed_methods(app: FastAPI, scope: Scope, skip: object) -> list[str]:
+    """Methods under which a route other than ``skip`` fully matches the path of ``scope``.
+
+    Probes each method through the routes' public ``matches`` instead of reading their
+    ``methods``: FastAPI wraps included routers in an object that reports a partial match
+    without saying which methods the route accepts.
+    """
+    allowed: list[str] = []
+    for method in _ALL_METHODS:
+        probe = {**scope, "method": method}
+        probe.pop("fastapi", None)  # per-lookup bookkeeping of FastAPI, never share it
+        for route in app.router.routes:
+            if getattr(route, "endpoint", None) is skip:
+                continue
+            if route.matches(probe)[0] is Match.FULL:
+                allowed.append(method)
+                break
+    return allowed
+
+
 def mount_spa(app: FastAPI, dist_dir: Path) -> bool:
     """Serve ``dist_dir`` (a Vite build); call after all routers. Returns whether mounted."""
     index = dist_dir / "index.html"
@@ -48,9 +70,15 @@ def mount_spa(app: FastAPI, dist_dir: Path) -> bool:
 
     async def spa(request: Request) -> Response:
         full_path: str = request.path_params.get("full_path", "")
-        # Only GET/HEAD are answered from the build; any other method on a path no route
-        # matched is a 404 (not 405), as without the web UI. Control characters (a NUL
-        # makes the filesystem calls raise) never name a file of the build.
+        # Only GET/HEAD are answered from the build. Any other method is a 405 with Allow
+        # when a route knows the path (this route matches every method, so Starlette
+        # never reports the partial match itself), else a 404, as without the web UI.
+        # Control characters (a NUL makes the filesystem calls raise) never name a file
+        # of the build.
+        if request.method not in ("GET", "HEAD"):
+            allowed = _allowed_methods(request.app, request.scope, spa)
+            if allowed:
+                raise HTTPException(status_code=405, headers={"Allow": ", ".join(allowed)})
         if (
             request.method not in ("GET", "HEAD")
             or is_reserved(full_path)

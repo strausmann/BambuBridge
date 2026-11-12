@@ -87,3 +87,21 @@ async def test_unknown_non_get_api_paths_are_404(web_client: httpx.AsyncClient):
             r = await web_client.request(method, path)
             assert r.status_code == 404, (method, path)
             assert r.headers["content-type"].startswith("application/problem+json")
+
+
+async def test_wrong_method_on_a_known_path_is_405_with_allow(web_client: httpx.AsyncClient):
+    for method in ("DELETE", "POST", "PUT"):
+        r = await web_client.request(method, "/api/v1/info")
+        assert r.status_code == 405, method
+        assert r.headers["content-type"].startswith("application/problem+json")
+        assert r.json()["error_code"] == "method_not_allowed"
+        allowed = {m.strip() for m in r.headers["allow"].split(",")}
+        assert "GET" in allowed
+        assert not allowed & {"DELETE", "POST", "PUT"}
+
+
+async def test_unknown_api_path_stays_404_without_allow(web_client: httpx.AsyncClient):
+    r = await web_client.post("/api/v1/unknown")
+    assert r.status_code == 404
+    assert r.json()["error_code"] == "not_found"
+    assert "allow" not in r.headers
