@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -19,6 +20,7 @@ from app.main import create_app
 from app.models.api_key import ApiKey
 from app.models.ui_session import UiSession
 from app.models.user import User
+from app.repositories import users as users_repo
 from tests.conftest import (
     CSRF_HEADER,
     DEAD_DATABASE_URL,
@@ -369,3 +371,67 @@ async def test_auth_continue_rate_limited_per_client(
     r = await browser.get("/auth/continue?next=/x")
     _problem(r, 429, "rate_limited")
     assert int(r.headers["Retry-After"]) >= 1
+
+
+async def test_auth_continue_limits_new_sso_sessions_not_existing_ones(
+    app: FastAPI, admin_client: httpx.AsyncClient, engine: AsyncEngine
+):
+    # A client that drops the cookie and comes back with SSO headers opens a new session
+    # each time; those sign-ins count against auth.sign_in_limit_per_minute.
+    await put_settings(
+        admin_client, {"sso.trust_token": TRUST_TOKEN, "auth.sign_in_limit_per_minute": 2}
+    )
+    transport = httpx.ASGITransport(app=app)
+    for _ in range(2):
+        async with httpx.AsyncClient(transport=transport, base_url=PUBLIC_URL) as fresh:
+            r = await fresh.get("/auth/continue?next=/x", headers=SSO)
+            assert r.status_code == 303, r.text
+    kept_cookies = fresh.cookies
+    assert len(await _rows(engine)) == 2
+    async with httpx.AsyncClient(transport=transport, base_url=PUBLIC_URL) as fresh:
+        r = await fresh.get("/auth/continue?next=/x", headers=SSO)
+        _problem(r, 429, "rate_limited")
+        assert int(r.headers["Retry-After"]) >= 1
+        assert "set-cookie" not in r.headers
+    assert len(await _rows(engine)) == 2  # no new session row
+    # A browser that keeps its valid session is redirected without being limited.
+    async with httpx.AsyncClient(
+        transport=transport, base_url=PUBLIC_URL, cookies=kept_cookies
+    ) as browser_with_session:
+        for _ in range(4):
+            r = await browser_with_session.get("/auth/continue?next=/x", headers=SSO)
+            assert r.status_code == 303, r.text
+            assert r.headers["location"] == "/x"
+            assert "set-cookie" not in r.headers
+    assert len(await _rows(engine)) == 2
+
+
+@pytest.mark.parametrize(
+    "preexisting", [ui_sessions.MAX_ACTIVE_SESSIONS - 1, ui_sessions.MAX_ACTIVE_SESSIONS]
+)
+async def test_parallel_sign_ins_never_exceed_the_session_cap(
+    engine: AsyncEngine, preexisting: int
+):
+    # Each sign-in runs on its own connection; the barrier releases them together, so
+    # without a per-user lock they all count the same active sessions before any inserts.
+    parallel = 8
+    factory = make_session_factory(engine)
+    async with factory() as session:
+        admin = await users_repo.get_or_create_admin(session)
+        await session.commit()
+    for _ in range(preexisting):
+        async with factory() as session:
+            await ui_sessions.create_session(session, user_id=admin.id, scope="admin")
+    barrier = asyncio.Barrier(parallel)
+
+    async def sign_in() -> None:
+        async with factory() as session:
+            await session.connection()  # own connection and transaction, opened up front
+            await barrier.wait()
+            await ui_sessions.create_session(session, user_id=admin.id, scope="admin")
+
+    await asyncio.gather(*(sign_in() for _ in range(parallel)))
+    rows = await _rows(engine)
+    active = [r for r in rows if r.revoked_at is None]
+    assert len(rows) == preexisting + parallel
+    assert len(active) == ui_sessions.MAX_ACTIVE_SESSIONS

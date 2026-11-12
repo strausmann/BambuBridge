@@ -167,7 +167,14 @@ async def create_session(
     At most ``MAX_ACTIVE_SESSIONS`` active sessions per user: opening one more revokes the
     oldest. Sessions that expired more than ``PURGE_AFTER`` ago are deleted on the way, so
     the table stays bounded without a background job.
+
+    Count, revoke and insert run under a lock on the user's row (``FOR NO KEY UPDATE``,
+    held until the commit), so concurrent sign-ins of the same user are serialised and
+    cannot both see room under the cap. Under ``READ COMMITTED`` the count after the lock
+    sees the sessions the previous holder committed. ``NO KEY`` keeps the lock out of the
+    way of inserts that merely reference the user (foreign keys take ``KEY SHARE``).
     """
+    await db.execute(select(User.id).where(User.id == user_id).with_for_update(key_share=True))
     now = _now()
     token = secrets.token_urlsafe(32)
     await db.execute(delete(UiSession).where(UiSession.expires_at < now - PURGE_AFTER))
