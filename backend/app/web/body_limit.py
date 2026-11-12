@@ -1,30 +1,27 @@
-"""Request body size limit: ``413 payload_too_large`` before a handler reads the body.
+"""Request body size limit: ``413 payload_too_large`` before the application runs.
 
 FastAPI reads and parses a JSON body before it resolves any dependency, so neither the
 Origin check, the rate limits nor the authentication would stop a multi-gigabyte body from
 being collected in memory. This pure ASGI middleware refuses a request whose
-``Content-Length`` is over ``MAX_REQUEST_BODY_BYTES`` without calling the application, and
-counts the bytes of a body without ``Content-Length`` (chunked) while it is read: the chunk
-that crosses the limit raises ``413`` instead of being handed on. Every route of this API
+``Content-Length`` is over ``MAX_REQUEST_BODY_BYTES`` without reading it, and reads every
+other body completely, counting its bytes, before it calls the application: the chunk that
+crosses the limit gets ``413`` and is never handed on. Reading first also covers routes that
+never read a body (static files, ``/healthz``): they would answer before the limit was
+reached. At most ``MAX_REQUEST_BODY_BYTES`` are held per request. Every route of this API
 takes small JSON bodies; a future upload route gets its own, explicit limit.
+
+The header block and chunked trailers are bounded by the HTTP server, not here (see
+``app.entrypoint``).
 """
 
 from __future__ import annotations
 
-from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.api.errors import problem_response
 
 MAX_REQUEST_BODY_BYTES = 64 * 1024
-
-
-class _BodyTooLargeError(HTTPException):
-    """Raised from ``receive``; FastAPI re-raises HTTP exceptions met while reading a body."""
-
-    def __init__(self) -> None:
-        super().__init__(status_code=413, headers={"Connection": "close"})
 
 
 def _too_large() -> JSONResponse:
@@ -56,28 +53,24 @@ class BodySizeLimitMiddleware:
         if declared is not None and declared > self.max_bytes:
             await _too_large()(scope, receive, send)
             return
+        buffered: list[Message] = []
         received = 0
-        started = False
-
-        async def limited_receive() -> Message:
-            nonlocal received
+        while True:
             message = await receive()
-            if message["type"] == "http.request":
-                received += len(message.get("body", b""))
-                if received > self.max_bytes:
-                    raise _BodyTooLargeError
-            return message
+            if message["type"] != "http.request":
+                return  # the client went away before the body was complete
+            received += len(message.get("body", b""))
+            if received > self.max_bytes:
+                await _too_large()(scope, receive, send)
+                return
+            buffered.append(message)
+            if not message.get("more_body", False):
+                break
 
-        async def tracking_send(message: Message) -> None:
-            nonlocal started
-            if message["type"] == "http.response.start":
-                started = True
-            await send(message)
+        async def replay() -> Message:
+            # The body as read; afterwards the server's own messages (``http.disconnect``).
+            if buffered:
+                return buffered.pop(0)
+            return await receive()
 
-        try:
-            await self.app(scope, limited_receive, tracking_send)
-        except _BodyTooLargeError:
-            # Read outside a route's body parsing (no handler turned it into a response).
-            if started:
-                raise
-            await _too_large()(scope, receive, send)
+        await self.app(scope, replay, send)

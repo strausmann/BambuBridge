@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import httpx
 import pytest
@@ -10,6 +12,8 @@ from starlette.responses import PlainTextResponse
 from starlette.types import Receive, Scope, Send
 
 from app.auth import csrf
+from app.config import Settings
+from app.main import create_app
 from app.web import body_limit
 from app.web.body_limit import MAX_REQUEST_BODY_BYTES
 
@@ -112,3 +116,55 @@ async def test_body_read_outside_a_route_is_413_too():
         ok = await c.post("/", content=b"1234")
         assert ok.status_code == 200
         assert ok.text == "read"
+
+
+async def _oversize_chunks() -> AsyncIterator[bytes]:
+    for _ in range(20):
+        yield b"A" * 4096
+
+
+@pytest.mark.parametrize("path", ["/", "/robots.txt", "/healthz"])
+async def test_oversize_streamed_body_to_a_route_that_ignores_bodies_is_413(
+    settings: Settings,
+    tmp_path: Path,
+    engine: object,
+    caplog: pytest.LogCaptureFixture,
+    path: str,
+):
+    # Static files and /healthz never read the body; the limit must hold all the same, as a
+    # clean 413 and not as a cut-off 200 with a logged traceback.
+    (tmp_path / "index.html").write_text("<!doctype html><title>shell</title>")
+    (tmp_path / "robots.txt").write_text("User-agent: *")
+    application = create_app(settings, web_dist_dir=tmp_path)
+    transport = httpx.ASGITransport(app=application, raise_app_exceptions=False)
+    try:
+        with caplog.at_level(logging.ERROR):
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+                r = await c.request("GET", path, content=_oversize_chunks())
+    finally:
+        await application.state.engine.dispose()
+    _assert_413(r)
+    assert "content-security-policy" in r.headers
+    assert [rec for rec in caplog.records if rec.levelno >= logging.ERROR] == []
+
+
+async def test_a_client_gone_while_the_body_is_read_never_reaches_the_app():
+    calls: list[str] = []
+
+    async def app(scope: Scope, receive: Receive, send: Send) -> None:
+        calls.append("app")
+
+    messages = [
+        {"type": "http.request", "body": b"12", "more_body": True},
+        {"type": "http.disconnect"},
+    ]
+
+    async def receive() -> dict[str, object]:
+        return messages.pop(0)
+
+    async def send(message: object) -> None:
+        calls.append("send")
+
+    limited = body_limit.BodySizeLimitMiddleware(app, max_bytes=8)
+    await limited({"type": "http", "method": "POST", "headers": []}, receive, send)  # type: ignore[arg-type]
+    assert calls == []
