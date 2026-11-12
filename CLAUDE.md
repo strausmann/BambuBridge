@@ -49,3 +49,9 @@ Die folgenden Regeln sind **bindend (keine Ausnahmen)**.
   erweitern — aber bewusst (neuer/supersedender ADR **+** Guideline-Update im selben PR), nie
   durch stilles Abweichen. Endpoint-/Feld-/Config-Änderung ⇒ Guideline + README +
   `config.example.yaml` zusammen aktualisieren.
+
+### R8 — Erscheinungsbild aus `docs/brand/`
+- Logo, Icons und Farben kommen ausschließlich aus [`docs/brand/`](docs/brand/README.md)
+  (Bildzeichen „Drehscheibe“, Tokens in `docs/brand/tokens.css`). Keine Farben frei erfinden,
+  keine Bambu-Lab-Markenelemente, kein Bambu-Grün. Abweichungen nur über eine Änderung an
+  `docs/brand/` mit Begründung.
