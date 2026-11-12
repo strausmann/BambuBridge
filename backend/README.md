@@ -96,3 +96,15 @@ credential: one API token is one credential, and all identity-provider (SSO) sig
 together are another. A new sign-in over the cap revokes the oldest session of the same
 credential only, so a token, even one with scope `read`, can never sign the operator out of a
 session opened with another token or with SSO.
+
+`GET /auth/continue` without a valid session cookie opens a new SSO session each time. The
+session cookie is `SameSite=Strict`, so a link from another site that leads a signed-in browser
+there also opens a new session. This is accepted: only the session token's hash is stored, so an
+existing session cannot be handed out again; new sessions count against
+`auth.sign_in_limit_per_minute`; and because the cap is per credential, the churn only rotates
+that user's own SSO sessions.
+
+## Reverse proxy
+
+BambuBridge does not set `Strict-Transport-Security`. HSTS belongs to the TLS-terminating
+reverse proxy in front of it (Traefik, Pangolin): set it there for the public host name.
