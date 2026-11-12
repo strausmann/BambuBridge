@@ -71,14 +71,15 @@ Browser sign-ins (`POST /api/v1/auth/session`, `GET /auth/continue`) are limited
 by the setting `auth.sign_in_limit_per_minute` (clients without a usable address share one
 sign-in bucket). At most four bcrypt checks run at once; further
 requests queue. Protecting CPU against request floods is the job of the reverse proxy in front of
-BambuBridge. The counters live in process memory: they are per process and start fresh after a restart.
+BambuBridge. Request bodies are limited to 64 KiB: a larger `Content-Length`, or a chunked body that
+grows past it, is refused with 413 before any handler or credential check runs. The counters live in process memory: they are per process and start fresh after a restart.
 `last_used_at` is updated at most once per minute.
 
 Errors are problem details (`application/problem+json`) with a stable `error_code`, for example
 `not_authenticated`, `invalid_token`, `token_expired`, `token_disabled`, `owner_disabled`,
 `insufficient_scope`, `rate_limited`, `invalid_bootstrap_key`, `bootstrap_closed`,
 `validation_failed` (field locations and messages only, never the submitted values),
-`not_found`, `method_not_allowed`, `database_unavailable` (the database cannot be reached)
+`not_found`, `method_not_allowed`, `payload_too_large` (request body over 64 KiB), `database_unavailable` (the database cannot be reached)
 and `internal_error` (anything else; details only in the server log).
 
 ## Browser sessions

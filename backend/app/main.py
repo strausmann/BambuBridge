@@ -25,6 +25,7 @@ from app.db.session import make_session_factory
 from app.security.secret_box import secret_box_from_settings
 from app.settings_store.listener import SettingsListener
 from app.settings_store.store import SettingsStore
+from app.web.body_limit import BodySizeLimitMiddleware
 from app.web.security_headers import SecurityHeadersMiddleware
 from app.web.spa import mount_spa
 from app.web.version_header import VersionHeaderMiddleware
@@ -67,6 +68,9 @@ def create_app(settings: Settings, *, web_dist_dir: Path | None = None) -> FastA
     app.state.failed_auth_client_limiter = SlidingWindowRateLimiter()
     app.state.sign_in_limiter = SlidingWindowRateLimiter()
     register_error_handlers(app)
+    # Wraps the error middleware (an oversize body never reaches a handler) and is wrapped
+    # by the header middlewares below, so the 413 carries them too.
+    app.add_middleware(BodySizeLimitMiddleware)
     # Added after the error middleware, so they wrap it: problem responses get the headers.
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(VersionHeaderMiddleware)
