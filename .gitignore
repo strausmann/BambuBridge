@@ -32,3 +32,6 @@ coverage/
 
 # Local tool caches of the Makefile (uv, virtual environment, npm, commit messages)
 .cache/
+
+# pnpm store when it is kept inside the checkout
+.pnpm-store/

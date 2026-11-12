@@ -1,9 +1,10 @@
 /*
- * BambuBridge Design-Tokens (Markenentwurf 2026-11-12)
- * Aufbau wie Label Printer Hub / Kept: Skalen (@theme), Rollen (@theme inline), Light/Dark.
- * Quelle der Wahrheit für Farben. Siehe docs/brand/README.md.
+ * BambuBridge design tokens (brand decision 2026-11-12).
+ * Three layers: scales (@theme, primitive), roles (@theme inline, semantic), light/dark values.
+ * Source of truth for colours, fonts and radii; frontend/src/design/tokens.css starts with a
+ * verbatim copy of this file (a test keeps both in step). See docs/brand/README.md.
  */
-/* BambuBridge: Skalen (primitiv) */
+/* Scales (primitive) */
 @theme {
   --color-primary-50: #EDF9FF;
   --color-primary-100: #D9F1FF;
@@ -40,13 +41,16 @@
   --color-neutral-800: #4B5259;
   --color-neutral-900: #393F46;
   --color-neutral-950: #20262C;
-  --font-sans: "Space Grotesk", "Inter", system-ui, sans-serif;
+  /* Fonts are self-hosted (@fontsource-variable), never loaded from a CDN. */
+  --font-sans: "Inter Variable", system-ui, sans-serif;
+  --font-display: "Space Grotesk Variable", "Inter Variable", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
   --radius-r1: 6px;
   --radius-r2: 10px;
   --radius-r3: 14px;
 }
 
-/* semantische Rollen: lesen die Variablen unten (Light/Dark) */
+/* Semantic roles: read the variables below (light/dark) */
 @theme inline {
   --color-bg: var(--bg);
   --color-surface: var(--surface);
@@ -75,7 +79,7 @@
   --color-info-soft: var(--info-soft);
 }
 
-/* Light ist Standard, Dark folgt dem System; data-theme überschreibt beides */
+/* Light is the default, dark follows the system; data-theme overrides both */
 :root {
   color-scheme: light;
   --bg:#F3F7FB;

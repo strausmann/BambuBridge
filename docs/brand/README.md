@@ -21,7 +21,7 @@ Die Drehscheibe: eine Spulennabe in der Mitte, vier Knoten ringsum (Drucker, Spu
 
 ## Farben
 
-Quelle der Wahrheit: [`tokens.css`](tokens.css) (Tailwind 4). Aufbau wie im Label Printer Hub und in Kept: Skalen als `@theme`, semantische Rollen als `@theme inline`, Light als Standard, Dark per System und per `data-theme`.
+Quelle der Wahrheit: [`tokens.css`](tokens.css) (Tailwind 4); `frontend/src/design/tokens.css` beginnt mit einer wortgleichen Kopie (ein Test hält beide gleich). Aufbau wie im Label Printer Hub und in Kept: Skalen als `@theme`, semantische Rollen als `@theme inline`, Light als Standard, Dark per System und per `data-theme`.
 
 | Rolle | Light | Dark | Verwendung |
 |---|---|---|---|
@@ -31,7 +31,7 @@ Quelle der Wahrheit: [`tokens.css`](tokens.css) (Tailwind 4). Aufbau wie im Labe
 | `ink` / `ink-2` / `ink-3` | `#20262C` / `#4B5259` / `#5F656D` | `#F0F4F7` / `#C3C8CE` / `#9FA5AC` | Text |
 | `ok` / `warn` / `bad` / `info` | `#00704E` / `#8C5007` / `#B02B27` / `#006E99` | `#5ED8A9` / `#FCB26F` / `#FF958A` / `#83D1F9` | nur Zustände |
 
-- Alle Textpaare erfüllen WCAG 2.2 AA (niedrigster Wert 4.87:1); Eingaberahmen ≥ 3:1. Ein Kontrast-Test wie im Printer Hub (`tokens.test.ts`) hält das fest.
+- Alle Textpaare erfüllen WCAG 2.2 AA (niedrigster Wert 4.87:1); Eingaberahmen ≥ 3:1. Der Kontrast-Test `frontend/src/design/tokens.test.ts` hält das für jedes Paar aus `TEXT_PAIRS` (`tokens.ts`) fest, hell und dunkel.
 - Zustand nie nur über Farbe zeigen (zusätzlich Text oder Symbol).
 
 ## Abgrenzung zu Bambu Lab
@@ -42,10 +42,23 @@ Die BambuBridge ist kein Produkt von Bambu Lab und darf nicht so aussehen.
 - **Keine** grün-dominante Fläche. Bambu-Grün `#00AE42` ist tabu; Abstand der Primärfarbe ΔE2000 ≈ 49. Grün erscheint nur als Statusfarbe `ok` (bläulicher, Hue 165°).
 - Den Namen „Bambu“ nur als Teil des Projektnamens bzw. zur sachlichen Beschreibung der unterstützten Geräte verwenden, nie so, dass eine Verbindung zu Bambu Lab nahegelegt wird.
 
-## Offen
+## Schrift
 
-- **Schrift:** Die Entwurfsvorschau nutzt Space Grotesk und Inter. Für die App gilt wie im Printer Hub: Schriften lokal ausliefern (`@fontsource`), kein CDN (CSP). Die endgültige Wahl fällt beim Bau der Oberfläche.
-- **Akzentfarbe:** Rosé ist Entwurf; bestätigt ist bisher nur die Primärfarbe.
+Entschieden am 12.11.2026:
+
+| Rolle | Schrift | Token |
+|---|---|---|
+| Überschriften | Space Grotesk (variabel, 300–700) | `--font-display` |
+| Text und Bedienelemente | Inter (variabel, 100–900) | `--font-sans` |
+| Code, Tokens, Kennungen | JetBrains Mono (variabel, 100–800) | `--font-mono` |
+
+- Alle drei stehen unter der SIL Open Font License 1.1 und werden über `@fontsource-variable/*` 5.3.0 **lokal ausgeliefert** – kein CDN, kein Font-Host (CSP `default-src 'self'`). Gebündelt werden nur die Teilmengen `latin` und `latin-ext`; die Lizenztexte liegen im Build unter `licenses/`.
+- Komponenten nennen nie einen Schriftnamen, nur die Tokens. Ein Wechsel der Schrift ist damit eine Änderung in `tokens.css` und `frontend/src/design/fonts.css`.
+- Der Build-Test (`frontend/src/build.test.ts`) hält fest, dass keine fremde Adresse im Build steht; der Layout-Test (`frontend/harness/shell.spec.ts`) belegt, dass die Schriftdateien tatsächlich von der eigenen Adresse geladen werden.
+
+## Akzentfarbe
+
+Rosé ist bestätigt (12.11.2026). Der Akzent liegt hinter den Tokens `--color-accent-*` (Skala) und `--accent*` (Rollen) und wird sparsam eingesetzt: Hervorhebung, Regel-/Integrations-Kennzeichen, der Knoten im Bildzeichen. Hauptaktionen und die aktive Navigation bleiben beim Brückenblau.
 
 ## Weitere Dateien
 
