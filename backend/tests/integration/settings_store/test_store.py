@@ -375,3 +375,49 @@ async def test_cache_updates_and_reloads_share_one_lock(
         assert store.get(key) == 90
     await asyncio.wait_for(asyncio.gather(writer, reloader), 5)
     assert store.get(key) == 7
+
+
+async def test_set_many_installs_the_committed_value_although_the_session_holds_the_old_row(
+    store: SettingsStore, db_session: AsyncSession
+):
+    # The caller's session already has the rows in its identity map (``session.get``); the
+    # upsert does not touch those objects and ``expire_on_commit`` is off, so a re-read that
+    # returned the identity-map objects would put the previous values back into the cache.
+    other_token = "u" * 40  # obviously fake, different from TOKEN
+    await store.set_many(db_session, {"retention.events_days": 7, "sso.trust_token": TOKEN})
+    held = [
+        await db_session.get(AppSetting, "retention.events_days"),
+        await db_session.get(AppSetting, "sso.trust_token"),
+    ]
+    # Keep references (``held``): the identity map is weak.
+    assert all(row is not None for row in held)
+
+    await store.set_many(db_session, {"retention.events_days": 8, "sso.trust_token": other_token})
+
+    assert (store.get("retention.events_days"), store.secret("sso.trust_token")) == (
+        8,
+        other_token,
+    )
+
+
+async def test_load_installs_the_committed_value_although_the_session_holds_the_old_row(
+    store: SettingsStore, box_a: SecretBox, db_session: AsyncSession, session2: AsyncSession
+):
+    other_token = "u" * 40
+    writer = SettingsStore(box_a)
+    await writer.set_many(session2, {"retention.events_days": 7, "sso.trust_token": TOKEN})
+    # Keep references: the identity map is weak, a dropped object would be reloaded fresh.
+    held = [
+        await db_session.get(AppSetting, "retention.events_days"),
+        await db_session.get(AppSetting, "sso.trust_token"),
+    ]
+    assert all(row is not None for row in held)
+
+    # Another session commits a change; the first session still holds the old objects.
+    await writer.set_many(session2, {"retention.events_days": 8, "sso.trust_token": other_token})
+    await store.load(db_session)
+
+    assert (store.get("retention.events_days"), store.secret("sso.trust_token")) == (
+        8,
+        other_token,
+    )

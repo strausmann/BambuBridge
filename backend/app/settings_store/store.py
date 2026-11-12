@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import Select, delete, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +40,17 @@ from app.settings_store.registry import (
 CHANNEL = "bambubridge_settings"
 
 _log = logging.getLogger(__name__)
+
+
+def _select_settings() -> Select[AppSetting]:
+    """``SELECT`` of setting rows that always reflects the database.
+
+    The caller's session may already hold ``AppSetting`` objects (``session.get``); sessions
+    are made with ``expire_on_commit=False`` and the upsert in :meth:`SettingsStore.set_many`
+    does not touch ORM objects. Without ``populate_existing`` the query would hand back those
+    identity-map objects with their old values.
+    """
+    return select(AppSetting).execution_options(populate_existing=True)
 
 
 @dataclass(frozen=True)
@@ -172,7 +183,7 @@ class SettingsStore:
         secrets: dict[str, str] = {}
         present: set[str] = set()
         undecryptable: set[str] = set()
-        rows = (await session.execute(select(AppSetting))).scalars().all()
+        rows = (await session.execute(_select_settings())).scalars().all()
         self._parse_into(rows, values, secrets, present, undecryptable)
         self._values, self._secrets = values, secrets
         self._secret_present, self._undecryptable = present, undecryptable
@@ -186,7 +197,7 @@ class SettingsStore:
         secrets: dict[str, str] = {}
         present: set[str] = set()
         undecryptable: set[str] = set()
-        stmt = select(AppSetting).where(AppSetting.key.in_(list(keys)))
+        stmt = _select_settings().where(AppSetting.key.in_(list(keys)))
         self._parse_into(
             (await session.execute(stmt)).scalars().all(), values, secrets, present, undecryptable
         )
