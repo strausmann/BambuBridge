@@ -96,3 +96,36 @@ def test_create_key_rejects_blank_name(
     monkeypatch.setenv("BAMBUBRIDGE_DATABASE_URL", test_database_url)
     assert main(["admin", "create-key", "--scope", "read", "--name", "  "]) == 2
     assert "name" in capsys.readouterr().err
+
+
+async def _seed_admin(url: str, *, enabled: bool, role: str) -> None:
+    engine = make_engine(url)
+    try:
+        await truncate_all(engine)
+        async with make_session_factory(engine)() as session:
+            session.add(User(display_name="admin", role=role, enabled=enabled))
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("enabled", "role", "reason"),
+    [(False, "admin", "disabled"), (True, "read", "role")],
+)
+def test_create_key_refuses_unusable_admin_user(
+    test_database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    enabled: bool,
+    role: str,
+    reason: str,
+):
+    # A token for a disabled or demoted admin user could never be used.
+    asyncio.run(_seed_admin(test_database_url, enabled=enabled, role=role))
+    monkeypatch.setenv("BAMBUBRIDGE_DATABASE_URL", test_database_url)
+    assert main(["admin", "create-key", "--scope", "admin", "--name", "x"]) == 1
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert reason in err
+    assert asyncio.run(_rows(test_database_url)) == []

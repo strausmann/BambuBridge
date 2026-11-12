@@ -91,6 +91,10 @@ def _rotate() -> int:
 _NAME_MAX = 100
 
 
+class _UnusableAdminError(Exception):
+    """The user ``admin`` exists but could not use a new token."""
+
+
 def _create_key(scope: Scope, name: str) -> int:
     """Create a token owned by the user ``admin``; the plaintext goes to stdout once."""
     url = os.environ.get("BAMBUBRIDGE_DATABASE_URL", "").strip()
@@ -105,6 +109,11 @@ def _create_key(scope: Scope, name: str) -> int:
         try:
             async with make_session_factory(engine)() as session:
                 owner = await users_repo.get_or_create_admin(session)
+                # Never issue a dead token (it would be rejected on every request).
+                if not owner.enabled:
+                    raise _UnusableAdminError("the user 'admin' is disabled")
+                if owner.role != "admin":
+                    raise _UnusableAdminError("the user 'admin' no longer has the role 'admin'")
                 _, plaintext = await api_keys_repo.create(
                     session, owner_user_id=owner.id, name=name, scope=scope
                 )
@@ -115,6 +124,8 @@ def _create_key(scope: Scope, name: str) -> int:
 
     try:
         plaintext = asyncio.run(run())
+    except _UnusableAdminError as exc:
+        return _fail(f"{exc}; no token was created", 1)
     except (OSError, SQLAlchemyError) as exc:
         return _fail(f"database error ({type(exc).__name__}); no token was created", 1)
     sys.stdout.write(f"{plaintext}\n")
