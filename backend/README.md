@@ -108,6 +108,29 @@ existing session cannot be handed out again; new sessions count against
 `auth.sign_in_limit_per_minute`; and because the cap is per credential, the churn only rotates
 that user's own SSO sessions.
 
+## Events and the outbox
+
+Everything that happens is written as an event (`app/events/`). `EventService.emit` stores
+the event and one delivery per registered subscriber in the caller's transaction, so a
+subscriber never sees an event whose transaction was rolled back and never misses one that
+was committed. `emit` does not commit; the caller does.
+
+- **Type names** follow `(account|inventory|integration|display).<subject>.<action>` in
+  lower case, for example `integration.demo.tick`. Other names are rejected.
+- **Duplicates:** with a `dedup_key`, a second event of the same source with the same key
+  inside `events.dedup_window_seconds` (runtime setting, default 600, `0` switches it off)
+  is dropped and `emit` returns `None`.
+- **Order per source:** `emit` holds an advisory lock on the source until the caller's
+  transaction ends, so the events of one source are stored in commit order. Keep such
+  transactions short.
+- **Delivery:** subscribers take their deliveries with `outbox.claim` (`FOR UPDATE SKIP
+  LOCKED`, so several workers never get the same one), then call `outbox.complete` or
+  `outbox.fail`. A failed delivery is retried after 2, 4, 8 ... seconds and is set to
+  `failed` after the tenth attempt.
+- **Partitions:** `events` is partitioned by month (`events_y2026m12`). The server creates
+  the partitions for the current and the next two months at startup and every day at
+  00:05 UTC. There is no default partition.
+
 ## Health checks
 
 `GET /healthz` needs no credentials and answers 200 while the process runs. `GET /readiness`
