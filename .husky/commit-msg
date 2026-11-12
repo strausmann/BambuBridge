@@ -1,1 +1,9 @@
-npx --no -- commitlint --edit "$1"
+#!/bin/sh
+# Lints the commit message in a container (see Makefile).
+# Skip with HUSKY=0 or "git commit --no-verify".
+[ "${HUSKY-}" = "0" ] && exit 0
+docker info >/dev/null 2>&1 || {
+	echo "Docker is not running; start it or set HUSKY=0" >&2
+	exit 1
+}
+exec make --no-print-directory commitlint-msg MSG="$1"

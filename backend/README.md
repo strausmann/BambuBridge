@@ -4,9 +4,12 @@ FastAPI service. Run the checks with `uv run ruff check . && uv run ruff format 
 
 ## Tests need PostgreSQL
 
-The suite requires `BAMBUBRIDGE_TEST_DATABASE_URL` and aborts without it. It creates a database
-`bb_test_<pid>` per run, migrates it with `alembic upgrade head` and truncates all tables before
-each test. Locally:
+The suite requires `BAMBUBRIDGE_TEST_DATABASE_URL` and aborts without it. It creates its own
+database per run (`bb_test_…`), migrates it with `alembic upgrade head` and truncates all tables
+before each test. Tokens are hashed with the cheapest bcrypt cost in tests; tests marked
+`production_bcrypt_cost` pin the shipped cost of 12. From the repository root, `make ci` runs the
+whole chain in containers (see `CONTRIBUTING.md`). `pytest -n auto` runs the tests in parallel, one
+database per worker. By hand:
 
 ```bash
 docker run -d --rm -p 55432:5432 -e POSTGRES_PASSWORD=test postgres:18.6-trixie

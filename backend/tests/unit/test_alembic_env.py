@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import Iterator
 
 import pytest
@@ -13,7 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.migrations import make_alembic_config
-from tests.db_support import admin_url, url_for_database
+from tests.db_support import admin_url, unique_database_name, url_for_database
 
 
 async def _admin(statement: str) -> None:
@@ -36,8 +35,7 @@ async def _versions(url: str) -> list[str]:
 
 @pytest.fixture
 def fresh_database_url() -> Iterator[str]:
-    name = f"bb_env_{os.getpid()}"
-    asyncio.run(_admin(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+    name = unique_database_name("env")
     asyncio.run(_admin(f'CREATE DATABASE "{name}"'))
     try:
         yield url_for_database(admin_url(), name)

@@ -1,8 +1,12 @@
 """Shared pytest fixtures and the per-run test database.
 
 The suite needs ``BAMBUBRIDGE_TEST_DATABASE_URL`` (a PostgreSQL 18 server). Each run
-creates its own database ``bb_test_<pid>``, migrates it once with ``alembic upgrade
-head`` and drops it at the end. Every test starts with all tables truncated.
+creates its own database (``bb_test_…``, see ``unique_database_name``), migrates it once
+with ``alembic upgrade head`` and drops it at the end. Every test starts with all tables
+truncated.
+
+Tokens are hashed with the cheapest bcrypt cost in tests (``cheap_bcrypt``); tests marked
+``production_bcrypt_cost`` run with the cost the application ships with.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from fastapi import FastAPI
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
+from app.auth import tokens
 from app.auth.scopes import Scope
 from app.config import Settings
 from app.db.engine import make_engine
@@ -35,6 +40,7 @@ from tests.db_support import (
     TEST_DATABASE_URL_ENV,
     admin_url,
     truncate_all,
+    unique_database_name,
     url_for_database,
 )
 
@@ -43,12 +49,35 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 # Obviously fake bootstrap key (>= 32 characters), readable text only.
 TEST_BOOTSTRAP_KEY = "test-bootstrap-key-abcdefghijklmnopqrstuvwxyz"
 KEY_HEADER = "X-BambuBridge-Key"
+# The lowest cost bcrypt accepts. Hashing dominates the suite at the production cost.
+TEST_BCRYPT_ROUNDS = 4
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
     """Abort the whole run with a clear message when no test database is configured."""
     if not os.environ.get(TEST_DATABASE_URL_ENV):
         pytest.exit(MISSING_URL_MESSAGE, returncode=4)
+
+
+@pytest.fixture(autouse=True)
+def cheap_bcrypt(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Hash tokens with ``TEST_BCRYPT_ROUNDS`` unless the test asks for the production cost.
+
+    Only the test process is affected: the application reads ``tokens.BCRYPT_ROUNDS``,
+    which this fixture replaces for the duration of one test. Tests marked
+    ``production_bcrypt_cost`` keep the shipped value and pin it.
+    """
+    if request.node.get_closest_marker("production_bcrypt_cost") is None:
+        monkeypatch.setattr(tokens, "BCRYPT_ROUNDS", TEST_BCRYPT_ROUNDS)
+        yield
+        return
+    # The dummy hash is computed once per process; do not reuse a cheap one here and do
+    # not leave an expensive one behind for the following tests.
+    tokens._dummy_hash.cache_clear()
+    try:
+        yield
+    finally:
+        tokens._dummy_hash.cache_clear()
 
 
 async def _admin_statement(statement: str) -> None:
@@ -66,9 +95,8 @@ def _alembic_config(url: str) -> Config:
 
 @pytest.fixture(scope="session")
 def test_database_url() -> Iterator[str]:
-    """Create ``bb_test_<pid>``, migrate it to head, drop it after the run."""
-    name = f"bb_test_{os.getpid()}"
-    asyncio.run(_admin_statement(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+    """Create a database for this run (and worker), migrate it to head, drop it at the end."""
+    name = unique_database_name("test")
     asyncio.run(_admin_statement(f'CREATE DATABASE "{name}"'))
     url = url_for_database(admin_url(), name)
     try:
@@ -81,8 +109,7 @@ def test_database_url() -> Iterator[str]:
 @pytest.fixture
 def scratch_database_url() -> Iterator[str]:
     """An empty throw-away database for tests that migrate up and down."""
-    name = f"bb_scratch_{os.getpid()}"
-    asyncio.run(_admin_statement(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+    name = unique_database_name("scratch")
     asyncio.run(_admin_statement(f'CREATE DATABASE "{name}"'))
     try:
         yield url_for_database(admin_url(), name)
