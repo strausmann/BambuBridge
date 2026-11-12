@@ -28,7 +28,7 @@ Genau eine klare, prüfbare Aussage.>
 - **Positiv:** <was dadurch einfacher/besser wird>
 - **Negativ / Trade-offs:** <was dadurch schwerer wird, Risiken>
 - **Neutral / Folgearbeiten:** <Migrationsschritte, was synchron zu halten ist —
-  Guideline + README + config.example.yaml, weitere ADRs>
+  Code, Tests, README, weitere ADRs>
 
 ## References
-<Issues, PRs, Guideline-Stellen als `file:line`, externe Quellen (mit URL).>
+<Issues, PRs, Stellen im Code als `file:line`, externe Quellen (mit URL).>

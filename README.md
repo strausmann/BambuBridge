@@ -1,146 +1,26 @@
-# Bambu ↔ Spoolman Bridge (Prototype)
+# BambuBridge
 
 [![CLA assistant](https://cla-assistant.io/readme/badge/strausmann/BambuBridge)](https://cla-assistant.io/strausmann/BambuBridge)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-Local Docker service that ingests AMS/RFID/consumption telemetry from Bambu Lab
-printers via **LAN MQTT** and syncs it to **Spoolman**, with an onboarding PWA
-(QR quick-bind + Web NFC for third-party tags) and an optional **Label-Printer-Hub**
-hook.
+BambuBridge connects Bambu Lab printers to [Spoolman](https://github.com/Donkie/Spoolman): it ingests
+AMS, RFID and consumption telemetry from the printers and keeps your filament inventory in sync, with a
+progressive web app for onboarding and day-to-day use.
 
-> **Dependencies: only the printer (MQTT) + Spoolman.** The bridge is fully
-> self-contained and works **without Hangar** and **without the Label-Hub** — both
-> are optional. It only reads/writes Spoolman's native `location` field as plain
-> text, so any external viewer (e.g. Hangar) is purely additive.
+> **Rebuild in progress for 0.2.0.** The earlier prototype has been removed from the working tree; the
+> new `backend/` and `frontend/` are being built step by step. There are no usage instructions yet — the
+> full README arrives with the release. The removed code stays readable in git history, see
+> [`docs/legacy-reference.md`](docs/legacy-reference.md).
 
-> Design rationale and decisions: [`docs/bambu-spoolman-bridge-concept.md`](docs/bambu-spoolman-bridge-concept.md)
-> Logo and colours: [`docs/brand/`](docs/brand/README.md)
-> Cloud-API analysis (optional enrichment): [`docs/filament-cloud-api-analysis-spec.md`](docs/filament-cloud-api-analysis-spec.md)
+BambuBridge is not a product of Bambu Lab and is not affiliated with, endorsed or sponsored by Bambu Lab.
 
-## Status
-
-Scaffold / work in progress. **Implemented:** LAN MQTT ingest + AMS tray parsing,
-AMS identity via `get_version` (type + serial → friendly location names), SQLite
-state (spool map, slot state, tag registry, job log, spool home), Spoolman client
-with community extra fields (`tag` / `active_tray` / `filament_id`), AMS slot →
-Spoolman native `location` with previous-location restore on unload, remain%
-reconcile, **auto-create** of Spoolman vendor/filament/spool from tray metadata,
-**per-job consumption tracking** (remain%-delta; history-only in `combined`,
-subtractive in `per_job`), onboarding API + PWA (QR quick-bind, auto-create,
-Web NFC read/write), Label-Hub call, tag lifecycle (free / reassign with material
-compatibility guard), **cloud-MQTT fallback** (token auth, `transport: auto`
-prefers LAN via TCP reachability check), **cloud-library import** (Filament
-Manager → Spoolman, live REST or saved JSON capture, idempotent via RFID +
-cloud_id). **TODO:** persist pending queue, verify gcode_state/tray_now/
-cloud-username **and the cloud filament endpoint path** against a real
-printer/account.
-
-## Finding the real cloud endpoint (packed DLL)
-
-`bambu_networking.dll` is packed, so static `strings` shows no URLs. The decrypted
-strings live in a **memory dump of the running Bambu Studio process** (1–1.5 GB —
-don't upload it, scan it locally):
-
-```bash
-python3 scripts/extract_endpoints.py StudioDump.dmp        # Python (any OS)
-# or on Windows with Sysinternals:  strings64.exe -n 6 StudioDump.dmp | findstr /i bambulab filament mqtt
-```
-
-Share only the matching `bambulab` / `/v1/...` / `filament` / `mqtt` lines — **redact any
-token/cookie/personal id**. Put the confirmed filament path into
-`config.cloud_library.endpoint`, then run the importer.
-
-## Cloud library import
-
-Imports your Bambu Filament Manager library into Spoolman.
-
-```bash
-# Dry run first (the live endpoint path is a HYPOTHESIS — verify via capture):
-curl -X POST localhost:8099/api/cloud/import -H 'Content-Type: application/json' \
-  -d '{"source":"live","dry_run":true}'
-# Or test the mapping against a saved mitmproxy capture, no live call needed:
-curl -X POST localhost:8099/api/cloud/import -H 'Content-Type: application/json' \
-  -d '{"source":"file","path":"/data/capture.json","dry_run":false}'
-```
-
-## Quick start
-
-```bash
-cd bambu-spoolman-bridge
-mkdir -p data
-cp config.example.yaml data/config.yaml   # then edit: printer serial, LAN host, access code, spoolman url
-docker compose up --build
-# UI on http://<host>:8099  (put HTTPS in front for Web NFC — see concept §12)
-```
-
-Local dev without Docker:
-
-```bash
-pip install -r requirements.txt
-BRIDGE_CONFIG=data/config.yaml BRIDGE_DB=data/state.db uvicorn app.main:app --reload --port 8099
-```
-
-## Spoolman setup
-
-Add these **extra fields** in Spoolman (Settings → Extra fields), matching the
-OpenSpoolMan / BambuSpoolPal convention so tools interoperate:
-
-- Spool: `tag` (text), `active_tray` (text)
-- Filament: `filament_id` (text), `type` (text), `nozzle_temperature` (text)
-
-## How it works
-
-1. MQTT `device/<serial>/report` → AMS trays parsed (`tag_uid`, `tray_info_idx`,
-   `tray_type`, `tray_color`, `remain`, `tray_weight`).
-2. Known `tag_uid` → update Spoolman `active_tray` + reconcile remaining weight.
-3. Unknown `tag_uid` → appears under "Neue Spulen" in the PWA → **scan the carton
-   QR** (`/spool/{id}`) or enter the spool id to bind. Optional label print.
-4. Tag lifecycle: free a tag when a spool is used up; reassign to a *same-material*
-   third-party spool (no Developer Mode → no slot override, concept §5.4/§5.5).
-
-## API
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/state` | pending onboarding + free/all tags |
-| GET | `/api/spools` · `/api/filaments` | Spoolman proxy |
-| POST | `/api/bind` `{tag_uid, spool_id}` | link tag → spool |
-| POST | `/api/free` `{tag_uid}` | mark tag reusable |
-| POST | `/api/reassign` `{tag_uid, spool_id, spool_material}` | reuse on third-party (compat-checked) |
-| POST | `/api/label/{spool_id}` | print a label |
-| GET | `/api/spoolmandb/summary` | vendors/types from SpoolmanDB (online, MIT) |
-| POST | `/api/spoolmandb/import` `{vendors,types,dry_run}` | bulk-create selected filaments in Spoolman |
-| POST | `/api/preset/generate` `{vendor,material,…}` | build a Bambu filament preset JSON (Studio import) |
-| GET | `/api/printers` · `/api/printers/{serial}/ams` | ESP32 slot selector: printers, AMS+slots |
-| POST | `/api/slot/stage` · `/api/slot/assign` | ESP32 bind flow: stage a slot, assign a filament |
-| POST | `/api/cali/set` `{ams_id,tray_id,k,n}` | write k to printer *(gated: ams.allow_k_write)* |
-| GET | `/api/kcatalog` | observed k per (vendor/material/nozzle) |
-| POST | `/api/ams/unload` `{ams_id}` | unload a slot *(gated: ams.allow_unload)* |
-
-## UI
-
-Tailwind (Play CDN) PWA with tabs: **Onboarding** (pending RFID, free tags, AMS),
-**SpoolmanDB** (pick vendor+type → dry-run/import), **Preset-Generator** (form → download
-Bambu preset JSON), **Cloud-Import**, **NFC** (read/write OpenSpool tags). HTTPS required for
-Web NFC/camera — front it with a reverse proxy (concept §12).
+Logo and colours: [`docs/brand/`](docs/brand/README.md).
 
 ## License
 
-BambuBridge is licensed under the **GNU Affero General Public License, version 3 or later** (`AGPL-3.0-or-later`) — see [`LICENSE`](LICENSE).
+BambuBridge is licensed under the **GNU Affero General Public License, version 3 or later**
+(`AGPL-3.0-or-later`) — see [`LICENSE`](LICENSE). Release 0.1.0 was published under MIT; anyone who
+received 0.1.0 keeps the MIT terms for that release.
 
-Release 0.1.0 was published under MIT; from the next release on the project is AGPL-3.0-or-later. Anyone who received 0.1.0 keeps the MIT terms for that release.
-
-Note: filament presets generated from BambuStudio/OrcaSlicer profiles are **AGPL-3.0** at the source and are produced locally (not redistributed here); SpoolmanDB data is MIT and fetched at runtime. The closed-source Bambu Lab network plugin (`libbambu_networking.*`) is neither included nor redistributed. See concept §11.
-
-Contributions require agreement to the [Contributor License Agreement](CLA.md) (see [CONTRIBUTING.md](CONTRIBUTING.md)).
-
-## Repository layout
-
-```
-app/        FastAPI service (MQTT ingest, Spoolman client, SQLite state, cloud import)
-web/        Tailwind PWA (onboarding, SpoolmanDB, preset generator, cloud import, NFC)
-scripts/    catalog builder, 3mf extractor, endpoint scanner, mitmproxy addon, redactor
-docs/       concept, API + database guidelines, capture runbook, capability matrix, HANDOVER
-analysis/   schema-only endpoint exchange (redacted; never raw flows/credentials)
-.github/    issue templates
-```
+Contributions require agreement to the [Contributor License Agreement](CLA.md) (see
+[CONTRIBUTING.md](CONTRIBUTING.md)).

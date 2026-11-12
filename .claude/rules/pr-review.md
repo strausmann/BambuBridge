@@ -1,27 +1,25 @@
-# PR-Review-Findings (Gemini / Copilot) — vollständig abarbeiten
+# PR review findings (Gemini / Copilot) — work through all of them
 
-Lädt automatisch für jede (menschliche oder Claude-)Instanz.
+This rule loads automatically for every (human or Claude) contributor.
 
-## Grundsatz
-Jeder PR wird von KI-Reviewern (Gemini Code Assist, GitHub Copilot) kommentiert. **Jedes Finding
-MUSS einen Status bekommen** — keines bleibt unbeantwortet:
-- **Behoben** → Fix committen und im Finding-Thread kurz vermerken (was/wo, ggf. Commit-SHA).
-- **False Positive / bewusst nicht umgesetzt** → im Finding-Thread **mit Begründung** antworten,
-  warum es nicht zutrifft bzw. nicht umgesetzt wird.
+## Principle
+Every PR is commented on by AI reviewers (Gemini Code Assist, GitHub Copilot). **Every finding MUST get
+a status** — none stays unanswered:
+- **Fixed** → commit the fix and note it briefly in the finding thread (what/where, commit SHA if useful).
+- **False positive / deliberately not applied** → reply in the finding thread **with reasoning**.
 
-Stilles Übergehen ist verboten (vgl. R0 Fehlerkultur).
+Silently ignoring a finding is forbidden (see R0 error culture).
 
-## Vorgehen (auch für Claude-Agents)
-1. Vor dem Merge **alle** Review-Threads holen:
+## Procedure (also for Claude agents)
+1. Before merging, fetch **all** review threads:
    - `gh pr view <n> --repo <owner>/<repo> --comments`
-   - Inline-Findings: `gh api repos/<owner>/<repo>/pulls/<n>/comments`
-2. Findings nach Severity ordnen; echte Bugs/Security zuerst.
-3. Pro Finding: **fixen** oder **als False Positive begründen** — und **antworten**.
-4. Erst **mergen**, wenn jedes Finding einen Status hat (behoben / abgelehnt-mit-Begründung) **und**
-   CI grün ist.
+   - inline findings: `gh api repos/<owner>/<repo>/pulls/<n>/comments`
+2. Order findings by severity; real bugs and security issues first.
+3. For each finding: **fix** it or **justify it as a false positive** — and **reply**.
+4. **Merge** only when every finding has a status (fixed / rejected with reasoning) **and** CI is green.
 
-## Auf ein Inline-Finding antworten
+## Replying to an inline finding
 ```bash
-gh api repos/<owner>/<repo>/pulls/<n>/comments/<comment_id>/replies -f body="<Antwort>"
+gh api repos/<owner>/<repo>/pulls/<n>/comments/<comment_id>/replies -f body="<reply>"
 ```
-Für allgemeine PR-Kommentare: `gh pr comment <n> --repo <owner>/<repo> --body "<text>"`.
+For general PR comments: `gh pr comment <n> --repo <owner>/<repo> --body "<text>"`.

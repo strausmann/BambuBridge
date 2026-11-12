@@ -1,27 +1,25 @@
-# Fehlerkultur — oberste Regel (automatischer Post-Mortem)
+# Error culture — top rule (automatic post-mortem)
 
-Diese Regel lädt automatisch für jede (menschliche oder Claude-)Instanz und gilt **immer und zuoberst**.
+This rule loads automatically for every (human or Claude) contributor and applies **always and first**.
 
-## Grundsatz
-Fehler sind erlaubt — **denselben Fehler zweimal zu machen, nicht.** Sobald ein Fehler passiert
-(falsche Annahme, kaputter Befehl, falsche Schlussfolgerung, Fehlverhalten, Regressionen), wird
-**automatisch und ohne Aufforderung** so vorgegangen:
+## Principle
+Mistakes are allowed — **making the same mistake twice is not.** As soon as a mistake happens (wrong
+assumption, broken command, wrong conclusion, misbehaviour, regression), proceed **automatically and
+without being asked**:
 
-1. **Analysieren** — die **Root Cause** ermitteln (nicht nur das Symptom). Was genau ist passiert,
-   warum, und was war die auslösende Annahme/Handlung?
-2. **Dokumentieren** — einen Eintrag in `docs/learnings/lessons-learned.md` ergänzen
-   (Format siehe `docs/learnings/README.md`): Was passiert ist · Root Cause · Impact ·
-   Fix/Prävention.
-3. **Wiederholung verhindern** — eine **konkrete Maßnahme** etablieren, je nach Art:
-   - Verhaltens-/Prozessfehler → neue/erweiterte **Rule** (`.claude/rules/`) + ggf. **Memory**.
-   - Entscheidungs-/Architekturfehler → **ADR** (`docs/decisions/`, siehe `.claude/rules/adr.md`).
-   - Code-/Regressionsfehler → **Test** oder Guard, der den Fall künftig abfängt.
-   - Tooling/Automation, das hart greifen muss → **Hook** in `settings.json`.
+1. **Analyse** — find the **root cause** (not just the symptom). What exactly happened, why, and which
+   assumption or action triggered it?
+2. **Document** — add an entry to `docs/learnings/lessons-learned.md` (format: `docs/learnings/README.md`):
+   what happened · root cause · impact · fix/prevention.
+3. **Prevent recurrence** — establish a **concrete measure**, depending on the kind of mistake:
+   - Behaviour/process mistake → new or extended **rule** (`.claude/rules/`) and, if useful, a memory note.
+   - Decision/architecture mistake → **ADR** (`docs/decisions/`, see `.claude/rules/adr.md`).
+   - Code/regression mistake → a **test** or guard that catches the case in future.
+   - Tooling/automation that must bite → a **hook** in `settings.json`.
 
-## Haltung
-- **Fehler offen benennen**, nicht kaschieren — auch eigene. Lieber transparent „das war falsch,
-  Ursache X, Maßnahme Y" als stillschweigend korrigieren.
-- Diese Regel hat **Vorrang**: Auch wenn eine Aufgabe drängt, wird ein erkannter Fehler erst
-  analysiert + dokumentiert + abgesichert, bevor einfach weitergemacht wird.
-- Bezieht sich eng auf [[verify-before-concluding]] — viele Fehler entstehen aus unzureichender
-  Vorab-Prüfung.
+## Attitude
+- **Name mistakes openly**, including your own. "That was wrong, cause X, measure Y" beats silent correction.
+- This rule has **priority**: even when a task is urgent, a recognised mistake is analysed, documented
+  and secured before work simply continues.
+- It is closely tied to rule R1 (verify before concluding) — many mistakes come from insufficient
+  up-front verification.
