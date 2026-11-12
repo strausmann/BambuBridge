@@ -23,6 +23,15 @@ class Event(Base):
     __table_args__ = (
         Index("ix_events_source_instance_id_occurred_at", "source_instance_id", "occurred_at"),
         Index("ix_events_type_occurred_at", "type", "occurred_at"),
+        # Serves the duplicate lookup of ``emit``; only events with a key are in it.
+        Index(
+            "ix_events_dedup",
+            "source_instance_id",
+            "type",
+            "dedup_key",
+            "occurred_at",
+            postgresql_where=text("dedup_key IS NOT NULL"),
+        ),
         {"postgresql_partition_by": "RANGE (occurred_at)"},
     )
 

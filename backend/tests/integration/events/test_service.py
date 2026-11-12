@@ -225,7 +225,7 @@ async def test_order_per_source_preserved_under_concurrency(
 
     await asyncio.gather(*(one(n) for n in range(total)))
 
-    claimed = await outbox.claim(db_session, "sse", limit=total)
+    claimed = await outbox.claim(db_session, "sse", "w1", limit=total)
     assert len(claimed) == total
     order = [d.event.payload["n"] for d in claimed if d.event is not None]
     # A consumer sees the events of one source in the order their transactions committed.
@@ -253,7 +253,7 @@ async def test_emit_waits_for_an_open_emit_of_the_same_source_only(
     await db_session.commit()
     await asyncio.wait_for(same, timeout=5)
 
-    claimed = await outbox.claim(db_session, "sse")
+    claimed = await outbox.claim(db_session, "sse", "w1")
     by_source = [d.event.payload["n"] for d in claimed if d.event.source_instance_id == SOURCE_A]
     assert by_source == [1, 3]
 
@@ -294,7 +294,7 @@ async def test_dedup_lookup_reads_only_the_partitions_of_the_window(db_session: 
     )
     await db_session.commit()
     statement = events_repo.duplicate_query(
-        source_instance_id=SOURCE_A, dedup_key="k", window_seconds=60
+        source_instance_id=SOURCE_A, type=EVENT_TYPE, dedup_key="k", window_seconds=60
     ).compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
 
     raw = (await db_session.execute(text(f"EXPLAIN (FORMAT JSON) {statement}"))).scalar_one()
@@ -344,3 +344,51 @@ async def test_emit_rejects_a_schema_version_that_is_not_a_positive_int(
         )
     await db_session.commit()
     assert await counts(sessions) == (0, 0)
+
+
+def _plan_nodes(node: dict[str, Any]) -> list[dict[str, Any]]:
+    found = [node]
+    for child in node.get("Plans", []):
+        found += _plan_nodes(child)
+    return found
+
+
+@pytest.mark.parametrize("source", [SOURCE_A, None], ids=["source", "no-source"])
+async def test_dedup_lookup_uses_the_dedup_index(
+    source: uuid.UUID | None, db_session: AsyncSession
+):
+    # A source with history: the index on (source, time) alone would read all of it.
+    await db_session.execute(
+        text(
+            "INSERT INTO events (type, source_instance_id, payload, schema_version, dedup_key) "
+            "SELECT CAST(:type AS text), CAST(:source AS uuid), '{}'::jsonb, 1, 'k' || g "
+            "FROM generate_series(1, 3000) AS g"
+        ),
+        {"type": EVENT_TYPE, "source": source},
+    )
+    await db_session.commit()
+    await db_session.execute(text("ANALYZE events"))
+    statement = events_repo.duplicate_query(
+        source_instance_id=source, type=EVENT_TYPE, dedup_key="k77", window_seconds=600
+    ).compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
+
+    raw = (await db_session.execute(text(f"EXPLAIN (FORMAT JSON) {statement}"))).scalar_one()
+    plan = (json.loads(raw) if isinstance(raw, str) else raw)[0]["Plan"]
+
+    children = set(
+        (
+            await db_session.scalars(
+                text(
+                    "SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid "
+                    "WHERE i.inhparent = to_regclass('ix_events_dedup')"
+                )
+            )
+        ).all()
+    )
+    # Asserted for the partition that holds the rows; the empty ones of the next months
+    # are planned without statistics.
+    now = datetime.now(UTC)
+    current = partition_name("events", now.year, now.month)
+    used = {n["Index Name"] for n in _plan_nodes(plan) if n.get("Relation Name") == current}
+    assert used, plan
+    assert used <= children, (used, plan)
