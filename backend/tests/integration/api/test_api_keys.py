@@ -458,3 +458,40 @@ async def test_failure_limit_does_not_reveal_whether_a_prefix_exists(
     assert await sequence(unknown) == expected
     # The real holder of the attacked prefix is not throttled: a correct check succeeds.
     assert (await client.get(BASE, headers={KEY_HEADER: real})).status_code == 200
+
+
+async def test_authenticated_request_uses_one_pooled_connection(
+    admin_client: httpx.AsyncClient, app: FastAPI
+):
+    # Authentication shares the request's session: a request never holds two pool
+    # connections at once, so concurrent requests cannot exhaust the pool waiting on
+    # their own second connection.
+    from sqlalchemy import event
+
+    pool = app.state.engine.sync_engine.pool
+    current = 0
+    peak = 0
+
+    def on_checkout(*_args: object) -> None:
+        nonlocal current, peak
+        current += 1
+        peak = max(peak, current)
+
+    def on_checkin(*_args: object) -> None:
+        nonlocal current
+        current -= 1
+
+    event.listen(pool, "checkout", on_checkout)
+    event.listen(pool, "checkin", on_checkin)
+    try:
+        for method, url, body in (
+            ("GET", BASE, None),
+            ("POST", BASE, {"name": "pool", "scope": "read"}),
+        ):
+            peak = 0
+            r = await admin_client.request(method, url, json=body)
+            assert r.status_code in (200, 201), r.text
+            assert peak == 1, (method, peak)
+    finally:
+        event.remove(pool, "checkout", on_checkout)
+        event.remove(pool, "checkin", on_checkin)

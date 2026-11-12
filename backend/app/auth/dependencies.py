@@ -22,17 +22,21 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal, NoReturn, cast
 from uuid import UUID
 
-from fastapi import Request, Security
+from fastapi import Depends, Request, Security
 from fastapi.security import APIKeyHeader
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import ApiError
 from app.auth.rate_limit import SlidingWindowRateLimiter
 from app.auth.scopes import Scope, lower_scope, satisfies
 from app.auth.tokens import dummy_verify, looks_like_token, token_prefix, verify_token
 from app.config import Settings
-from app.db.session import connected
+from app.db.session import get_session
 from app.repositories import api_keys as api_keys_repo
+
+# The request's own session (FastAPI caches it per request, so the route gets the same one):
+# a request never holds two pool connections, which could exhaust the pool under load.
+SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 KEY_HEADER = "X-BambuBridge-Key"
 # Attribute set on every scope-guard dependency; the OpenAPI gate walks route dependants
@@ -106,34 +110,33 @@ def _record_failure(failures: SlidingWindowRateLimiter, prefix: str) -> NoReturn
     raise _invalid_token()
 
 
-async def authenticate_token(request: Request, presented: str, need: Scope) -> AuthContext:
+async def authenticate_token(
+    request: Request, session: AsyncSession, presented: str, need: Scope
+) -> AuthContext:
     """Check an API token from the header and return its context (or raise ``ApiError``)."""
     if not looks_like_token(presented):
         raise _invalid_token()
-    factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
     limiter: SlidingWindowRateLimiter = request.app.state.rate_limiter
     failures: SlidingWindowRateLimiter = request.app.state.failed_auth_limiter
-    async with factory() as session:
-        await connected(session)
-        prefix = token_prefix(presented)
-        found = await api_keys_repo.get_by_prefix(session, prefix)
-        if found is None:
-            await dummy_verify(presented)  # same bcrypt work as for a known prefix
-            _record_failure(failures, prefix)
-        key, owner = found
-        if not await verify_token(presented, key.hash):
-            _record_failure(failures, prefix)
-        if not key.enabled:
-            raise _unauthorized("token_disabled", "API token disabled")
-        if key.expires_at is not None and key.expires_at <= datetime.now(UTC):
-            raise _unauthorized("token_expired", "API token expired")
-        if not owner.enabled:
-            raise _unauthorized("owner_disabled", "Owner of the API token is disabled")
-        allowed, retry_after = limiter.hit(key.id, limit=key.rate_limit_per_minute)
-        if not allowed:
-            raise _rate_limited(retry_after)
-        if await api_keys_repo.touch_last_used(session, key.id):
-            await session.commit()
+    prefix = token_prefix(presented)
+    found = await api_keys_repo.get_by_prefix(session, prefix)
+    if found is None:
+        await dummy_verify(presented)  # same bcrypt work as for a known prefix
+        _record_failure(failures, prefix)
+    key, owner = found
+    if not await verify_token(presented, key.hash):
+        _record_failure(failures, prefix)
+    if not key.enabled:
+        raise _unauthorized("token_disabled", "API token disabled")
+    if key.expires_at is not None and key.expires_at <= datetime.now(UTC):
+        raise _unauthorized("token_expired", "API token expired")
+    if not owner.enabled:
+        raise _unauthorized("owner_disabled", "Owner of the API token is disabled")
+    allowed, retry_after = limiter.hit(key.id, limit=key.rate_limit_per_minute)
+    if not allowed:
+        raise _rate_limited(retry_after)
+    if await api_keys_repo.touch_last_used(session, key.id):
+        await session.commit()
     effective = lower_scope(cast(Scope, key.scope), cast(Scope, owner.role))
     if not satisfies(effective, need):
         raise ApiError(
@@ -156,10 +159,11 @@ def require_scope(need: Scope) -> Callable[..., Awaitable[AuthContext]]:
 
     async def dependency(
         request: Request,
+        session: SessionDep,
         key: Annotated[str | None, Security(_key_header, scopes=[need])] = None,
     ) -> AuthContext:
         if key:
-            return await authenticate_token(request, key, need)
+            return await authenticate_token(request, session, key, need)
         # Seam for the browser session (cookie) path; until then no header means 401.
         raise _not_authenticated()
 
@@ -184,12 +188,13 @@ def check_bootstrap_key(settings: Settings, presented: str) -> AuthContext:
 
 async def require_admin_or_bootstrap(
     request: Request,
+    session: SessionDep,
     key: Annotated[str | None, Security(_key_header, scopes=["admin"])] = None,
     bootstrap: Annotated[str | None, Security(_bootstrap_header)] = None,
 ) -> AuthContext:
     """``require_scope("admin")`` that also accepts the bootstrap header (token wins)."""
     if key:
-        return await authenticate_token(request, key, "admin")
+        return await authenticate_token(request, session, key, "admin")
     if bootstrap:
         return check_bootstrap_key(request.app.state.settings, bootstrap)
     # Seam for the browser session (cookie) path; until then 401.

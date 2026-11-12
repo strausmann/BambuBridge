@@ -83,7 +83,9 @@ async def get(session: AsyncSession, key_id: uuid.UUID) -> ApiKey | None:
 
 
 async def list_all(session: AsyncSession) -> Sequence[ApiKey]:
-    return (await session.scalars(select(ApiKey).order_by(ApiKey.created_at, ApiKey.id))).all()
+    # populate_existing: the request session may already hold these rows from authentication.
+    query = select(ApiKey).order_by(ApiKey.created_at, ApiKey.id)
+    return (await session.scalars(query.execution_options(populate_existing=True))).all()
 
 
 async def delete(session: AsyncSession, key_id: uuid.UUID) -> bool:
