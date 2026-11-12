@@ -43,18 +43,32 @@ make ci-db-stop # stop the test Postgres
 ```
 
 - **Hooks.** A fresh clone has no active hooks until `make hooks` has run. After that, `commit-msg`
-  lints the commit message with commitlint and `pre-push` runs `make ci-fast`. Both start containers,
-  so Docker must be running; the first run downloads the images and dependencies. `HUSKY=0` skips
-  both hooks, `git push --no-verify` skips the pre-push check. (`npm install` on a host with Node
-  activates the same hooks through husky.)
+  lints the commit message with commitlint. `pre-push` runs ruff, the format check and mypy on your
+  working tree and lints the commits you are pushing: per pushed ref the range from the remote's
+  current commit to yours, or `origin/main..<your commit>` for a branch the remote does not have yet.
+  Deleting a remote branch checks nothing. Both hooks start containers, so Docker must be running
+  (they say so if it is not); the first run downloads the images and dependencies. `HUSKY=0` skips
+  both hooks, `git commit --no-verify` skips `commit-msg`, `git push --no-verify` skips `pre-push`.
+  (`npm install` on a host with Node activates the same hooks through husky.)
 - **`make ci`** runs the same commands with the same thresholds as job `backend` in
   `.github/workflows/ci.yml` (`uv sync --frozen`, ruff, mypy, pytest with branch coverage of at least
   80 %, and at least 90 % for `app/auth/*` and `app/security/*`). Run it before you open or update a
-  pull request. When that job changes, change the `ci` target in the `Makefile` in the same PR.
-- **Test database.** `make ci` starts the container `bambubridge-ci-postgres` (`postgres:18.6-trixie`,
-  published on `127.0.0.1:55432`, override with `CI_DB_PORT=…`) on first use and leaves it running for
-  the next run; `make ci-db-stop` removes it. It holds test data only. Every test run creates its own
-  databases on that server and drops them at the end, so several runs can share it.
+  pull request.
+- **Versions come from the workflows.** The Python, uv, Postgres and Node versions are written down
+  once, in `.github/workflows/ci.yml` and `commitlint.yml`. The `Makefile` reads them from there
+  (`scripts/ci-versions.sh`), so a version bump in a workflow applies to `make ci` without a second
+  edit. To try another version, override it for one call: `PYTHON_VERSION=… make ci` (also
+  `UV_VERSION`, `POSTGRES_IMAGE`, `NODE_VERSION`). The commands of the `backend` job are repeated in
+  the `Makefile`; `backend/tests/unit/test_ci_parity.py` fails when they differ from the workflow or
+  when a version can no longer be read from it.
+- **Test database.** `make ci` starts the container `bambubridge-ci-postgres` on first use and leaves
+  it running for the next run; `make ci-db-stop` removes it together with
+  everything in it. It holds test data only and is reached over a Docker network, so no host port is
+  needed. To run pytest yourself against it, publish a port: `make ci-db-start CI_DB_PORT=55432`
+  (bound to `127.0.0.1`). A container started from another Postgres image than the workflow names
+  is replaced automatically. Every test run creates its own databases (`bb_*`) on that server and
+  drops them at the end, so several runs can share it. A run that is killed hard (`kill -9`, a
+  stopped container) cannot drop its databases; they stay until `make ci-db-stop`.
 - **Caches.** uv downloads, the virtual environment and the npm cache live in the gitignored `.cache/`
   of your clone; delete the directory to start from scratch.
 - **Extra pytest arguments:** `make ci PYTEST_ARGS="-x -k tokens"`. For a quicker local run use

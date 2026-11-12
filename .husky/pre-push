@@ -1,5 +1,27 @@
 #!/bin/sh
-# Runs the fast CI checks in containers before a push (see Makefile).
+# Runs the fast CI checks in containers before a push (see Makefile): ruff, format check
+# and mypy on the working tree, commitlint on the commits being pushed.
 # Skip with HUSKY=0 or "git push --no-verify".
 [ "${HUSKY-}" = "0" ] && exit 0
-exec make --no-print-directory ci-fast
+
+# git feeds one line per pushed ref: <local ref> <local sha> <remote ref> <remote sha>.
+ranges=""
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+	# A sha of zeros only: a deleted ref on the local side, a new ref on the remote side.
+	[ -n "$(printf %s "$local_sha" | tr -d 0)" ] || continue
+	if [ -n "$(printf %s "$remote_sha" | tr -d 0)" ] &&
+		git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+		ranges="$ranges $remote_sha..$local_sha"
+	else
+		# New remote branch (or a remote commit this clone does not have).
+		ranges="$ranges origin/main..$local_sha"
+	fi
+done
+# Nothing is pushed (deletes only, or already up to date): nothing to check.
+[ -n "$ranges" ] || exit 0
+
+docker info >/dev/null 2>&1 || {
+	echo "Docker is not running; start it or set HUSKY=0" >&2
+	exit 1
+}
+exec make --no-print-directory ci-fast COMMITLINT_RANGES="$ranges"
