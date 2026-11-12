@@ -454,3 +454,41 @@ async def test_rotation_sends_nothing_when_it_rolls_back_or_rotates_nothing(
     finally:
         await conn.close()
     assert json.loads(payload) == ["retention.events_days"]
+
+
+async def test_unexpected_exception_in_a_notification_reload_is_contained_and_recovered(
+    monkeypatch: pytest.MonkeyPatch,
+    store: SettingsStore,
+    store_b: SettingsStore,
+    engine: AsyncEngine,
+    db_session: AsyncSession,
+    caplog: pytest.LogCaptureFixture,
+):
+    changes = Changes(store_b)
+    original = store_b.reload_and_notify
+    state = {"armed": False, "failed": 0}
+
+    async def flaky(session: AsyncSession) -> set[str]:
+        if state["armed"] and not state["failed"]:
+            state["failed"] = 1
+            raise RuntimeError("secret-detail-in-message")  # not OSError / SQLAlchemyError
+        return await original(session)
+
+    monkeypatch.setattr(store_b, "reload_and_notify", flaky)
+    listener = SettingsListener(engine, store_b, min_delay=0.05)
+    await listener.start()
+    state["armed"] = True
+    try:
+        with caplog.at_level(logging.WARNING):
+            await store.set_many(db_session, {"retention.events_days": 21})
+            # The failed reload falls back to reconnect + full reload: the change arrives
+            # although its own notification was lost. Wait for it before the next write, so
+            # a later full reload cannot hide a missing recovery.
+            assert await changes.next(10) == {"retention.events_days"}
+        assert state["failed"] == 1
+        # A later notification still reloads.
+        await store.set_many(db_session, {"retention.communication_days": 22})
+        assert await changes.next(10) == {"retention.communication_days"}
+    finally:
+        await listener.stop()
+    assert "RuntimeError" in caplog.text and "secret-detail-in-message" not in caplog.text

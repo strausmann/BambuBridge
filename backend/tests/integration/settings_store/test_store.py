@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 
@@ -314,3 +315,63 @@ async def test_check_constraint_rejects_half_a_secret(db_session: AsyncSession):
                 "values ('sso.trust_token', 'v1.a.b', now())"
             )
         )
+
+
+@pytest.mark.parametrize(("newer", "expected"), [(2, 2), (None, 90)])
+async def test_a_slow_writer_cannot_install_an_older_value_after_a_newer_commit(
+    newer: int | None,
+    expected: int,
+    monkeypatch: pytest.MonkeyPatch,
+    store: SettingsStore,
+    box_a: SecretBox,
+    db_session: AsyncSession,
+    session2: AsyncSession,
+):
+    # Writer A commits 1 and is held back before its post-commit cache update; writer B then
+    # commits ``newer`` and finishes; only then A continues. The cache must end at the
+    # database value, not at A's older 1.
+    key = "retention.events_days"
+    seen: list[set[str]] = []
+    store.subscribe(seen.append)
+    a_committed, release_a = asyncio.Event(), asyncio.Event()
+    real_commit = db_session.commit
+
+    async def commit_then_wait() -> None:
+        await real_commit()
+        a_committed.set()
+        await release_a.wait()
+
+    monkeypatch.setattr(db_session, "commit", commit_then_wait)
+    writer_a = asyncio.create_task(store.set_many(db_session, {key: 1}))
+    await asyncio.wait_for(a_committed.wait(), 5)
+    await store.set_many(session2, {key: newer})  # B commits and updates the cache completely
+    assert store.get(key) == expected
+    release_a.set()
+    await asyncio.wait_for(writer_a, 5)
+
+    assert store.get(key) == expected
+    fresh = SettingsStore(box_a)
+    await fresh.load(session2)
+    assert fresh.get(key) == expected
+    # A change is announced once per process; A's late continuation found nothing new.
+    assert seen == ([{key}] if newer is not None else [])
+
+
+async def test_cache_updates_and_reloads_share_one_lock(
+    store: SettingsStore, db_session: AsyncSession, session2: AsyncSession
+):
+    # While someone else (a reload, another writer's update) holds the state lock, neither a
+    # writer's post-commit update nor a reload may touch the cache.
+    key = "retention.events_days"
+    async with store._state_lock:
+        writer = asyncio.create_task(store.set_many(db_session, {key: 7}))
+        reloader = asyncio.create_task(store.reload_and_notify(session2))
+        for _ in range(50):  # let both run as far as they can; a lock-free path would finish
+            await asyncio.sleep(0)
+            if writer.done() or reloader.done():
+                break
+        await asyncio.sleep(0.2)  # the commit itself needs real I/O time
+        assert not writer.done() and not reloader.done()
+        assert store.get(key) == 90
+    await asyncio.wait_for(asyncio.gather(writer, reloader), 5)
+    assert store.get(key) == 7

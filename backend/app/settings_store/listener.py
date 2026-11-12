@@ -47,7 +47,6 @@ class SettingsListener:
         self._max_delay = max_delay
         self._task: asyncio.Task[None] | None = None
         self._reloads: set[asyncio.Task[None]] = set()
-        self._reload_lock = asyncio.Lock()
         self._ready = asyncio.Event()
         self._lost = asyncio.Event()
         # Server process id of the LISTEN connection (None while disconnected); lets tests
@@ -147,14 +146,20 @@ class SettingsListener:
     async def _reload_after_notification(self) -> None:
         try:
             await self._reload()
-        except (OSError, SQLAlchemyError) as exc:
-            # The connection may look alive while the database is not; reconnect and reload.
+        except Exception as exc:
+            # The connection may look alive while the database is not, or something
+            # unforeseen failed: log the type only and fall back to reconnect + full reload,
+            # so a missed change is picked up and the next notification still works. An
+            # exception escaping a background task would only be logged at garbage
+            # collection and leave the store stale.
             _log.warning("settings reload failed (%s); reconnecting", type(exc).__name__)
             self._lost.set()
 
     async def _reload(self) -> None:
-        # A reload can overlap a ``SettingsStore.set_many`` of the same process (the NOTIFY
-        # arrives at commit, the writer's own cache update just after). The state converges,
-        # but a subscriber may see the same change twice; see ``set_many``.
-        async with self._reload_lock, self._sessions() as session:
+        # The store serialises this with its own writers' post-commit updates (one lock,
+        # owned by the store), and a writer re-reads what it wrote from the database. So an
+        # overlap with ``SettingsStore.set_many`` of this process cannot install an older
+        # value, and each change is announced once per process, by whichever side got to it
+        # first.
+        async with self._sessions() as session:
             await self._store.reload_and_notify(session)

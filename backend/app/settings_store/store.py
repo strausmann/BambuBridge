@@ -12,9 +12,10 @@ other instances (see :mod:`app.settings_store.listener`) reload after the commit
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -64,6 +65,11 @@ class SettingsStore:
         self._secret_present: set[str] = set()
         self._undecryptable: set[str] = set()
         self._subscribers: list[Callable[[set[str]], None]] = []
+        # Every change of the in-memory state (full reload, post-commit update of a write)
+        # happens under this lock, so two of them can never interleave their reads of the
+        # database with their writes to the cache. The listener reloads through
+        # :meth:`reload_and_notify`; it does not need a lock of its own.
+        self._state_lock = asyncio.Lock()
 
     # -- subscribers --------------------------------------------------------
 
@@ -126,11 +132,18 @@ class SettingsStore:
 
     async def load(self, session: AsyncSession) -> None:
         """Replace the in-memory state with the database content."""
-        values: dict[str, Any] = {}
-        secrets: dict[str, str] = {}
-        present: set[str] = set()
-        undecryptable: set[str] = set()
-        for row in (await session.execute(select(AppSetting))).scalars():
+        async with self._state_lock:
+            await self._load_all(session)
+
+    def _parse_into(
+        self,
+        rows: Iterable[AppSetting],
+        values: dict[str, Any],
+        secrets: dict[str, str],
+        present: set[str],
+        undecryptable: set[str],
+    ) -> None:
+        for row in rows:
             d = SETTINGS.get(row.key)
             if d is None:
                 continue
@@ -151,8 +164,40 @@ class SettingsStore:
                 values[row.key] = validate_value(d, row.value)
             except SettingsError:
                 _log.warning("ignoring invalid stored setting %s", row.key)
+
+    async def _load_all(self, session: AsyncSession) -> None:
+        """Caller holds ``_state_lock``."""
+        values: dict[str, Any] = {}
+        secrets: dict[str, str] = {}
+        present: set[str] = set()
+        undecryptable: set[str] = set()
+        rows = (await session.execute(select(AppSetting))).scalars().all()
+        self._parse_into(rows, values, secrets, present, undecryptable)
         self._values, self._secrets = values, secrets
         self._secret_present, self._undecryptable = present, undecryptable
+
+    async def _load_keys(self, session: AsyncSession, keys: Collection[str]) -> None:
+        """Re-read only ``keys`` from the database and install what is stored there.
+
+        Caller holds ``_state_lock``. A key without a row is back at its default.
+        """
+        values: dict[str, Any] = {}
+        secrets: dict[str, str] = {}
+        present: set[str] = set()
+        undecryptable: set[str] = set()
+        stmt = select(AppSetting).where(AppSetting.key.in_(list(keys)))
+        self._parse_into(
+            (await session.execute(stmt)).scalars().all(), values, secrets, present, undecryptable
+        )
+        for key in keys:
+            self._values.pop(key, None)
+            self._secrets.pop(key, None)
+            self._secret_present.discard(key)
+            self._undecryptable.discard(key)
+        self._values.update(values)
+        self._secrets.update(secrets)
+        self._secret_present |= present
+        self._undecryptable |= undecryptable
 
     def _snapshot(self) -> dict[str, Any]:
         snap: dict[str, Any] = {}
@@ -169,13 +214,21 @@ class SettingsStore:
 
     async def reload_and_notify(self, session: AsyncSession) -> set[str]:
         """:meth:`load`, then tell subscribers which settings differ from before."""
-        before = self._snapshot()
-        await self.load(session)
-        after = self._snapshot()
-        changed = {key for key in SETTINGS if before[key] != after[key]}
-        if changed:
-            self._notify(changed)
+        async with self._state_lock:
+            before = self._snapshot()
+            await self._load_all(session)
+            changed = self._changed_since(before)
+            if changed:
+                self._notify(changed)
         return changed
+
+    def _changed_since(
+        self, before: dict[str, Any], keys: Collection[str] | None = None
+    ) -> set[str]:
+        after = self._snapshot()
+        return {
+            key for key in (keys if keys is not None else SETTINGS) if before[key] != after[key]
+        }
 
     # -- writing ------------------------------------------------------------
 
@@ -185,12 +238,13 @@ class SettingsStore:
         ``None`` resets a plain setting to its default; ``None`` or ``""`` clears a secret.
         All-or-nothing: an invalid value or a database error changes nothing.
 
-        Consistency is eventual. The local cache and the subscribers are updated *after* the
-        commit, while the NOTIFY is delivered *at* the commit, so a reload started by the
-        listener can run in between: the cache is then refreshed from the database first and
-        subscribers may be told about the same keys twice (once by the reload, once here).
-        Subscribers must therefore be idempotent. Nothing is lost or reordered, and every
-        instance converges on the database content.
+        After the commit the written keys are re-read from the database and installed under
+        the store's state lock, which the listener's reload shares. The database is the truth:
+        if another writer committed the same key after us, its value is what ends up in the
+        cache, never ours. Reads of the cache between the commit and this update may still see
+        the previous value (eventual consistency within one process). A change is announced
+        to subscribers once per process, by whichever of this call and the listener's reload
+        installs it first.
         """
         unknown = sorted(k for k in values if k not in SETTINGS)
         if unknown:
@@ -258,21 +312,15 @@ class SettingsStore:
             await session.rollback()
             raise
 
-        for key, value in clean.items():
-            d = SETTINGS[key]
-            if d.type == "secret":
-                self._undecryptable.discard(key)
-                if value == "" or value is None:
-                    self._secrets.pop(key, None)
-                    self._secret_present.discard(key)
-                else:
-                    self._secrets[key] = value
-                    self._secret_present.add(key)
-            elif value is None:
-                self._values.pop(key, None)
-            else:
-                self._values[key] = value
-        self._notify(set(clean))
+        # The database, not the values passed in, is the truth: another writer may have
+        # committed the same keys after us. Re-read them under the state lock so that this
+        # update cannot interleave with a listener reload or another writer's update.
+        async with self._state_lock:
+            before = self._snapshot()
+            await self._load_keys(session, clean)
+            changed = self._changed_since(before, clean)
+            if changed:
+                self._notify(changed)
 
 
 __all__ = [
