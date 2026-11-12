@@ -11,6 +11,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app import main as main_module
@@ -313,3 +314,19 @@ async def test_startup_bootstrap_check_survives_a_dead_database(
         await main_module.warn_if_bootstrap_open(application)
     assert "bootstrap is open" not in caplog.text
     await application.state.engine.dispose()
+
+
+async def test_startup_survives_a_database_error_in_the_bootstrap_check(
+    app: FastAPI, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    # For example a database that has not been migrated: the query itself fails.
+    async def broken(*args: object, **kwargs: object) -> bool:
+        raise ProgrammingError("SELECT 1", {}, Exception("relation does not exist"))
+
+    monkeypatch.setattr(main_module.api_keys_repo, "usable_admin_token_exists", broken)
+    with caplog.at_level(logging.WARNING, logger="app.main"):
+        async with app.router.lifespan_context(app):
+            pass
+    assert "bootstrap is open" not in caplog.text
+    assert "bootstrap state check skipped: database error" in caplog.text
+    assert TEST_BOOTSTRAP_KEY not in caplog.text

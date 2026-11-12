@@ -10,6 +10,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from fastapi import FastAPI
+from sqlalchemy.exc import DBAPIError
 
 from app.api.errors import CONNECTION_ERRORS, DatabaseUnavailableError, register_error_handlers
 from app.api.routes import api_keys, auth_continue, auth_session, health, system
@@ -45,7 +46,8 @@ BOOTSTRAP_CHECK_TIMEOUT_SECONDS = 3.0
 async def warn_if_bootstrap_open(app: FastAPI) -> None:
     """Warn while ``BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY`` is set and bootstrap is still open.
 
-    An unreachable or stalled database skips the check; the server must start without one.
+    An unreachable or stalled database skips the check, and so does any other database
+    error (for example a schema that is not migrated): the server must always start.
     """
     settings: Settings = app.state.settings
     if not settings.bootstrap_admin_key.get_secret_value():
@@ -60,6 +62,9 @@ async def warn_if_bootstrap_open(app: FastAPI) -> None:
         if await asyncio.wait_for(closed(), timeout=BOOTSTRAP_CHECK_TIMEOUT_SECONDS):
             return
     except _STARTUP_DB_ERRORS:
+        return
+    except DBAPIError:
+        _log.warning("bootstrap state check skipped: database error")
         return
     _log.warning(
         "BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY is set and bootstrap is open (no usable admin "
