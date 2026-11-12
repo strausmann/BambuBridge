@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.events import service as service_module
@@ -240,6 +241,21 @@ async def test_emit_gives_up_when_the_source_stays_locked(
     assert await asyncio.wait_for(emit(service, session2, n=4), timeout=5)
     await session2.commit()
     assert await counts(sessions) == (3, 3)
+
+
+async def test_another_database_error_while_waiting_is_passed_on(
+    service: EventService, db_session: AsyncSession, session2: AsyncSession
+):
+    await emit(service, db_session, n=1)
+    # The caller's own statement timeout ends the wait first: that is not "source busy".
+    await session2.execute(text("SET LOCAL statement_timeout = '300ms'"))
+
+    with pytest.raises(DBAPIError) as exc:
+        await asyncio.wait_for(emit(service, session2, n=2), timeout=5)
+
+    assert getattr(exc.value.orig, "sqlstate", None) == "57014"  # query_canceled
+    await session2.rollback()
+    await db_session.rollback()
 
 
 def test_the_source_lock_wait_is_five_seconds():

@@ -389,6 +389,6 @@ async def test_dedup_lookup_uses_the_dedup_index(
     # are planned without statistics.
     now = datetime.now(UTC)
     current = partition_name("events", now.year, now.month)
-    used = {n["Index Name"] for n in _plan_nodes(plan) if n.get("Relation Name") == current}
+    used = {n.get("Index Name") for n in _plan_nodes(plan) if n.get("Relation Name") == current}
     assert used, plan
     assert used <= children, (used, plan)
