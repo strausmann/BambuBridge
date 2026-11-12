@@ -6,10 +6,11 @@ import base64
 import re
 
 _KEY_BYTES = 32
-# Strict base64url: the URL-safe alphabet only, at most two trailing padding characters.
-# ``base64.urlsafe_b64decode`` alone silently drops foreign characters (including ``+``
-# and ``/``), so the alphabet is checked first.
-_BASE64URL = re.compile(r"[A-Za-z0-9_-]+={0,2}")
+# 32 bytes are exactly 43 base64url characters; one optional "=" makes 44. Nothing else is
+# the key's canonical form. ``base64.urlsafe_b64decode`` alone silently drops foreign
+# characters (including ``+`` and ``/``) and ignores surplus padding and non-zero padding
+# bits, so the shape is checked first and the decoded bytes are re-encoded and compared.
+_KEY_SHAPE = re.compile(r"[A-Za-z0-9_-]{43}=?")
 
 KEY_HELP = "generate with: python3 -c 'import secrets;print(secrets.token_urlsafe(32))'"
 
@@ -21,12 +22,15 @@ def decode_secret_key(text: str, *, name: str) -> bytes:
     logs or tracebacks.
     """
     candidate = text.strip()
-    if not _BASE64URL.fullmatch(candidate):
-        raise ValueError(f"{name} must be base64url text (A-Z a-z 0-9 - _)")
+    message = f"{name} must be 32 bytes as base64url text, 43 characters ({KEY_HELP})"
+    if not _KEY_SHAPE.fullmatch(candidate):
+        raise ValueError(message)
     try:
-        raw = base64.urlsafe_b64decode(candidate + "=" * (-len(candidate) % 4))
-    except ValueError as exc:  # binascii.Error is a ValueError (bad length)
-        raise ValueError(f"{name} must be base64url text (A-Z a-z 0-9 - _)") from exc
-    if len(raw) != _KEY_BYTES:
-        raise ValueError(f"{name} must decode to exactly 32 bytes ({KEY_HELP})")
+        raw = base64.urlsafe_b64decode(candidate.rstrip("=") + "=")
+    except ValueError as exc:  # binascii.Error is a ValueError
+        raise ValueError(message) from exc
+    if len(raw) != _KEY_BYTES or base64.urlsafe_b64encode(raw).rstrip(b"=") != candidate.rstrip(
+        "="
+    ).encode("ascii"):
+        raise ValueError(message)
     return raw
