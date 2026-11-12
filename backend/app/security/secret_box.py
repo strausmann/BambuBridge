@@ -5,6 +5,10 @@ associated data is chosen by the caller (the setting key, the provider instance 
 ciphertext copied to another record does not open. The id of the key that sealed a token
 is stored next to it (``SealedSecret.key_id``): the box can hold several keys, which makes
 rotation and "this was sealed with another key" detectable instead of a generic failure.
+
+The box holds master keys (``BAMBUBRIDGE_SECRET_KEY``) and their ids; the id identifies the
+master key. AES-GCM runs with the master's ``secret-box`` sub-key (``derive_subkey``), never
+with the master itself.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ from typing import TYPE_CHECKING
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from app.security.keys import decode_secret_key
+from app.security.keys import decode_secret_key, derive_subkey
 
 if TYPE_CHECKING:
     from app.config import Settings
@@ -67,7 +71,9 @@ class SecretBox:
                 raise ValueError("key id does not match its key")
         if active_key_id not in keys:
             raise ValueError("active key id is not among the keys")
-        self._aead = {key_id: AESGCM(key) for key_id, key in keys.items()}
+        self._aead = {
+            key_id: AESGCM(derive_subkey(key, "secret-box")) for key_id, key in keys.items()
+        }
         self.active_key_id = active_key_id
 
     def seal(self, plaintext: str, *, aad: str) -> SealedSecret:

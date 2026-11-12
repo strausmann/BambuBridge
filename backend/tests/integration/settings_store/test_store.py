@@ -146,7 +146,7 @@ async def test_user_header_outside_choices_rejected(store: SettingsStore, db_ses
     with pytest.raises(InvalidSettingValueError) as e:
         await store.set_many(db_session, {"sso.user_header": "X-Forwarded-User"})
     assert e.value.keys == ["sso.user_header"]
-    assert e.value.code == "invalid_value"
+    assert e.value.code == "invalid_setting_value"
     assert store.get("sso.user_header") == "Remote-User"
 
 
@@ -421,3 +421,48 @@ async def test_load_installs_the_committed_value_although_the_session_holds_the_
         8,
         other_token,
     )
+
+
+async def _store_raw(session: AsyncSession, key: str, value: object) -> None:
+    from datetime import UTC, datetime
+
+    session.add(AppSetting(key=key, value=value, updated_at=datetime.now(UTC)))
+    await session.commit()
+
+
+class _ExtraProvider:
+    kind = "extra_provider"
+
+    async def identify(self, request: object, store: object) -> None:
+        return None
+
+    def session_binding(self, store: object) -> None:
+        return None
+
+
+async def test_stored_choices_drop_unregistered_kinds(
+    store: SettingsStore, db_session: AsyncSession, caplog: pytest.LogCaptureFixture
+):
+    from app.auth.identity import registry
+
+    registry.register(_ExtraProvider())  # type: ignore[arg-type]
+    try:
+        await _store_raw(db_session, "auth.identity_providers", ["extra_provider", "gone"])
+        with caplog.at_level(logging.WARNING, logger="app.settings_store.store"):
+            await store.load(db_session)
+        # The registered kind is kept: no fallback to the default ["pangolin_header"].
+        assert store.get("auth.identity_providers") == ["extra_provider"]
+    finally:
+        registry.unregister("extra_provider")
+    assert "auth.identity_providers" in caplog.text
+    assert "gone" not in caplog.text
+
+
+async def test_stored_choices_with_only_unknown_kinds_load_empty_not_default(
+    store: SettingsStore, db_session: AsyncSession
+):
+    import app.auth.identity  # noqa: F401
+
+    await _store_raw(db_session, "auth.identity_providers", ["gone"])
+    await store.load(db_session)
+    assert store.get("auth.identity_providers") == []

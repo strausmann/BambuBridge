@@ -23,6 +23,7 @@ def test_run_upgrades_database_before_serving(monkeypatch: pytest.MonkeyPatch):
     assert Path(config.get_main_option("script_location")).is_dir()
     assert (Path(config.get_main_option("script_location")) / "env.py").is_file()
     assert calls.serve.call_args.kwargs["forwarded_allow_ips"] == "10.1.2.3"
+    assert calls.serve.call_args.kwargs["http"] == "h11"
 
 
 def test_run_does_not_serve_when_migration_fails(monkeypatch: pytest.MonkeyPatch):

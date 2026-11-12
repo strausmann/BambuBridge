@@ -207,3 +207,50 @@ async def admin_client(app: FastAPI, admin_token: str) -> AsyncIterator[httpx.As
         transport=transport, base_url="http://test", headers={KEY_HEADER: admin_token}
     ) as c:
         yield c
+
+
+# --- browser sessions ----------------------------------------------------------------------
+
+PUBLIC_URL = "https://bb.example.com"
+SETTINGS_URL = "/api/v1/settings"
+SESSION_URL = "/api/v1/auth/session"
+CSRF_HEADER = "X-BambuBridge-CSRF"
+# Obviously fake SSO trust token (>= 32 characters).
+TRUST_TOKEN = "test-trust-token-" + "x" * 24
+
+
+@pytest_asyncio.fixture
+async def browser(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
+    """A client on the public https URL that sends the public ``Origin`` like a browser."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url=PUBLIC_URL, headers={"Origin": PUBLIC_URL}
+    ) as c:
+        yield c
+
+
+async def put_settings(client: httpx.AsyncClient, values: dict[str, object]) -> None:
+    r = await client.put(SETTINGS_URL, json={"values": values})
+    assert r.status_code == 204, r.text
+
+
+def csrf_from(client: httpx.AsyncClient) -> str:
+    """The CSRF token the server set in the client's cookie jar."""
+    value = client.cookies.get("__Host-bb_csrf")
+    assert value, "no CSRF cookie"
+    return value
+
+
+def settings_variant(settings: Settings, **changes: str) -> Settings:
+    """A copy of the test settings with some startup values replaced."""
+    values = {
+        "database_url": settings.database_url.get_secret_value(),
+        "secret_key": settings.secret_key.get_secret_value(),
+        "public_url": str(settings.public_url),
+        "bootstrap_admin_key": settings.bootstrap_admin_key.get_secret_value(),
+        **changes,
+    }
+    return Settings(_env_file=None, **values)  # type: ignore[call-arg, arg-type]
+
+
+DEAD_DATABASE_URL = "postgresql+asyncpg://u:p@127.0.0.1:9/x"  # nothing listens on port 9

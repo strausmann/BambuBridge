@@ -1,9 +1,19 @@
-"""Strict decoding of the 32-byte secret key given as base64url text."""
+"""The 32-byte secret key: strict base64url decoding and purpose-bound sub-keys.
+
+``BAMBUBRIDGE_SECRET_KEY`` is a master key and is never used directly. Each use gets its
+own sub-key from HKDF-SHA256 with a distinct label (``derive_subkey``): AES-GCM for stored
+secrets, HMAC for CSRF tokens, HMAC for session binding material. A sub-key leaking
+through one use therefore says nothing about the others or about the master.
+"""
 
 from __future__ import annotations
 
 import base64
 import re
+from typing import Literal, get_args
+
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 _KEY_BYTES = 32
 # 32 bytes are exactly 43 base64url characters; one optional "=" makes 44. Nothing else is
@@ -32,3 +42,15 @@ def decode_secret_key(text: str, *, name: str) -> bytes:
     ).encode("ascii"):
         raise ValueError(message)
     return raw
+
+
+SubkeyLabel = Literal["secret-box", "csrf", "session-binding"]
+SUBKEY_LABELS: tuple[SubkeyLabel, ...] = get_args(SubkeyLabel)
+
+
+def derive_subkey(master: bytes, label: SubkeyLabel) -> bytes:
+    """32-byte sub-key of ``master`` for one purpose (HKDF-SHA256, info names the label)."""
+    if label not in SUBKEY_LABELS:
+        raise ValueError("unknown sub-key label")
+    info = f"bambubridge/{label}/v1".encode("ascii")
+    return HKDF(algorithm=hashes.SHA256(), length=_KEY_BYTES, salt=None, info=info).derive(master)
