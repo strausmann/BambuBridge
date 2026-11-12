@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import ipaddress
 import os
+from pathlib import Path
 
 import uvicorn
+from alembic import command
+from alembic.config import Config
 
 PORT = 8000
+ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 
 
 def validate_forwarded_allow_ips(value: str | None) -> str:
@@ -27,10 +31,11 @@ def validate_forwarded_allow_ips(value: str | None) -> str:
     return candidate
 
 
-def run() -> None:  # pragma: no cover - process start, exercised by the image smoke test
-    """Validate configuration and start the server on the fixed port."""
+def run() -> None:
+    """Validate configuration, migrate the database to head, start the server."""
     allowed = validate_forwarded_allow_ips(os.environ.get("FORWARDED_ALLOW_IPS"))
-    # Database migrations (alembic upgrade head) are added in a later task.
+    # URL comes from BAMBUBRIDGE_DATABASE_URL (see alembic/env.py); a failure stops the start.
+    command.upgrade(Config(str(ALEMBIC_INI)), "head")
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",  # noqa: S104 - container listens on all interfaces
