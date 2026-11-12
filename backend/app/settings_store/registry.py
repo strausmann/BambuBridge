@@ -121,6 +121,9 @@ def validate_value(d: SettingDef, value: Any) -> Any:
         # Printable ASCII only: the value is sent in an HTTP header.
         if len(value) > _MAX_SECRET or any(not 0x20 <= ord(c) <= 0x7E for c in value):
             raise bad("must be printable ASCII")
+        # The presented header value is stripped, so an edge space would never match.
+        if value != value.strip():
+            raise bad("must not start or end with a space")
         if value and d.min is not None and len(value) < d.min:
             raise bad(f"must be empty or at least {d.min} characters")
         return value

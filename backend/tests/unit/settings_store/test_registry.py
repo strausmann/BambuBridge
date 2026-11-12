@@ -86,10 +86,12 @@ def test_url_rejects_other_schemes_credentials_and_junk(bad: object):
     assert "pw" not in str(e.value)
 
 
-def test_secret_may_be_empty_and_is_not_stripped():
+def test_secret_may_be_empty_and_is_never_silently_stripped():
     secret = SETTINGS["sso.trust_token"]
     assert validate_value(secret, "") == ""
-    assert validate_value(secret, " " + "a" * 40) == " " + "a" * 40
+    # Edge spaces are refused (see below), not stripped: the stored value is what was sent.
+    with pytest.raises(InvalidSettingValueError):
+        validate_value(secret, " " + "a" * 40)
     with pytest.raises(InvalidSettingValueError):
         validate_value(secret, "a" * 4097)
 
@@ -178,3 +180,20 @@ def test_trust_header_must_be_a_token_name(name: str):
 @pytest.mark.parametrize("name", ["X-Pangolin-Token", "x_trust", "X-A.B~1!#$%&'*+^`|"])
 def test_trust_header_accepts_token_names(name: str):
     assert validate_value(SETTINGS["sso.trust_header"], name) == name
+
+
+@pytest.mark.parametrize("edge", [" ", "   "])
+@pytest.mark.parametrize("where", ["leading", "trailing"])
+def test_secret_with_edge_whitespace_is_refused(edge: str, where: str):
+    # Audit H6: the presented header value is stripped, so an edge space never matches.
+    core = "t" * 40
+    value = edge + core if where == "leading" else core + edge
+    with pytest.raises(InvalidSettingValueError) as e:
+        validate_value(SETTINGS["sso.trust_token"], value)
+    assert core not in str(e.value)
+    assert "space" in str(e.value)
+
+
+def test_secret_with_inner_space_is_kept():
+    value = "t" * 20 + " " + "t" * 20
+    assert validate_value(SETTINGS["sso.trust_token"], value) == value

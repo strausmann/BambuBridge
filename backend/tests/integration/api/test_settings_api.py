@@ -110,3 +110,12 @@ async def test_settings_need_admin(client: httpx.AsyncClient, operate_token: str
     _problem(await client.get(SETTINGS_URL, headers=headers), 403, "insufficient_scope")
     r = await client.put(SETTINGS_URL, json={"values": {}}, headers=headers)
     _problem(r, 403, "insufficient_scope")
+
+
+async def test_put_trust_token_with_edge_whitespace_422(admin_client: httpx.AsyncClient):
+    value = " " + "t" * 40 + " "
+    r = await admin_client.put(SETTINGS_URL, json={"values": {"sso.trust_token": value}})
+    _problem(r, 422, "invalid_setting_value")
+    assert "t" * 40 not in r.text
+    listed = {s["key"]: s for s in (await admin_client.get(SETTINGS_URL)).json()}
+    assert listed["sso.trust_token"]["set"] is False
