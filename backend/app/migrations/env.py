@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import re
 from logging.config import fileConfig
 
 from alembic import context
@@ -21,6 +22,19 @@ if config.config_file_name is not None and config.attributes.get("configure_logg
 
 target_metadata = Base.metadata
 
+# Monthly child partitions (``events_y2026m12``) are created at runtime by
+# ``app.events.partitions`` and are not models. Only they are left out of the comparison;
+# the partitioned parent tables are models and are compared like any other table.
+PARTITION_CHILD = re.compile(r"^(events|communication_log)_y\d{4}m\d{2}$")
+
+
+def include_object(
+    _object: object, name: str | None, type_: str, reflected: bool, _compare_to: object
+) -> bool:
+    if type_ == "table" and reflected and name is not None:
+        return PARTITION_CHILD.fullmatch(name) is None
+    return True
+
 
 def _database_url() -> str:
     """URL from the Alembic config if a caller set one, otherwise BAMBUBRIDGE_DATABASE_URL.
@@ -38,6 +52,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=_database_url(),
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -46,7 +61,9 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection, target_metadata=target_metadata, include_object=include_object
+    )
     with context.begin_transaction():
         context.run_migrations()
 

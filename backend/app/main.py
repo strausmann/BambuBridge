@@ -25,6 +25,8 @@ from app.auth.rate_limit import SlidingWindowRateLimiter
 from app.config import Settings, get_settings
 from app.db.engine import make_engine
 from app.db.session import connected, make_session_factory
+from app.events.partitions import PartitionMaintenance
+from app.events.service import EventService
 from app.repositories import api_keys as api_keys_repo
 from app.security.secret_box import secret_box_from_settings
 from app.settings_store.listener import SettingsListener
@@ -81,10 +83,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The listener loads every setting once connected and keeps the store current.
     listener = SettingsListener(app.state.engine, app.state.settings_store)
     app.state.settings_listener = listener
+    # Monthly partitions of the event tables: now, and every day at 00:05 UTC.
+    partition_maintenance = PartitionMaintenance(app.state.session_factory)
+    app.state.partition_maintenance = partition_maintenance
     try:
         await listener.start()
+        await partition_maintenance.start()
         yield
     finally:
+        await partition_maintenance.stop()
+        app.state.partition_maintenance = None
         await listener.stop()
         app.state.settings_listener = None
         await app.state.engine.dispose()
@@ -104,6 +112,8 @@ def create_app(settings: Settings, *, web_dist_dir: Path | None = None) -> FastA
     app.state.session_factory = make_session_factory(app.state.engine)
     app.state.settings_store = SettingsStore(secret_box_from_settings(settings))
     app.state.settings_listener = None
+    app.state.event_service = EventService(app.state.settings_store)
+    app.state.partition_maintenance = None
     app.state.session_keys = ui_sessions.session_keys(settings)
     # Per process (see app.auth.rate_limit): requests per token, failed checks per prefix and
     # per client address, sign-in attempts and failed bootstrap keys per client address.
