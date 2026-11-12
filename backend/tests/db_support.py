@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
@@ -24,6 +25,17 @@ def admin_url() -> str:
     if not value:
         raise RuntimeError(MISSING_URL_MESSAGE)
     return value
+
+
+def unique_database_name(kind: str) -> str:
+    """Return ``bb_<kind>_<pid>_<worker>_<random>`` for a throw-away database.
+
+    The process id alone is not unique: in a container every run tends to get the same
+    one, and two runs may share a server. The random part separates runs, the
+    pytest-xdist worker id (``main`` without xdist) makes parallel workers readable.
+    """
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
+    return f"bb_{kind}_{os.getpid()}_{worker}_{secrets.token_hex(4)}"
 
 
 def url_for_database(base_url: str, database: str) -> str:

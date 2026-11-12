@@ -35,6 +35,7 @@ from tests.db_support import (
     TEST_DATABASE_URL_ENV,
     admin_url,
     truncate_all,
+    unique_database_name,
     url_for_database,
 )
 
@@ -66,8 +67,8 @@ def _alembic_config(url: str) -> Config:
 
 @pytest.fixture(scope="session")
 def test_database_url() -> Iterator[str]:
-    """Create ``bb_test_<pid>``, migrate it to head, drop it after the run."""
-    name = f"bb_test_{os.getpid()}"
+    """Create a database for this run (and worker), migrate it to head, drop it at the end."""
+    name = unique_database_name("test")
     asyncio.run(_admin_statement(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
     asyncio.run(_admin_statement(f'CREATE DATABASE "{name}"'))
     url = url_for_database(admin_url(), name)
@@ -81,7 +82,7 @@ def test_database_url() -> Iterator[str]:
 @pytest.fixture
 def scratch_database_url() -> Iterator[str]:
     """An empty throw-away database for tests that migrate up and down."""
-    name = f"bb_scratch_{os.getpid()}"
+    name = unique_database_name("scratch")
     asyncio.run(_admin_statement(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
     asyncio.run(_admin_statement(f'CREATE DATABASE "{name}"'))
     try:
