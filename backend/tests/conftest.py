@@ -71,6 +71,18 @@ def test_database_url() -> Iterator[str]:
 
 
 @pytest.fixture
+def scratch_database_url() -> Iterator[str]:
+    """An empty throw-away database for tests that migrate up and down."""
+    name = f"bb_scratch_{os.getpid()}"
+    asyncio.run(_admin_statement(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+    asyncio.run(_admin_statement(f'CREATE DATABASE "{name}"'))
+    try:
+        yield url_for_database(admin_url(), name)
+    finally:
+        asyncio.run(_admin_statement(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+
+
+@pytest.fixture
 def alembic_config(test_database_url: str) -> Config:
     return _alembic_config(test_database_url)
 

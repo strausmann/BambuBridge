@@ -1,0 +1,165 @@
+"""Live reload: one dedicated asyncpg connection ``LISTEN``s on the settings channel.
+
+A notification makes the store reload from the database and tell its subscribers what
+changed. When the connection is lost (Postgres restart, network), the listener reconnects
+with a growing wait (1 s, 2 s, 4 s ... at most 30 s) and then reloads everything, because
+notifications sent while it was away are gone.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+from typing import Any
+
+import asyncpg
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from app.db.session import make_session_factory
+from app.settings_store.store import CHANNEL, SettingsStore
+
+_log = logging.getLogger(__name__)
+
+_START_TIMEOUT_SECONDS = 5.0
+_CLOSE_TIMEOUT_SECONDS = 2.0
+# Liveness probe: a LISTEN connection that silently died (half-open TCP, a proxy dropping
+# idle connections) raises no error and simply stops delivering notifications. A periodic
+# ``SELECT 1`` with a timeout finds that; the listener then reconnects and reloads.
+_PROBE_INTERVAL_SECONDS = 15.0
+_PROBE_TIMEOUT_SECONDS = 5.0
+
+
+class SettingsListener:
+    def __init__(
+        self,
+        engine: AsyncEngine,
+        store: SettingsStore,
+        *,
+        min_delay: float = 1.0,
+        max_delay: float = 30.0,
+    ) -> None:
+        self._engine = engine
+        self._store = store
+        self._sessions = make_session_factory(engine)
+        self._min_delay = min_delay
+        self._max_delay = max_delay
+        self._task: asyncio.Task[None] | None = None
+        self._reloads: set[asyncio.Task[None]] = set()
+        self._ready = asyncio.Event()
+        self._lost = asyncio.Event()
+        # Server process id of the LISTEN connection (None while disconnected); lets tests
+        # and operators terminate exactly this connection.
+        self.connection_pid: int | None = None
+
+    async def start(self) -> None:
+        """Start listening; returns once connected (or after a short grace period).
+
+        If the database is down at start, the listener keeps retrying in the background.
+        """
+        if self._task is not None:
+            return
+        self._task = asyncio.create_task(self._run(), name="settings-listener")
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(self._ready.wait(), timeout=_START_TIMEOUT_SECONDS)
+
+    async def stop(self) -> None:
+        task, self._task = self._task, None
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        for reload_task in list(self._reloads):
+            reload_task.cancel()
+        self._reloads.clear()
+        self._ready.clear()
+
+    # -- internals ----------------------------------------------------------
+
+    def _dsn(self) -> str:
+        return self._engine.url.set(drivername="postgresql").render_as_string(hide_password=False)
+
+    async def _run(self) -> None:
+        delay = self._min_delay
+        while True:
+            conn: asyncpg.Connection[Any] | None = None
+            try:
+                self._lost = lost = asyncio.Event()
+                conn = await asyncpg.connect(self._dsn())
+                conn.add_termination_listener(lambda _c, event=lost: event.set())
+                await conn.add_listener(CHANNEL, self._on_notify)
+                self.connection_pid = conn.get_server_pid()
+                # LISTEN is active before this load, so nothing can slip through the gap.
+                await self._reload()
+                self._ready.set()
+                delay = self._min_delay
+                await self._wait_until_lost(conn, lost)
+                _log.warning("settings listener lost its connection; reconnecting")
+            except (OSError, asyncpg.PostgresError, asyncpg.InterfaceError, SQLAlchemyError) as exc:
+                _log.warning("settings listener cannot connect (%s)", type(exc).__name__)
+            except Exception as exc:
+                # Anything unforeseen must not end the listener for good: without it the
+                # server silently stops seeing setting changes. Log the type only (the
+                # message could carry a connection string or a value) and retry.
+                # ``CancelledError`` is a BaseException and still propagates.
+                _log.error("settings listener failed unexpectedly (%s)", type(exc).__name__)
+            finally:
+                self.connection_pid = None
+                if conn is not None:
+                    await self._close(conn)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, self._max_delay)
+
+    @staticmethod
+    async def _close(conn: Any) -> None:
+        try:
+            await asyncio.wait_for(conn.close(), timeout=_CLOSE_TIMEOUT_SECONDS)
+        except Exception:
+            # A graceful close can hang on a dead connection; drop the socket instead.
+            with contextlib.suppress(Exception):
+                conn.terminate()
+
+    async def _wait_until_lost(self, conn: Any, lost: asyncio.Event) -> None:
+        """Return when the connection is reported lost or a liveness probe fails."""
+        while not lost.is_set():
+            try:
+                await asyncio.wait_for(lost.wait(), timeout=_PROBE_INTERVAL_SECONDS)
+            except TimeoutError:
+                if not await self._probe(conn):
+                    lost.set()
+
+    @staticmethod
+    async def _probe(conn: Any) -> bool:
+        try:
+            await asyncio.wait_for(conn.fetchval("SELECT 1"), timeout=_PROBE_TIMEOUT_SECONDS)
+        except Exception as exc:
+            _log.warning("settings listener probe failed (%s)", type(exc).__name__)
+            return False
+        return True
+
+    def _on_notify(self, _conn: Any, _pid: int, _channel: str, _payload: str) -> None:
+        task = asyncio.create_task(self._reload_after_notification())
+        self._reloads.add(task)
+        task.add_done_callback(self._reloads.discard)
+
+    async def _reload_after_notification(self) -> None:
+        try:
+            await self._reload()
+        except Exception as exc:
+            # The connection may look alive while the database is not, or something
+            # unforeseen failed: log the type only and fall back to reconnect + full reload,
+            # so a missed change is picked up and the next notification still works. An
+            # exception escaping a background task would only be logged at garbage
+            # collection and leave the store stale.
+            _log.warning("settings reload failed (%s); reconnecting", type(exc).__name__)
+            self._lost.set()
+
+    async def _reload(self) -> None:
+        # The store serialises this with its own writers' post-commit updates (one lock,
+        # owned by the store), and a writer re-reads what it wrote from the database. So an
+        # overlap with ``SettingsStore.set_many`` of this process cannot install an older
+        # value, and each change is announced once per process, by whichever side got to it
+        # first.
+        async with self._sessions() as session:
+            await self._store.reload_and_notify(session)

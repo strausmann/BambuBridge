@@ -7,15 +7,14 @@ no env file and no override of runtime settings by environment variable.
 
 from __future__ import annotations
 
-import base64
-import binascii
 from functools import lru_cache
 
 from pydantic import AnyHttpUrl, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.security.keys import decode_secret_key
+
 _BOOTSTRAP_MIN_LENGTH = 32
-_SECRET_KEY_BYTES = 32
 
 
 class Settings(BaseSettings):
@@ -25,9 +24,12 @@ class Settings(BaseSettings):
         env_prefix="BAMBUBRIDGE_",
         env_file=None,
         extra="forbid",
+        # A mistyped secret must not be echoed in the validation error printed at startup.
+        hide_input_in_errors=True,
     )
 
-    database_url: str
+    # Contains the database password; SecretStr keeps it out of repr(), logs and tracebacks.
+    database_url: SecretStr
     # Key for secrets stored in the database (base64url of exactly 32 bytes).
     secret_key: SecretStr
     # Public base URL (links, cookie scope).
@@ -40,15 +42,7 @@ class Settings(BaseSettings):
     def validate_secret_key(cls, v: SecretStr) -> SecretStr:
         """Require base64url text that decodes to exactly 32 bytes (AES-256)."""
         text = v.get_secret_value().strip()
-        try:
-            raw = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
-        except (binascii.Error, ValueError) as exc:
-            raise ValueError("BAMBUBRIDGE_SECRET_KEY must be base64url text") from exc
-        if len(raw) != _SECRET_KEY_BYTES:
-            raise ValueError(
-                "BAMBUBRIDGE_SECRET_KEY must decode to exactly 32 bytes "
-                "(generate with: python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
-            )
+        decode_secret_key(text, name="BAMBUBRIDGE_SECRET_KEY")
         return SecretStr(text)
 
     @field_validator("bootstrap_admin_key")

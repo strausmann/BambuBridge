@@ -47,6 +47,23 @@ def test_secret_key_must_be_base64():
     assert [err["loc"] for err in e.value.errors()] == [("secret_key",)]
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param(GOOD_KEY[:10] + "!!" + GOOD_KEY[10:], id="injected-junk"),
+        pytest.param(GOOD_KEY[:10] + "\n" + GOOD_KEY[10:], id="inner-newline"),
+        pytest.param(
+            base64.b64encode(bytes([0xFB, 0xFF] * 16)).decode(), id="standard-alphabet-plus-slash"
+        ),
+    ],
+)
+def test_secret_key_rejects_non_strict_base64url(bad: str):
+    with pytest.raises(ValidationError) as e:
+        _make(secret_key=bad)
+    assert [err["loc"] for err in e.value.errors()] == [("secret_key",)]
+    assert bad not in str(e.value)
+
+
 def test_bootstrap_key_defaults_to_empty_and_needs_32_chars():
     assert _make().bootstrap_admin_key.get_secret_value() == ""
     with pytest.raises(ValidationError) as e:
@@ -68,7 +85,17 @@ def test_get_settings_reads_prefixed_environment(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("BAMBUBRIDGE_SECRET_KEY", GOOD_KEY)
     monkeypatch.setenv("BAMBUBRIDGE_PUBLIC_URL", "https://bb.example.com")
     try:
-        assert get_settings().database_url == URL
+        assert get_settings().database_url.get_secret_value() == URL
         assert get_settings() is get_settings()
     finally:
         get_settings.cache_clear()
+
+
+def test_repr_and_str_show_neither_the_database_password_nor_the_dsn():
+    dsn = "postgresql+asyncpg://bb_user:s3cr3t-pw-value@db.example.com:5432/bambubridge"
+    settings = _make(database_url=dsn, bootstrap_admin_key="b" * 40)
+    for text in (repr(settings), str(settings), repr(settings.model_dump())):
+        assert "s3cr3t-pw-value" not in text
+        assert dsn not in text
+        assert GOOD_KEY not in text and "b" * 40 not in text
+    assert settings.database_url.get_secret_value() == dsn

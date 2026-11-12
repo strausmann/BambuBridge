@@ -4,12 +4,25 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
+from app.migrations import make_alembic_config
+
 
 def test_alembic_check_has_no_pending_changes(alembic_config: Config):
     command.check(alembic_config)
 
 
-def test_single_head_is_the_baseline(alembic_config: Config):
+def test_single_head_is_the_latest_revision(alembic_config: Config):
     script = ScriptDirectory.from_config(alembic_config)
     assert len(script.get_heads()) == 1
     assert script.get_revision("0001").down_revision is None
+
+
+def test_app_settings_migration_round_trips(scratch_database_url: str):
+    # A separate scratch database: the shared per-run database stays untouched.
+    config = make_alembic_config(scratch_database_url)
+    script = ScriptDirectory.from_config(config)
+    assert script.get_revision("0002").down_revision == "0001"
+    command.upgrade(config, "head")
+    command.downgrade(config, "0001")
+    command.upgrade(config, "head")
+    command.check(config)
