@@ -62,3 +62,28 @@ def test_module_attribute_app_without_environment_raises_validation_error(
     finally:
         get_settings.cache_clear()
         main_module._default_app.cache_clear()
+
+
+async def test_lifespan_disposes_the_engine():
+    from app.config import Settings
+    from app.main import create_app
+
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        database_url="postgresql+asyncpg://u:p@db.example.invalid/bb",  # type: ignore[arg-type]
+        secret_key=base64.urlsafe_b64encode(b"test-secret-key-0123456789abcdef").decode(),  # type: ignore[arg-type]
+        public_url="https://bb.example.com",  # type: ignore[arg-type]
+    )
+    application = create_app(settings)
+    disposed: list[bool] = []
+    real_engine = application.state.engine
+
+    class FakeEngine:
+        async def dispose(self) -> None:
+            disposed.append(True)
+
+    application.state.engine = FakeEngine()
+    async with application.router.lifespan_context(application):
+        assert disposed == []
+    assert disposed == [True]
+    await real_engine.dispose()

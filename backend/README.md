@@ -31,3 +31,39 @@ To change the key:
 
 The old key is read by this command only, never by the server. Without the old key the command
 exits with status 2.
+
+## API tokens
+
+Requests authenticate with the header `X-BambuBridge-Key: bb_pat_…` (not `Authorization`, so a
+reverse proxy's basic-auth bypass can sit next to it). Scopes are `read` < `operate` < `admin`;
+a token never acts above its owner's role, and a disabled owner invalidates all of their tokens.
+Only a 16-character prefix and a bcrypt hash are stored; the plaintext is shown once.
+
+The first admin token comes from one of two places:
+
+- **Bootstrap:** with `BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY` set (at least 32 characters),
+  `POST /api/v1/admin/api-keys` with the header `X-BambuBridge-Bootstrap: <key>` and the body
+  `{"name": "…", "scope": "admin"}` creates exactly one admin token for the user `admin`. As
+  long as an enabled, unexpired token with scope `admin` exists, bootstrap answers 403
+  `bootstrap_closed`. If the user `admin` is disabled or no longer has the role `admin`,
+  bootstrap refuses with `bootstrap_owner_disabled` / `bootstrap_owner_not_admin` instead of
+  issuing a token that could not be used.
+- **CLI:** `bambubridge admin create-key --scope admin --name NAME` (reads
+  `BAMBUBRIDGE_DATABASE_URL`) prints the token once on stdout.
+
+Each token has a sliding 60-second rate limit (`rate_limit_per_minute`, default 60); excess
+requests get 429 with `Retry-After`. Failed checks (wrong token bodies) have a separate
+budget per presented prefix (10 per minute, then 429; the same for unknown prefixes, so the
+answer does not reveal whether a prefix exists). The budget changes the status code of a
+failed check, not its cost: every attempt is checked with bcrypt, so a correct token is always
+accepted, even while its prefix is under attack. At most four bcrypt checks run at once; further
+requests queue. Protecting CPU against request floods is the job of the reverse proxy in front of
+BambuBridge. The counters live in process memory: they are per process and start fresh after a restart.
+`last_used_at` is updated at most once per minute.
+
+Errors are problem details (`application/problem+json`) with a stable `error_code`, for example
+`not_authenticated`, `invalid_token`, `token_expired`, `token_disabled`, `owner_disabled`,
+`insufficient_scope`, `rate_limited`, `invalid_bootstrap_key`, `bootstrap_closed`,
+`validation_failed` (field locations and messages only, never the submitted values),
+`not_found`, `method_not_allowed`, `database_unavailable` (the database cannot be reached)
+and `internal_error` (anything else; details only in the server log).

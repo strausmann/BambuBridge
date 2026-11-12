@@ -18,14 +18,18 @@ import pytest
 import pytest_asyncio
 from alembic import command
 from alembic.config import Config
+from fastapi import FastAPI
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
+from app.auth.scopes import Scope
 from app.config import Settings
 from app.db.engine import make_engine
 from app.db.session import make_session_factory
 from app.main import create_app
 from app.migrations import make_alembic_config
+from app.repositories import api_keys as api_keys_repo
+from app.repositories import users as users_repo
 from tests.db_support import (
     MISSING_URL_MESSAGE,
     TEST_DATABASE_URL_ENV,
@@ -35,6 +39,10 @@ from tests.db_support import (
 )
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+# Obviously fake bootstrap key (>= 32 characters), readable text only.
+TEST_BOOTSTRAP_KEY = "test-bootstrap-key-abcdefghijklmnopqrstuvwxyz"
+KEY_HEADER = "X-BambuBridge-Key"
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
@@ -114,12 +122,61 @@ def settings(test_database_url: str) -> Settings:
         database_url=test_database_url,
         secret_key=key,  # type: ignore[arg-type]
         public_url="https://bb.example.com",  # type: ignore[arg-type]
+        bootstrap_admin_key=TEST_BOOTSTRAP_KEY,  # type: ignore[arg-type]
     )
 
 
 @pytest_asyncio.fixture
-async def client(settings: Settings, engine: AsyncEngine) -> AsyncIterator[httpx.AsyncClient]:
-    # ``engine`` makes sure the database is clean before the request is made.
-    transport = httpx.ASGITransport(app=create_app(settings))
+async def app(settings: Settings, engine: AsyncEngine) -> AsyncIterator[FastAPI]:
+    # ``engine`` makes sure the database is clean before the app touches it.
+    application = create_app(settings)
+    try:
+        yield application
+    finally:
+        # ASGITransport runs no lifespan, so the app's own engine is disposed here.
+        await application.state.engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
+    transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+
+async def issue_token(
+    engine: AsyncEngine, scope: Scope, *, name: str | None = None, **fields: object
+) -> str:
+    """Create a token owned by the single admin user and return its plaintext."""
+    async with make_session_factory(engine)() as session:
+        owner = await users_repo.get_or_create_admin(session)
+        _, plaintext = await api_keys_repo.create(
+            session, owner_user_id=owner.id, name=name or f"test {scope}", scope=scope, **fields
+        )
+        await session.commit()
+    return plaintext
+
+
+@pytest_asyncio.fixture
+async def read_token(engine: AsyncEngine) -> str:
+    return await issue_token(engine, "read")
+
+
+@pytest_asyncio.fixture
+async def operate_token(engine: AsyncEngine) -> str:
+    return await issue_token(engine, "operate")
+
+
+@pytest_asyncio.fixture
+async def admin_token(engine: AsyncEngine) -> str:
+    return await issue_token(engine, "admin")
+
+
+@pytest_asyncio.fixture
+async def admin_client(app: FastAPI, admin_token: str) -> AsyncIterator[httpx.AsyncClient]:
+    """A client that sends the ``admin_token`` with every request."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test", headers={KEY_HEADER: admin_token}
+    ) as c:
         yield c

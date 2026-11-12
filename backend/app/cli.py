@@ -1,4 +1,4 @@
-"""Command line interface: ``bambubridge secrets rotate``."""
+"""Command line interface: ``bambubridge secrets rotate`` and ``admin create-key``."""
 
 from __future__ import annotations
 
@@ -10,8 +10,12 @@ from collections.abc import Sequence
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.auth.scopes import SCOPES, Scope
 from app.build_info import VERSION
 from app.db.engine import make_engine
+from app.db.session import make_session_factory
+from app.repositories import api_keys as api_keys_repo
+from app.repositories import users as users_repo
 from app.security.keys import decode_secret_key
 from app.security.rotation import ReencryptStep, RotationError, rotate_secrets
 from app.settings_store.rotation import reencrypt_app_settings
@@ -32,6 +36,14 @@ def build_parser() -> argparse.ArgumentParser:
         "rotate",
         help="re-encrypt all stored secrets from the old to the new secret key",
     )
+    admin = commands.add_parser("admin", help="administration")
+    admin_commands = admin.add_subparsers(dest="admin_command", required=True)
+    create_key = admin_commands.add_parser(
+        "create-key",
+        help="create an API token for the admin user and print it once",
+    )
+    create_key.add_argument("--scope", required=True, choices=SCOPES)
+    create_key.add_argument("--name", required=True)
     return parser
 
 
@@ -76,9 +88,55 @@ def _rotate() -> int:
     return 0
 
 
+_NAME_MAX = 100
+
+
+class _UnusableAdminError(Exception):
+    """The user ``admin`` exists but could not use a new token."""
+
+
+def _create_key(scope: Scope, name: str) -> int:
+    """Create a token owned by the user ``admin``; the plaintext goes to stdout once."""
+    url = os.environ.get("BAMBUBRIDGE_DATABASE_URL", "").strip()
+    if not url:
+        return _fail("BAMBUBRIDGE_DATABASE_URL is not set", EXIT_USAGE)
+    name = name.strip()
+    if not name or len(name) > _NAME_MAX:
+        return _fail(f"--name must be 1 to {_NAME_MAX} characters", EXIT_USAGE)
+
+    async def run() -> str:
+        engine = make_engine(url)
+        try:
+            async with make_session_factory(engine)() as session:
+                owner = await users_repo.get_or_create_admin(session)
+                # Never issue a dead token (it would be rejected on every request).
+                if not owner.enabled:
+                    raise _UnusableAdminError("the user 'admin' is disabled")
+                if owner.role != "admin":
+                    raise _UnusableAdminError("the user 'admin' no longer has the role 'admin'")
+                _, plaintext = await api_keys_repo.create(
+                    session, owner_user_id=owner.id, name=name, scope=scope
+                )
+                await session.commit()
+                return plaintext
+        finally:
+            await engine.dispose()
+
+    try:
+        plaintext = asyncio.run(run())
+    except _UnusableAdminError as exc:
+        return _fail(f"{exc}; no token was created", 1)
+    except (OSError, SQLAlchemyError) as exc:
+        return _fail(f"database error ({type(exc).__name__}); no token was created", 1)
+    sys.stdout.write(f"{plaintext}\n")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse arguments; return the process exit code."""
     args = build_parser().parse_args(argv)
     if args.command == "secrets" and args.secrets_command == "rotate":
         return _rotate()
+    if args.command == "admin" and args.admin_command == "create-key":
+        return _create_key(args.scope, args.name)
     return 0
