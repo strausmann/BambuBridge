@@ -25,6 +25,7 @@ from app.config import Settings
 from app.db.engine import make_engine
 from app.db.session import make_session_factory
 from app.main import create_app
+from app.migrations import make_alembic_config
 from tests.db_support import (
     MISSING_URL_MESSAGE,
     TEST_DATABASE_URL_ENV,
@@ -52,11 +53,7 @@ async def _admin_statement(statement: str) -> None:
 
 
 def _alembic_config(url: str) -> Config:
-    config = Config(str(BACKEND_DIR / "alembic.ini"))
-    config.attributes["configure_logger"] = False
-    # ConfigParser interpolation: a literal percent sign must be doubled.
-    config.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
-    return config
+    return make_alembic_config(url)
 
 
 @pytest.fixture(scope="session")

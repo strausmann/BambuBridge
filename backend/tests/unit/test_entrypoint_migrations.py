@@ -20,8 +20,8 @@ def test_run_upgrades_database_before_serving(monkeypatch: pytest.MonkeyPatch):
     assert names == ["upgrade", "serve"]
     config, revision = calls.upgrade.call_args.args
     assert revision == "head"
-    assert Path(config.config_file_name).name == "alembic.ini"
-    assert Path(config.config_file_name).is_file()
+    assert Path(config.get_main_option("script_location")).is_dir()
+    assert (Path(config.get_main_option("script_location")) / "env.py").is_file()
     assert calls.serve.call_args.kwargs["forwarded_allow_ips"] == "10.1.2.3"
 
 

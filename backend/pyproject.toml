@@ -65,10 +65,6 @@ select = [
 ]
 ignore = []
 
-[tool.ruff.lint.isort]
-# The migration directory ``alembic/`` would otherwise make the library look first-party.
-known-third-party = ["alembic"]
-
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [
     "ARG",   # pytest fixtures use unused args for dependency injection

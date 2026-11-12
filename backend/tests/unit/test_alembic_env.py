@@ -1,4 +1,4 @@
-"""The production path of ``alembic/env.py``: URL from ``BAMBUBRIDGE_DATABASE_URL``."""
+"""The production path of ``app/migrations/env.py``: URL from ``BAMBUBRIDGE_DATABASE_URL``."""
 
 from __future__ import annotations
 
@@ -8,12 +8,11 @@ from collections.abc import Iterator
 
 import pytest
 from alembic import command
-from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.entrypoint import ALEMBIC_INI
+from app.migrations import make_alembic_config
 from tests.db_support import admin_url, url_for_database
 
 
@@ -49,8 +48,7 @@ def fresh_database_url() -> Iterator[str]:
 def test_upgrade_takes_url_from_environment_when_config_has_none(
     monkeypatch: pytest.MonkeyPatch, fresh_database_url: str
 ):
-    config = Config(str(ALEMBIC_INI))
-    config.attributes["configure_logger"] = False
+    config = make_alembic_config()
     assert config.get_main_option("sqlalchemy.url") is None
     monkeypatch.setenv("BAMBUBRIDGE_DATABASE_URL", fresh_database_url)
 
@@ -61,8 +59,7 @@ def test_upgrade_takes_url_from_environment_when_config_has_none(
 
 
 def test_missing_url_exits_without_leaking_any_url(monkeypatch: pytest.MonkeyPatch):
-    config = Config(str(ALEMBIC_INI))
-    config.attributes["configure_logger"] = False
+    config = make_alembic_config()
     monkeypatch.delenv("BAMBUBRIDGE_DATABASE_URL", raising=False)
 
     with pytest.raises(SystemExit) as exc:

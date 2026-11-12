@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import ipaddress
 import os
-from pathlib import Path
 
 import uvicorn
 from alembic import command
-from alembic.config import Config
+
+from app.migrations import make_alembic_config
 
 PORT = 8000
-ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 
 
 def validate_forwarded_allow_ips(value: str | None) -> str:
@@ -34,8 +33,8 @@ def validate_forwarded_allow_ips(value: str | None) -> str:
 def run() -> None:
     """Validate configuration, migrate the database to head, start the server."""
     allowed = validate_forwarded_allow_ips(os.environ.get("FORWARDED_ALLOW_IPS"))
-    # URL comes from BAMBUBRIDGE_DATABASE_URL (see alembic/env.py); a failure stops the start.
-    command.upgrade(Config(str(ALEMBIC_INI)), "head")
+    # URL comes from BAMBUBRIDGE_DATABASE_URL (see app/migrations/env.py); failure stops start.
+    command.upgrade(make_alembic_config(), "head")
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",  # noqa: S104 - container listens on all interfaces
