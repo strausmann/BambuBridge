@@ -24,6 +24,11 @@ _log = logging.getLogger(__name__)
 
 _START_TIMEOUT_SECONDS = 5.0
 _CLOSE_TIMEOUT_SECONDS = 2.0
+# Liveness probe: a LISTEN connection that silently died (half-open TCP, a proxy dropping
+# idle connections) raises no error and simply stops delivering notifications. A periodic
+# ``SELECT 1`` with a timeout finds that; the listener then reconnects and reloads.
+_PROBE_INTERVAL_SECONDS = 15.0
+_PROBE_TIMEOUT_SECONDS = 5.0
 
 
 class SettingsListener:
@@ -90,17 +95,49 @@ class SettingsListener:
                 await self._reload()
                 self._ready.set()
                 delay = self._min_delay
-                await lost.wait()
+                await self._wait_until_lost(conn, lost)
                 _log.warning("settings listener lost its connection; reconnecting")
             except (OSError, asyncpg.PostgresError, asyncpg.InterfaceError, SQLAlchemyError) as exc:
                 _log.warning("settings listener cannot connect (%s)", type(exc).__name__)
+            except Exception as exc:
+                # Anything unforeseen must not end the listener for good: without it the
+                # server silently stops seeing setting changes. Log the type only (the
+                # message could carry a connection string or a value) and retry.
+                # ``CancelledError`` is a BaseException and still propagates.
+                _log.error("settings listener failed unexpectedly (%s)", type(exc).__name__)
             finally:
                 self.connection_pid = None
                 if conn is not None:
-                    with contextlib.suppress(Exception):
-                        await asyncio.wait_for(conn.close(), timeout=_CLOSE_TIMEOUT_SECONDS)
+                    await self._close(conn)
             await asyncio.sleep(delay)
             delay = min(delay * 2, self._max_delay)
+
+    @staticmethod
+    async def _close(conn: Any) -> None:
+        try:
+            await asyncio.wait_for(conn.close(), timeout=_CLOSE_TIMEOUT_SECONDS)
+        except Exception:
+            # A graceful close can hang on a dead connection; drop the socket instead.
+            with contextlib.suppress(Exception):
+                conn.terminate()
+
+    async def _wait_until_lost(self, conn: Any, lost: asyncio.Event) -> None:
+        """Return when the connection is reported lost or a liveness probe fails."""
+        while not lost.is_set():
+            try:
+                await asyncio.wait_for(lost.wait(), timeout=_PROBE_INTERVAL_SECONDS)
+            except TimeoutError:
+                if not await self._probe(conn):
+                    lost.set()
+
+    @staticmethod
+    async def _probe(conn: Any) -> bool:
+        try:
+            await asyncio.wait_for(conn.fetchval("SELECT 1"), timeout=_PROBE_TIMEOUT_SECONDS)
+        except Exception as exc:
+            _log.warning("settings listener probe failed (%s)", type(exc).__name__)
+            return False
+        return True
 
     def _on_notify(self, _conn: Any, _pid: int, _channel: str, _payload: str) -> None:
         task = asyncio.create_task(self._reload_after_notification())

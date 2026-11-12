@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
+from types import SimpleNamespace
+from typing import Any
 
 import asyncpg
 import pytest
@@ -63,25 +66,34 @@ async def test_set_many_notifies_other_store_instance(
     assert store_b.secret("sso.trust_token") == TOKEN
 
 
-async def test_the_origin_store_is_not_notified_twice(
+async def test_the_origin_store_converges_and_is_told_only_about_written_keys(
     store: SettingsStore,
     engine: AsyncEngine,
     box_a: SecretBox,
     db_session: AsyncSession,
     session2: AsyncSession,
 ):
+    # The store that wrote a change also receives its own NOTIFY. It may be told about a
+    # key twice (a reload can run between the commit and the local cache update; see the
+    # ``SettingsStore.set_many`` docstring), but never about a key nobody wrote, and its
+    # state converges.
     origin = Changes(store)
     listener = SettingsListener(engine, store)
     await listener.start()
     try:
         await store.set_many(db_session, {"retention.events_days": 11})
-        # A change from elsewhere arrives later; by then the origin's own notification
-        # has long been handled (the reload runs under one lock, in order).
         other = SettingsStore(box_a)
         await other.set_many(session2, {"retention.communication_days": 12})
-        assert await origin.next(2) == {"retention.events_days"}
-        assert await origin.next(2) == {"retention.communication_days"}
-        assert origin.seen == [{"retention.events_days"}, {"retention.communication_days"}]
+        reported: set[str] = set()
+        while "retention.communication_days" not in reported:
+            reported |= await origin.next(5)
+        assert reported == {"retention.events_days", "retention.communication_days"}
+        assert all(
+            keys <= {"retention.events_days", "retention.communication_days"}
+            for keys in origin.seen
+        )
+        assert store.get("retention.events_days") == 11
+        assert store.get("retention.communication_days") == 12
     finally:
         await listener.stop()
 
@@ -216,5 +228,175 @@ async def test_listener_connects_once_the_database_comes_up(
         # delivers the change that was made before the listener was up.
         assert await changes.next(10) == {"retention.events_days"}
         assert attempts["n"] >= 3
+    finally:
+        await listener.stop()
+
+
+def _patch_connect(
+    monkeypatch: pytest.MonkeyPatch,
+    wrap: Callable[[int, Any], Awaitable[Any]],
+) -> None:
+    """Route the listener's ``asyncpg.connect`` through ``wrap(attempt_number, real_connect)``."""
+    real_connect = asyncpg.connect
+    attempts = {"n": 0}
+
+    async def connect(*args: Any, **kwargs: Any) -> Any:
+        attempts["n"] += 1
+
+        async def real() -> Any:
+            return await real_connect(*args, **kwargs)
+
+        return await wrap(attempts["n"], real)
+
+    # Only the listener's view of asyncpg is replaced; the engine keeps the real module.
+    monkeypatch.setattr(
+        listener_module,
+        "asyncpg",
+        SimpleNamespace(
+            connect=connect,
+            PostgresError=asyncpg.PostgresError,
+            InterfaceError=asyncpg.InterfaceError,
+        ),
+    )
+
+
+async def test_unexpected_exception_is_logged_by_type_and_followed_by_reconnect_and_reload(
+    monkeypatch: pytest.MonkeyPatch,
+    store: SettingsStore,
+    store_b: SettingsStore,
+    engine: AsyncEngine,
+    db_session: AsyncSession,
+    caplog: pytest.LogCaptureFixture,
+):
+    async def wrap(attempt: int, real: Callable[[], Awaitable[Any]]) -> Any:
+        if attempt == 1:
+            raise ValueError("secret-dsn-in-message")  # not in the listener's expected list
+        return await real()
+
+    _patch_connect(monkeypatch, wrap)
+    monkeypatch.setattr(listener_module, "_START_TIMEOUT_SECONDS", 0.2)
+    changes = Changes(store_b)
+    await store.set_many(db_session, {"retention.events_days": 17})
+    listener = SettingsListener(engine, store_b, min_delay=0.05)
+    with caplog.at_level(logging.ERROR):
+        await listener.start()
+        try:
+            assert await changes.next(10) == {"retention.events_days"}
+        finally:
+            await listener.stop()
+    assert "ValueError" in caplog.text
+    assert "secret-dsn-in-message" not in caplog.text
+
+
+async def test_cancellation_still_propagates_out_of_the_listener(
+    monkeypatch: pytest.MonkeyPatch, engine: AsyncEngine, store_b: SettingsStore
+):
+    entered = asyncio.Event()
+
+    async def wrap(_attempt: int, _real: Callable[[], Awaitable[Any]]) -> Any:
+        entered.set()
+        await asyncio.sleep(3600)
+
+    _patch_connect(monkeypatch, wrap)
+    monkeypatch.setattr(listener_module, "_START_TIMEOUT_SECONDS", 0.05)
+    listener = SettingsListener(engine, store_b)
+    await listener.start()
+    assert entered.is_set()
+    task = listener._task
+    assert task is not None
+    await asyncio.wait_for(listener.stop(), 2)
+    assert task.cancelled()
+
+
+class _HalfOpen:
+    """A connection that looks alive but is deaf: no notifications, and the probe is gated.
+
+    ``release`` lets the test decide when the first probe runs, so a change made before
+    that moment can only arrive through the reconnect's full reload.
+    """
+
+    def __init__(self, real: Any, release: asyncio.Event, mode: str) -> None:
+        self._real = real
+        self._release = release
+        self._mode = mode
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+    async def add_listener(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def fetchval(self, *_args: Any, **_kwargs: Any) -> Any:
+        await self._release.wait()
+        if self._mode == "hang":
+            await asyncio.sleep(3600)
+        raise ConnectionResetError("probe failed")
+
+
+@pytest.mark.parametrize("mode", ["hang", "fail"])
+async def test_failed_liveness_probe_triggers_reconnect_and_full_reload(
+    mode: str,
+    monkeypatch: pytest.MonkeyPatch,
+    store: SettingsStore,
+    store_b: SettingsStore,
+    engine: AsyncEngine,
+    db_session: AsyncSession,
+    caplog: pytest.LogCaptureFixture,
+):
+    release = asyncio.Event()
+
+    async def wrap(attempt: int, real: Callable[[], Awaitable[Any]]) -> Any:
+        conn = await real()
+        return _HalfOpen(conn, release, mode) if attempt == 1 else conn
+
+    _patch_connect(monkeypatch, wrap)
+    monkeypatch.setattr(listener_module, "_PROBE_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(listener_module, "_PROBE_TIMEOUT_SECONDS", 0.2)
+    changes = Changes(store_b)
+    listener = SettingsListener(engine, store_b, min_delay=0.05)
+    with caplog.at_level(logging.WARNING):
+        await listener.start()
+        try:
+            # The first connection is deaf, so this notification never reaches store_b.
+            await store.set_many(db_session, {"retention.events_days": 33})
+            assert changes.seen == []
+            release.set()  # now the probe fails (or hangs until its timeout)
+            assert await changes.next(10) == {"retention.events_days"}
+        finally:
+            await listener.stop()
+    assert store_b.get("retention.events_days") == 33
+    assert "probe failed" in caplog.text  # type name logged: ConnectionResetError / TimeoutError
+
+
+async def test_healthy_probe_keeps_the_connection(
+    monkeypatch: pytest.MonkeyPatch, engine: AsyncEngine, store_b: SettingsStore
+):
+    probes = {"n": 0}
+    enough = asyncio.Event()
+
+    class Counting:
+        def __init__(self, real: Any) -> None:
+            self._real = real
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._real, name)
+
+        async def fetchval(self, *args: Any, **kwargs: Any) -> Any:
+            probes["n"] += 1
+            if probes["n"] >= 3:
+                enough.set()
+            return await self._real.fetchval(*args, **kwargs)
+
+    async def wrap(_attempt: int, real: Callable[[], Awaitable[Any]]) -> Any:
+        return Counting(await real())
+
+    _patch_connect(monkeypatch, wrap)
+    monkeypatch.setattr(listener_module, "_PROBE_INTERVAL_SECONDS", 0.02)
+    listener = SettingsListener(engine, store_b)
+    await listener.start()
+    try:
+        pid = listener.connection_pid
+        await asyncio.wait_for(enough.wait(), 10)
+        assert listener.connection_pid == pid
     finally:
         await listener.stop()
