@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+from typing import Any
 
 import uvicorn
 from alembic import command
@@ -11,6 +12,7 @@ from alembic import command
 from app.migrations import make_alembic_config
 
 PORT = 8000
+MAX_HEADER_BYTES = 64 * 1024
 
 
 def validate_forwarded_allow_ips(value: str | None) -> str:
@@ -30,6 +32,23 @@ def validate_forwarded_allow_ips(value: str | None) -> str:
     return candidate
 
 
+def server_options(forwarded_allow_ips: str) -> dict[str, Any]:
+    """uvicorn options besides the application, host and port.
+
+    The h11 protocol with ``h11_max_incomplete_event_size`` bounds the header block and
+    chunked trailers to ``MAX_HEADER_BYTES``: a request that grows past it gets ``400`` and
+    the connection is closed. (httptools, uvicorn's default when installed, has no such
+    bound; the request body is limited separately, see ``app.web.body_limit``.)
+    """
+    return {
+        "http": "h11",
+        "h11_max_incomplete_event_size": MAX_HEADER_BYTES,
+        "proxy_headers": True,
+        "forwarded_allow_ips": forwarded_allow_ips,
+        "server_header": False,
+    }
+
+
 def run() -> None:
     """Validate configuration, migrate the database to head, start the server."""
     allowed = validate_forwarded_allow_ips(os.environ.get("FORWARDED_ALLOW_IPS"))
@@ -39,9 +58,7 @@ def run() -> None:
         "app.main:app",
         host="0.0.0.0",  # noqa: S104 - container listens on all interfaces
         port=PORT,
-        proxy_headers=True,
-        forwarded_allow_ips=allowed,
-        server_header=False,
+        **server_options(allowed),
     )
 
 
