@@ -55,8 +55,10 @@ _AUTH_SCHEME = re.compile(
 _JSON_FIELD = re.compile(r'"((?:[^"\\]|\\.)*)"(\s*:\s*)("(?:[^"\\]|\\.)*"?|[^\s,}\]"]+)')
 # ``"name": {`` or ``"name": [``: the value is an object or array, whose end a pattern cannot find.
 _JSON_CONTAINER_FIELD = re.compile(r'"((?:[^"\\]|\\.)*)"\s*:\s*(?=[\[{])')
-# ``name=value`` as in a query string or a form body.
-_PAIR = re.compile(r"([A-Za-z0-9_.%\-\[\]]+)=([^&\s\"'<>;#]*)")
+# ``name=value`` as in a query string, a form body or a message for people. The value is
+# quoted (possibly unterminated) or runs to the next ``&``, space, quote or angle bracket.
+_PAIR = re.compile(r"""([A-Za-z0-9_.%\-\[\]]+)=("(?:[^"\\]|\\.)*"?|'[^']*'?|[^&\s"'<>]*)""")
+_SURROGATE = re.compile("[\ud800-\udfff]")
 
 
 def _fold(name: str) -> str:
@@ -84,16 +86,16 @@ class Masker:
     """The three rules for one set of secret paths and known secret values.
 
     Build it once per recorded exchange and use it for every part. ``secret_paths`` are
-    dotted field paths (``connection.access_code``); ``known_secrets`` are plaintext values.
-    Entries that are not strings, empty paths and values shorter than
-    ``MIN_KNOWN_SECRET_LENGTH`` are ignored.
+    dotted field paths (``connection.access_code``); ``known_secrets`` are plaintext values
+    (bytes are read as UTF-8). A single string is taken as one entry. Other entries that are
+    not strings, empty paths and values shorter than ``MIN_KNOWN_SECRET_LENGTH`` are ignored.
     """
 
     def __init__(
         self, *, secret_paths: Collection[str] = (), known_secrets: Collection[str] = ()
     ) -> None:
         paths: set[tuple[str, ...]] = set()
-        for path in secret_paths:
+        for path in _entries(secret_paths):
             if isinstance(path, str):
                 parts = tuple(_fold(part) for part in path.split(".") if part)
                 if parts:
@@ -101,7 +103,12 @@ class Masker:
         self._paths = frozenset(paths)
         self._leaf_names = frozenset(path[-1] for path in paths)
         variants: set[str] = set()
-        for secret in known_secrets:
+        for secret in _entries(known_secrets):
+            if isinstance(secret, bytes):
+                try:
+                    secret = secret.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
             if isinstance(secret, str) and len(secret) >= MIN_KNOWN_SECRET_LENGTH:
                 variants |= _secret_variants(secret)
         # Longest first: at one position the longest spelling is the one that is replaced.
@@ -230,7 +237,9 @@ class Masker:
         """
         out = self.text(target)
         for decode in (unquote, unquote_plus):
-            decoded = decode(out)
+            # Without the NUL an escape can bring in: taken out after masking, it could
+            # join two halves of a secret.
+            decoded = decode(out).replace("\x00", "")
             if decoded != out and self._has_known(decoded):
                 out = self.text(decoded)
         return out
@@ -241,15 +250,18 @@ class Masker:
         A JSON object or array is masked field by field (rules 1 to 3 on the parsed
         values, so an escape sequence cannot hide a secret) and written back as compact
         JSON, but only if masking changed something: otherwise the text is kept as it
-        came. Whatever the content, the text rules of :meth:`text` run over the result. A
-        document nested too deeply to walk is replaced by a fixed note.
+        came and the text rules of :meth:`text` run over it, as they do for any other
+        body. A document nested too deeply to walk is replaced by a fixed note.
         """
         if text.lstrip()[:1] in ("{", "["):
             try:
                 parsed = json.loads(text)
                 masked = self.value(parsed)
                 if masked != parsed:
-                    text = json.dumps(masked, ensure_ascii=False, separators=(",", ":"))
+                    # Every string in it went through the text rules already. A surrogate
+                    # that came in as an escape sequence cannot be stored as a character.
+                    written = json.dumps(masked, ensure_ascii=False, separators=(",", ":"))
+                    return self._replace_known(_SURROGATE.sub("\ufffd", written))
             except RecursionError:
                 return NESTED_TOO_DEEPLY
             except ValueError:
@@ -275,6 +287,11 @@ class Masker:
                 cut = start
                 break
         return text[:cut], True
+
+
+def _entries(values: Collection[Any]) -> Collection[Any]:
+    """A single string (or bytes) is one entry, not a collection of its characters."""
+    return (values,) if isinstance(values, str | bytes) else values
 
 
 def mask(

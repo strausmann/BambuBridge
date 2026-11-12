@@ -334,6 +334,13 @@ async def test_retention_leaves_foreign_partitions_and_lookalikes_alone(
                 "FOR VALUES FROM ('2044-01-01 00:00:00+00') TO ('2044-02-01 00:00:00+00')"
             )
         )
+        # A partition whose name has the pattern but names no month.
+        await session.execute(
+            text(
+                'CREATE TABLE "events_y2044m13" PARTITION OF events '
+                "FOR VALUES FROM ('2044-03-01 00:00:00+00') TO ('2044-04-01 00:00:00+00')"
+            )
+        )
         # A table that only carries the name of a monthly partition.
         await session.execute(text('CREATE TABLE "events_y2044m05" (id integer)'))
         await session.commit()
@@ -341,12 +348,17 @@ async def test_retention_leaves_foreign_partitions_and_lookalikes_alone(
         result = await _run(sessions, store)
 
         assert result.dropped_partitions == [*_events(1, 2), *_log(1, 2, 3, 4)]
-        assert await _children(sessions, "events") == ["events_archive", *_events(3, 4, 5, 6)]
+        assert await _children(sessions, "events") == [
+            "events_archive",
+            "events_y2044m13",
+            *_events(3, 4, 5, 6),
+        ]
         async with sessions() as session:
             assert await session.scalar(text("SELECT to_regclass('events_y2044m05')")) is not None
     finally:
         async with sessions() as session:
             await session.execute(text('DROP TABLE IF EXISTS "events_y2044m05"'))
+            await session.execute(text('DROP TABLE IF EXISTS "events_y2044m13"'))
             await session.execute(text("DROP TABLE IF EXISTS events_archive"))
             await session.commit()
 

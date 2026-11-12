@@ -374,3 +374,86 @@ def test_invalid_secret_paths_and_secrets_are_ignored():
 
 def test_two_adjacent_secrets_are_both_replaced():
     assert mask(SECRET + OTHER, known_secrets=[SECRET, OTHER]) == "******"
+
+
+def test_a_quoted_value_and_separators_inside_a_value_are_masked_whole():
+    masker = Masker()
+    assert (
+        masker.text('login failed: password="ab cd" user=u') == "login failed: password=*** user=u"
+    )
+    assert masker.text("password='ab cd' next") == "password=*** next"
+    assert masker.text('password="never closed') == "password=***"
+    assert masker.text("x?token=ab;cd#ef&page=2") == "x?token=***&page=2"
+    assert masker.text("x?page=2&token=ab,cd") == "x?page=2&token=***"
+
+
+def test_a_masked_json_body_stays_valid_json():
+    masker = Masker(known_secrets=[SECRET])
+    # A string that ends in "name=" must not make the text rules eat the following fields.
+    body = json.dumps({"a": "see token=", "b": "x", "password": "p", "c": [1, {"d": "e"}]})
+
+    masked = masker.body(body)
+
+    assert json.loads(masked) == {
+        "a": "see token=***",
+        "b": "x",
+        "password": "***",
+        "c": [1, {"d": "e"}],
+    }
+
+
+def test_a_json_body_with_a_lone_surrogate_escape_is_storable_after_masking():
+    masker = Masker()
+    body = '{"a": "\\ud800 \\udc00x", "password": "p"}'
+    assert "\\ud800" in body  # the escape sequence, six ASCII characters
+
+    masked = masker.body(body)
+
+    assert masked == '{"a":"\ufffd \ufffdx","password":"***"}'
+    masked.encode("utf-8")  # no lone surrogate is left
+
+
+def test_target_decoded_for_a_secret_holds_no_nul():
+    masker = Masker(known_secrets=[SECRET])
+    half = len(SECRET) // 2
+    spelled = "".join(f"%{ord(c):02x}" for c in SECRET)
+    # The second copy is cut in two by an encoded NUL: taking the NUL out later must not
+    # put a readable secret together.
+    target = f"/a/{spelled}/{SECRET[:half]}%00{SECRET[half:]}/b"
+
+    masked = masker.target(target)
+
+    assert "\x00" not in masked
+    assert SECRET not in masked
+    assert masked == "/a/***/***/b"
+
+
+def test_a_single_string_is_one_secret_and_one_path_not_its_characters():
+    assert mask(f"a {SECRET} b", known_secrets=SECRET) == "a *** b"
+    assert mask({"pin": "1"}, secret_paths="pin") == {"pin": MASK}
+
+
+def test_known_secrets_given_as_bytes_are_searched_as_text():
+    assert mask(f"a {SECRET} b", known_secrets=[SECRET.encode()]) == "a *** b"  # type: ignore[list-item]
+    assert mask("a b", known_secrets=[b"\xff\xfe\xfd\xfc\xfb\xfa\xf9\xf8"]) == "a b"  # type: ignore[list-item]
+
+
+def test_a_json_field_name_with_a_broken_escape_is_judged_as_written():
+    assert Masker().text('{"token\\q": "abc", "n": 1') == '{"token\\q": "***", "n": 1'
+
+
+def test_secret_paths_from_schema_skips_a_combinator_that_is_not_a_list():
+    assert (
+        secret_paths_from_schema({"properties": {"a": {"anyOf": {"x-secret": True}}}})
+        == frozenset()
+    )
+
+
+def test_safe_prefix_looks_only_at_a_secret_across_the_cut():
+    masker = Masker(known_secrets=[SECRET])
+    before = SECRET + "x" * 200  # ends long before the cut
+    after = "x" * 150 + SECRET  # starts after the cut
+
+    assert masker.safe_prefix(before, complete=True, limit=100) == (before[:100], True)
+    assert masker.safe_prefix(after, complete=True, limit=100) == ("x" * 100, True)
+    assert masker.safe_prefix(SECRET * 3 + "x" * 100, complete=True, limit=50) == (SECRET * 2, True)
