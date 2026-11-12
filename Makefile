@@ -4,7 +4,9 @@
 #   make hooks        activate the git hooks (once per clone)
 #   make ci-fast      lint, format check, types, commit messages - no database
 #   make ci           the steps of CI job "backend", against a local test Postgres
-#   make ci-db-stop   stop the test Postgres that "make ci" leaves running
+#   make web-fast     frontend: typecheck, lint, unit tests - no database, no browser
+#   make ci-web       the steps of CI job "web" (browser tests included), same test Postgres
+#   make ci-db-stop   stop the test Postgres that "make ci" and "make ci-web" leave running
 
 SHELL := /bin/sh
 .DEFAULT_GOAL := help
@@ -19,12 +21,16 @@ PYTHON_VERSION ?= $(shell scripts/ci-versions.sh python)
 UV_VERSION     ?= $(shell scripts/ci-versions.sh uv)
 POSTGRES_IMAGE ?= $(shell scripts/ci-versions.sh postgres-image)
 NODE_VERSION   ?= $(shell scripts/ci-versions.sh node)
+PNPM_VERSION   ?= $(shell scripts/ci-versions.sh pnpm)
+PLAYWRIGHT_VERSION ?= $(shell scripts/ci-versions.sh playwright)
 # Evaluate once, and stop when a value could not be read (the script has said which one).
 PYTHON_VERSION := $(PYTHON_VERSION)
 UV_VERSION     := $(UV_VERSION)
 POSTGRES_IMAGE := $(POSTGRES_IMAGE)
 NODE_VERSION   := $(NODE_VERSION)
-ifeq ($(and $(PYTHON_VERSION),$(UV_VERSION),$(POSTGRES_IMAGE),$(NODE_VERSION)),)
+PNPM_VERSION   := $(PNPM_VERSION)
+PLAYWRIGHT_VERSION := $(PLAYWRIGHT_VERSION)
+ifeq ($(and $(PYTHON_VERSION),$(UV_VERSION),$(POSTGRES_IMAGE),$(NODE_VERSION),$(PNPM_VERSION),$(PLAYWRIGHT_VERSION)),)
 $(error cannot read the tool versions from .github/workflows - see the message above)
 endif
 endif
@@ -33,9 +39,16 @@ PYTHON_IMAGE := python:$(PYTHON_VERSION)-slim-trixie
 UV_IMAGE     := ghcr.io/astral-sh/uv:$(UV_VERSION)
 NODE_IMAGE   := node:$(NODE_VERSION)-trixie-slim
 
+# Playwright's image carries the browsers and their system libraries in the version the
+# lockfile pins ("pnpm exec playwright install --with-deps" in CI).
+PLAYWRIGHT_IMAGE := mcr.microsoft.com/playwright:v$(PLAYWRIGHT_VERSION)-noble
+
 # Python plus uv, built locally from the two images above; the tag carries both versions,
 # so a version bump builds a new image.
 CI_PY_IMAGE := bambubridge-ci-python:$(PYTHON_VERSION)-uv$(UV_VERSION)
+# Job "web" needs node, pnpm, the browsers and the backend environment in one place: the
+# Playwright image plus the pinned node, pnpm, uv and Python. Built locally, tagged with all five.
+CI_WEB_IMAGE := bambubridge-ci-web:pw$(PLAYWRIGHT_VERSION)-node$(NODE_VERSION)-pnpm$(PNPM_VERSION)-py$(PYTHON_VERSION)-uv$(UV_VERSION)
 CI_NETWORK  := bambubridge-ci
 CI_DB_NAME  := bambubridge-ci-postgres
 CI_DB_URL   := postgresql+asyncpg://postgres:test@$(CI_DB_NAME):5432/postgres
@@ -66,6 +79,36 @@ endef
 export LINT_STEPS
 export CI_STEPS
 
+# The "run:" commands of CI job "web", in order (test_ci_parity.py compares them with the
+# workflow). They run in frontend/; the backend environment is synced first, as in CI. One
+# CI step has no line here: "pnpm exec playwright install", because the image has the browsers.
+# WEB_FAST_STEPS needs neither database nor browser.
+define WEB_FAST_STEPS
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm lint
+endef
+define WEB_TEST_STEPS
+REQUIRE_API_EXPORT=1 pnpm test:coverage
+pnpm build
+pnpm build-test
+pnpm e2e
+pnpm e2e:harness
+endef
+define WEB_STEPS
+(cd ../backend && uv sync --frozen)
+$(WEB_FAST_STEPS)
+$(WEB_TEST_STEPS)
+endef
+# "make web-fast": the unit tests without the coverage gate and without the backend (the test
+# that compares the API types with the backend skips itself there; "make ci-web" runs it).
+define WEB_FAST_ALL
+$(WEB_FAST_STEPS)
+pnpm test
+endef
+export WEB_STEPS
+export WEB_FAST_ALL
+
 # Commit ranges linted by "make commitlint" (the pre-push hook passes the pushed ranges).
 COMMITLINT_RANGES ?= origin/main..HEAD
 
@@ -77,10 +120,20 @@ PY_RUN = $(DOCKER_RUN) -w /w/backend \
 	-e UV_PYTHON_DOWNLOADS=never $(PY_RUN_EXTRA) $(CI_PY_IMAGE)
 NODE_RUN := $(DOCKER_RUN) -w /w -e npm_config_cache=/w/.cache/npm \
 	-e npm_config_update_notifier=false $(NODE_IMAGE)
+# pnpm keeps its store under HOME; inside .cache it is on the same file system as
+# frontend/node_modules (hard links) and survives between runs.
+WEB_ENV := -w /w/frontend -e HOME=/w/.cache/home -e npm_config_update_notifier=false
+PNPM_DIR := .cache/pnpm-$(PNPM_VERSION)
+WEB_FAST_RUN := $(DOCKER_RUN) $(WEB_ENV) -e npm_config_cache=/w/.cache/npm \
+	-e PATH=/w/$(PNPM_DIR)/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin $(NODE_IMAGE)
+WEB_RUN = $(DOCKER_RUN) $(WEB_ENV) --ipc=host --network $(CI_NETWORK) \
+	-e BAMBUBRIDGE_TEST_DATABASE_URL=$(CI_DB_URL) \
+	-e UV_CACHE_DIR=/w/.cache/uv -e UV_PROJECT_ENVIRONMENT=/w/.cache/venv-web \
+	-e UV_PYTHON_DOWNLOADS=never $(CI_WEB_IMAGE)
 
 .PHONY: help
 help:
-	@sed -n '2,8p' Makefile | sed 's/^# \{0,1\}//'
+	@sed -n '2,10p' Makefile | sed 's/^# \{0,1\}//'
 
 .PHONY: hooks
 hooks:
@@ -95,6 +148,28 @@ ci-image:
 	@docker image inspect $(CI_PY_IMAGE) >/dev/null 2>&1 || \
 		printf 'FROM %s AS uv\nFROM %s\nCOPY --from=uv /uv /uvx /usr/local/bin/\n' \
 			'$(UV_IMAGE)' '$(PYTHON_IMAGE)' | docker build -q -t $(CI_PY_IMAGE) -
+
+# Playwright's image, with the node binary replaced by the pinned one, pnpm, uv and a Python
+# for the backend (uv-managed, world-readable: the container runs as the calling user).
+.PHONY: ci-web-image
+ci-web-image:
+	@mkdir -p .cache/home
+	@docker image inspect $(CI_WEB_IMAGE) >/dev/null 2>&1 || \
+		printf '%s\n' \
+			'FROM $(UV_IMAGE) AS uv' \
+			'FROM $(NODE_IMAGE) AS node' \
+			'FROM $(PLAYWRIGHT_IMAGE)' \
+			'COPY --from=uv /uv /uvx /usr/local/bin/' \
+			'COPY --from=node /usr/local/bin/node /usr/local/bin/node' \
+			'ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python' \
+			'RUN uv python install $(PYTHON_VERSION) && chmod -R a+rX /opt/uv-python \' \
+			'    && npm install -g pnpm@$(PNPM_VERSION) && node --version && pnpm --version' \
+			| docker build -q -t $(CI_WEB_IMAGE) -
+
+# pnpm for "make web-fast", in the plain node image: installed once per version into .cache.
+$(PNPM_DIR)/bin/pnpm:
+	@mkdir -p .cache/home
+	$(NODE_RUN) npm install -g --prefix /w/$(PNPM_DIR) pnpm@$(PNPM_VERSION)
 
 node_modules/.package-lock.json: package.json package-lock.json
 	@mkdir -p .cache
@@ -138,6 +213,12 @@ commitlint-msg: node_modules/.package-lock.json
 	@sed '/^# -\{24\} >8 -\{24\}$$/,$$d' "$(MSG)" | git stripspace --strip-comments | \
 		$(NODE_RUN) npx --no-install commitlint
 
+# Frontend checks that need no database and no browser. Not part of "make ci-fast" (and so
+# not of the pre-push hook): see CONTRIBUTING.md for the reason and the timing.
+.PHONY: web-fast
+web-fast: $(PNPM_DIR)/bin/pnpm
+	@$(WEB_FAST_RUN) sh -exc "$$WEB_FAST_ALL"
+
 # --- full backend job --------------------------------------------------------------------
 
 # Same commands, order and thresholds as job "backend" in .github/workflows/ci.yml.
@@ -145,6 +226,11 @@ commitlint-msg: node_modules/.package-lock.json
 ci: PY_RUN_EXTRA = --network $(CI_NETWORK) -e BAMBUBRIDGE_TEST_DATABASE_URL=$(CI_DB_URL)
 ci: ci-image ci-db-start
 	@$(PY_RUN) sh -exc "$$CI_STEPS"
+
+# Same commands and order as job "web" in .github/workflows/ci.yml, browsers from the image.
+.PHONY: ci-web
+ci-web: ci-web-image ci-db-start
+	@$(WEB_RUN) sh -exc "$$WEB_STEPS"
 
 # Long-lived: started on demand, kept running between runs, removed by "make ci-db-stop".
 # A running container is replaced when it was started from another image than

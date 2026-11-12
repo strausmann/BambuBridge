@@ -2,7 +2,10 @@
 # Prints one tool version that CI uses, read from the workflow files. The workflows are the
 # single source of these versions; the Makefile calls this script instead of repeating them.
 #
-#   ci-versions.sh python|uv|postgres-image|node [workflows-dir]
+#   ci-versions.sh python|uv|postgres-image|node|pnpm|playwright [workflows-dir]
+#
+# pnpm and playwright are pinned in frontend/package.json (CI reads them from there as well:
+# pnpm/action-setup takes "packageManager", the lockfile takes "@playwright/test").
 #
 # Exits with status 1 and names the field when it cannot find exactly one value, for
 # example after the layout of a workflow changed. Several jobs may name the same tool
@@ -10,8 +13,9 @@
 # values fail the same way.
 set -eu
 
-field=${1:?usage: ci-versions.sh python|uv|postgres-image|node [workflows-dir]}
+field=${1:?usage: ci-versions.sh python|uv|postgres-image|node|pnpm|playwright [workflows-dir]}
 dir=${2:-$(dirname "$0")/../.github/workflows}
+package_json=${CI_VERSIONS_PACKAGE_JSON:-$(dirname "$0")/../frontend/package.json}
 
 # Value of KEY in the "with:" block of the astral-sh/setup-uv step.
 setup_uv() {
@@ -38,6 +42,14 @@ postgres-image)
 node)
 	where='node-version of the actions/setup-node step in commitlint.yml'
 	value=$(sed -n 's/^ *node-version: *"\{0,1\}\([^" ]*\)"\{0,1\} *$/\1/p' "$dir/commitlint.yml")
+	;;
+pnpm)
+	where='pnpm version in "packageManager" of frontend/package.json'
+	value=$(sed -n 's/^ *"packageManager": *"pnpm@\([0-9][0-9.]*\)".*$/\1/p' "$package_json")
+	;;
+playwright)
+	where='exact version of "@playwright/test" in frontend/package.json'
+	value=$(sed -n 's/^ *"@playwright\/test": *"\([0-9][0-9.]*\)".*$/\1/p' "$package_json")
 	;;
 *)
 	echo "ci-versions.sh: unknown field '$field'" >&2

@@ -39,6 +39,8 @@ Everything runs in containers that match CI; nothing is installed on the host. Y
 make hooks      # once per clone: activates the git hooks (sets core.hooksPath to .husky)
 make ci-fast    # ruff check, ruff format --check, mypy, commitlint for origin/main..HEAD - no database
 make ci         # the steps of CI job "backend", against a local test Postgres
+make web-fast   # frontend: typecheck, lint, unit tests - no database, no browser
+make ci-web     # the steps of CI job "web" (browser tests included), same test Postgres
 make ci-db-stop # stop the test Postgres
 ```
 
@@ -55,12 +57,26 @@ make ci-db-stop # stop the test Postgres
   `.github/workflows/ci.yml` (`uv sync --frozen`, ruff, mypy, pytest with branch coverage of at least
   80 %, and at least 90 % for `app/auth/*` and `app/security/*`). Run it before you open or update a
   pull request.
+- **`make ci-web`** runs the commands of job `web` in the same order: backend environment,
+  `pnpm install --frozen-lockfile`, typecheck, lint, unit tests with coverage (including the check
+  that the generated API types match the backend), build, build test, the browser tests in Chromium
+  and WebKit against the real backend, and the layout harness. It runs in a locally built image:
+  Playwright's own image (browsers and system libraries in the version the lockfile pins, which is
+  why the CI step `playwright install` has no counterpart here) plus the pinned Node, pnpm, uv and
+  Python. The first run downloads that image (about 2 GB) and takes several minutes. Run it before
+  you open or update a pull request that touches `frontend/`.
+- **`make web-fast`** is the quick part for the frontend: install, typecheck, lint and the unit
+  tests, in the plain Node image. It takes about 45 seconds when the dependencies are cached and
+  about 90 seconds on a first run. It is not part of `make ci-fast`, so the `pre-push` hook does
+  not run it: the hook runs on every push, also for backend-only changes, and would more than
+  double in time. Run it yourself while working on `frontend/`.
 - **Versions come from the workflows.** The Python, uv, Postgres and Node versions are written down
   once, in `.github/workflows/ci.yml` and `commitlint.yml`. The `Makefile` reads them from there
   (`scripts/ci-versions.sh`), so a version bump in a workflow applies to `make ci` without a second
   edit. To try another version, override it for one call: `PYTHON_VERSION=… make ci` (also
-  `UV_VERSION`, `POSTGRES_IMAGE`, `NODE_VERSION`). The commands of the `backend` job are repeated in
-  the `Makefile`; `backend/tests/unit/test_ci_parity.py` fails when they differ from the workflow or
+  `UV_VERSION`, `POSTGRES_IMAGE`, `NODE_VERSION`). pnpm and Playwright are pinned in
+  `frontend/package.json` and read from there the same way. The commands of the `backend` and `web`
+  jobs are repeated in the `Makefile`; `backend/tests/unit/test_ci_parity.py` fails when they differ from the workflow or
   when a version can no longer be read from it.
 - **Test database.** `make ci` starts the container `bambubridge-ci-postgres` on first use and leaves
   it running for the next run; `make ci-db-stop` removes it together with

@@ -68,6 +68,8 @@ jobs:
   web:
     name: web
     runs-on: ubuntu-24.04
+    # Two browsers and a real backend; a hung browser or server must not hold a runner for hours.
+    timeout-minutes: 30
     services:
       # The browser tests run against the real backend (backend/tests/e2e_app.py).
       postgres:

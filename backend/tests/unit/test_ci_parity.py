@@ -11,6 +11,8 @@ the ``run:`` steps of job ``backend`` as well.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import shutil
 import subprocess
@@ -145,3 +147,84 @@ def test_make_ci_runs_the_commands_of_the_backend_job():
     # "make lint" and "make ci" take their commands from these blocks and from nowhere else.
     assert _make_define("CI_STEPS") == ["$(LINT_STEPS)", "$(TEST_STEPS)"]
     assert MAKEFILE.count("uv run") == sum(line.startswith("uv run") for line in in_ci)
+
+
+# --- job "web" -----------------------------------------------------------------------------
+
+PACKAGE_JSON = REPO_ROOT / "frontend" / "package.json"
+# CI installs the browsers in a step; "make ci-web" runs in Playwright's image, which has them.
+PROVIDED_BY_THE_IMAGE = "pnpm exec playwright install --with-deps chromium webkit"
+
+
+def _extract_from_package(field: str, package_json: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603 - fixed argv, no shell
+        [SH, str(SCRIPT), field],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": os.environ["PATH"], "CI_VERSIONS_PACKAGE_JSON": str(package_json)},
+    )
+
+
+def _package() -> Any:
+    return json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
+
+
+def test_pnpm_and_playwright_versions_equal_what_package_json_holds():
+    package = _package()
+    pnpm = _extract_from_package("pnpm", PACKAGE_JSON)
+    playwright = _extract_from_package("playwright", PACKAGE_JSON)
+    assert pnpm.returncode == 0, pnpm.stderr
+    assert playwright.returncode == 0, playwright.stderr
+    assert f"pnpm@{pnpm.stdout.strip()}" == package["packageManager"]
+    assert playwright.stdout.strip() == package["devDependencies"]["@playwright/test"]
+
+
+@pytest.mark.parametrize(
+    ("field", "old", "new"),
+    [
+        ("pnpm", '"packageManager": "pnpm@', '"packageManager": "yarn@'),
+        ("playwright", '"@playwright/test": "', '"@playwright/test": "^'),
+    ],
+)
+def test_extraction_fails_when_package_json_no_longer_pins_the_version(
+    field: str, old: str, new: str, tmp_path: Path
+):
+    text = PACKAGE_JSON.read_text(encoding="utf-8")
+    assert text.count(old) == 1
+    changed = tmp_path / "package.json"
+    changed.write_text(text.replace(old, new), encoding="utf-8")
+
+    result = _extract_from_package(field, changed)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "frontend/package.json" in result.stderr
+
+
+def test_makefile_takes_the_web_versions_from_the_script():
+    for field in ("pnpm", "playwright"):
+        assert f"$(shell scripts/ci-versions.sh {field})" in MAKEFILE, field
+    assert re.search(r"(playwright|pnpm)[:@]v?\d", MAKEFILE) is None
+
+
+def test_make_ci_web_runs_the_commands_of_the_web_job():
+    """Same commands in the same order; the browsers come from the image instead of a step."""
+    web = _load("ci.yml")["jobs"]["web"]
+    steps = [step for step in web["steps"] if "run" in step]
+    in_ci = []
+    for step in steps:
+        prefix = "".join(f"{key}={value} " for key, value in step.get("env", {}).items())
+        command = prefix + step["run"]
+        if step.get("working-directory") == "backend":
+            command = f"(cd ../backend && {command})"
+        in_ci.append(command)
+    assert web["defaults"]["run"]["working-directory"] == "frontend"
+    assert PROVIDED_BY_THE_IMAGE in in_ci
+    in_ci.remove(PROVIDED_BY_THE_IMAGE)
+
+    fast, test = _make_define("WEB_FAST_STEPS"), _make_define("WEB_TEST_STEPS")
+    sync = "(cd ../backend && uv sync --frozen)"
+    assert _make_define("WEB_STEPS") == [sync, "$(WEB_FAST_STEPS)", "$(WEB_TEST_STEPS)"]
+    assert [sync, *fast, *test] == in_ci
+    # "make web-fast" is the fast steps plus the unit tests, taken from the same block.
+    assert _make_define("WEB_FAST_ALL") == ["$(WEB_FAST_STEPS)", "pnpm test"]
