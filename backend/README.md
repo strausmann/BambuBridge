@@ -78,7 +78,10 @@ by the setting `auth.sign_in_limit_per_minute` (clients without a usable address
 sign-in bucket). At most four bcrypt checks run at once; further
 requests queue. Protecting CPU against request floods is the job of the reverse proxy in front of
 BambuBridge. Request bodies are limited to 64 KiB: a larger `Content-Length`, or a chunked body that
-grows past it, is refused with 413 before any handler or credential check runs. The counters live in process memory: they are per process and start fresh after a restart.
+grows past it, is refused with 413 before any handler or credential check runs. The request
+header block and chunked trailers are limited to 64 KiB by the HTTP server (larger: 400 and the
+connection is closed). The counters live in process memory: they are per process and start fresh
+after a restart.
 `last_used_at` is updated at most once per minute.
 
 Errors are problem details (`application/problem+json`) with a stable `error_code`, for example
@@ -95,7 +98,8 @@ A browser signs in with a token (`POST /api/v1/auth/session`) or through the tru
 credential: one API token is one credential, and all identity-provider (SSO) sign-ins of the user
 together are another. A new sign-in over the cap revokes the oldest session of the same
 credential only, so a token, even one with scope `read`, can never sign the operator out of a
-session opened with another token or with SSO.
+session opened with another token or with SSO. In total a user can hold at most
+20 × (number of the user's API tokens + 1) active sessions.
 
 `GET /auth/continue` without a valid session cookie opens a new SSO session each time. The
 session cookie is `SameSite=Strict`, so a link from another site that leads a signed-in browser
@@ -103,6 +107,15 @@ there also opens a new session. This is accepted: only the session token's hash 
 existing session cannot be handed out again; new sessions count against
 `auth.sign_in_limit_per_minute`; and because the cap is per credential, the churn only rotates
 that user's own SSO sessions.
+
+## Health checks
+
+`GET /healthz` needs no credentials and answers 200 while the process runs. `GET /readiness`
+needs scope `read` and checks the database and the settings listener: 200 when both are up,
+otherwise 503 naming the part that is down. The credential check is bounded to 3 seconds; under a
+flood of invalid tokens it can run out of that time, and `/readiness` then answers 503 with
+`database: unavailable`. It never answers 200 to a request without a valid credential. `HEAD` is
+answered wherever `GET` is, with the same status and headers and no body.
 
 ## Reverse proxy
 
