@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "Dev tooling (commit lint, semantic-release, formatting) for BambuBridge. The application itself is Python (see requirements.txt).",
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "prepare": "husky",
     "commitlint": "commitlint --edit",

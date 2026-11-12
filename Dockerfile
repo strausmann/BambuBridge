@@ -11,11 +11,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ app/
 COPY web/ web/
 COPY config.example.yaml ./config.example.yaml
+# The project licence travels with the image (AGPL-3.0-or-later).
+COPY LICENSE /app/LICENSE
 
 # Config + SQLite state live on a mounted volume.
 ENV BRIDGE_CONFIG=/data/config.yaml
 ENV BRIDGE_DB=/data/state.db
 VOLUME ["/data"]
+
+LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+      org.opencontainers.image.source="https://github.com/strausmann/BambuBridge"
 
 EXPOSE 8099
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8099"]

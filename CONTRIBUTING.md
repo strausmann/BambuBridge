@@ -58,3 +58,10 @@ merged only when every finding has a status and CI is green. See `.claude/rules/
 Versioning is automated by **semantic-release** from the commit history (`.releaserc.json`):
 `feat`→minor, `fix`/`perf`/`refactor`→patch, `!`/`BREAKING CHANGE`→major. Don't bump versions
 or edit `CHANGELOG.md` by hand.
+
+## License and CLA
+
+The project is licensed under AGPL-3.0-or-later (see [LICENSE](LICENSE)). Contributions require agreement to the
+[Contributor License Agreement](CLA.md): tick the CLA checkbox in the pull request template. If the CLA assistant
+is enabled for the repository it additionally asks you to sign once on the first pull request.
+

@@ -3,6 +3,13 @@
 
 Closes #<issue>
 
+## Contributor License Agreement (CLA)
+By opening this pull request you affirm that you have read and agree to the
+project's [Contributor License Agreement](../CLA.md) for the contribution(s)
+included here.
+
+- [ ] I have read and agree to the [Contributor License Agreement](../CLA.md).
+
 ## Type & Scope
 <!-- Conventional Commit, Scope verpflichtend — siehe .github/SCOPES.md -->
 `type(scope): …`
