@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -22,6 +23,7 @@ def create_app(settings: Settings, *, web_dist_dir: Path | None = None) -> FastA
     return app
 
 
+@lru_cache
 def _default_app() -> FastAPI:
     return create_app(get_settings(), web_dist_dir=Path("/opt/app/web"))
 
