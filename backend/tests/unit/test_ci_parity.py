@@ -91,6 +91,39 @@ def test_extraction_fails_and_names_the_field_when_the_key_is_renamed(field: str
     assert f" in {file_name}" in result.stderr
 
 
+# field -> one value as a job of ci.yml spells it, and a different one
+DISAGREEING = {
+    "python": ('python-version: "{v}"', "3.0.0"),
+    "uv": ('          version: "{v}"', "0.0.1"),
+    "postgres-image": ("image: {v}", "postgres:1.0"),
+}
+
+
+@pytest.mark.parametrize("field", sorted(DISAGREEING))
+def test_extraction_fails_when_two_jobs_disagree_on_a_version(field: str, tmp_path: Path):
+    """backend and web name the same tools; one value changed in one job only must fail."""
+    line, other = DISAGREEING[field]
+    current = _from_yaml(field)
+    for source in WORKFLOWS.glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "ci.yml":
+            spelled = line.format(v=current)
+            assert text.count(spelled) >= 2, f"{field}: expected in more than one job"
+            text = text.replace(spelled, line.format(v=other), 1)
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    result = _extract(field, tmp_path)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert current in result.stderr
+    assert other in result.stderr
+
+
+def test_web_job_uses_the_node_version_of_the_commitlint_job():
+    web = _load("ci.yml")["jobs"]["web"]
+    assert str(_step(web, "actions/setup-node")["with"]["node-version"]) == _from_yaml("node")
+
+
 def test_makefile_takes_every_version_from_the_script():
     for field in FIELDS:
         assert f"$(shell scripts/ci-versions.sh {field})" in MAKEFILE, field

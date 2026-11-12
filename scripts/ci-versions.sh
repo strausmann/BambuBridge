@@ -5,7 +5,9 @@
 #   ci-versions.sh python|uv|postgres-image|node [workflows-dir]
 #
 # Exits with status 1 and names the field when it cannot find exactly one value, for
-# example after the layout of a workflow changed.
+# example after the layout of a workflow changed. Several jobs may name the same tool
+# (backend and web both set up uv and start Postgres); they must agree, and two different
+# values fail the same way.
 set -eu
 
 field=${1:?usage: ci-versions.sh python|uv|postgres-image|node [workflows-dir]}
@@ -17,7 +19,7 @@ setup_uv() {
 		/uses: *astral-sh\/setup-uv@/ { in_step = 1; next }
 		in_step && /^ *- / { in_step = 0 }
 		in_step && $1 == key { value = $2; gsub(/"/, "", value); print value }
-	' "$dir/ci.yml"
+	' "$dir/ci.yml" | sort -u
 }
 
 case $field in
@@ -31,7 +33,7 @@ uv)
 	;;
 postgres-image)
 	where='image of the postgres service in ci.yml'
-	value=$(sed -n 's/^ *image: *\(postgres:[^ ]*\) *$/\1/p' "$dir/ci.yml")
+	value=$(sed -n 's/^ *image: *\(postgres:[^ ]*\) *$/\1/p' "$dir/ci.yml" | sort -u)
 	;;
 node)
 	where='node-version of the actions/setup-node step in commitlint.yml'
