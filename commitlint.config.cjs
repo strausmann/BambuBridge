@@ -15,6 +15,7 @@ module.exports = {
         'mqtt', 'spoolman', 'spoolmandb', 'db', 'consumption', 'jobs', 'tags',
         'kcatalog', 'cloud', 'presets', 'labels', 'ams', 'esp32', 'api', 'ui',
         'config', 'scripts', 'docker', 'ci', 'docs', 'deps', 'release',
+        'auth', 'settings', 'providers', 'events', 'pwa', 'brand', 'repo', 'security',
       ],
     ],
     'subject-case': [2, 'never', ['sentence-case', 'start-case', 'pascal-case', 'upper-case']],

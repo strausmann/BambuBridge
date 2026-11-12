@@ -27,28 +27,36 @@ BambuBridge uses [Conventional Commits](https://www.conventionalcommits.org/) wi
 
 | Scope | Area | Maps to |
 |-------|------|---------|
-| `mqtt` | LAN/Cloud MQTT ingest, AMS tray parser | `app/mqtt_ingest.py` |
-| `spoolman` | Spoolman REST client / sync | `app/spoolman.py` |
-| `spoolmandb` | SpoolmanDB import | `app/spoolmandb.py` |
-| `db` | SQLite model, migrations | `app/db.py` |
-| `consumption` | remain%/per-job reconcile | `app/consumption.py` |
-| `jobs` | print-job detection | `app/jobs.py` |
-| `tags` | RFID tag lifecycle, compatibility | `app/tags.py` |
-| `kcatalog` | k/cali catalog (PA calibration) | `app/kcatalog.py` |
-| `cloud` | Bambu Cloud filament import | `app/cloud_library.py` |
-| `presets` | Bambu preset generation | `app/preset_gen.py` |
-| `labels` | label-printer hub client | `app/labels.py` |
-| `ams` | AMS/slot logic, slot-bind flow | `app/main.py` (slot/AMS) |
-| `esp32` | ESP32 slot-selector client/firmware | ESP32 + slot APIs |
-| `api` | FastAPI app, endpoints, auth, lifespan | `app/main.py`, `app/config.py` |
-| `ui` | Tailwind PWA | `web/` |
-| `config` | config schema / example | `app/config.py`, `config.example.yaml` |
+| `mqtt` | LAN/Cloud MQTT ingest, AMS tray parser | `backend/` |
+| `spoolman` | Spoolman REST client / sync | `backend/` |
+| `spoolmandb` | SpoolmanDB import | `backend/` |
+| `db` | SQLite model, migrations | `backend/` |
+| `consumption` | remain%/per-job reconcile | `backend/` |
+| `jobs` | print-job detection | `backend/` |
+| `tags` | RFID tag lifecycle, compatibility | `backend/` |
+| `kcatalog` | k/cali catalog (PA calibration) | `backend/` |
+| `cloud` | Bambu Cloud filament import | `backend/` |
+| `presets` | Bambu preset generation | `backend/` |
+| `labels` | label-printer hub client | `backend/` |
+| `ams` | AMS/slot logic, slot-bind flow | `backend/` |
+| `esp32` | ESP32 slot-selector client/firmware | slot APIs, ESP32 client |
+| `api` | FastAPI app, endpoints, auth, lifespan | `backend/` |
+| `ui` | user interface components | `frontend/` |
+| `config` | config schema / example | `backend/`, `frontend/` |
 | `scripts` | helper scripts (capture, build) | `scripts/` |
-| `docker` | Dockerfile / compose | `Dockerfile`, `docker-compose.yml` |
+| `docker` | Dockerfile / compose | Dockerfiles, compose files |
 | `ci` | GitHub Actions / tooling | `.github/`, lint/release config |
 | `docs` | documentation, guidelines, ADRs | `docs/`, `README.md` |
-| `deps` | dependency updates | `requirements*.txt`, `package.json` |
+| `deps` | dependency updates | `pyproject.toml`, `package.json`, lockfiles |
 | `release` | release plumbing | semantic-release |
+| `auth` | users, identities, sign-in | `backend/`, `frontend/` |
+| `settings` | user and system settings | `backend/`, `frontend/` |
+| `providers` | sign-in and cloud providers | `backend/` |
+| `events` | printer event stream and handling | `backend/` |
+| `pwa` | progressive web app shell, manifest, service worker | `frontend/` |
+| `brand` | logo, icons, colour tokens | `docs/brand/` |
+| `repo` | repository structure and rules | repository root, `.claude/` |
+| `security` | security fixes and hardening | cross-cutting |
 
 ## Rules
 - **Scope is mandatory**, singular, lowercase. Pick the **most specific** that fits.

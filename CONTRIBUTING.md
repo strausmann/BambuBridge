@@ -6,19 +6,16 @@
    `refactor/<slug>`, `chore/<slug>`.
 3. Specs/plans for non-trivial work are reviewed by the project review agents
    (network / developer / research / security — see `.claude/agents/`) **before** implementation,
-   to catch deviations from the guidelines early.
+   to catch deviations from the ADRs early.
 4. Implement with tests. Validate locally. Open a PR referencing the issue.
 
 ## Source of truth
-Binding, in this order of precedence — **ADR > Guideline > Code/README** (see `.claude/rules/adr.md`, `CLAUDE.md` R7):
+Binding, in this order of precedence — **ADR > code/README** (see `.claude/rules/adr.md`, `CLAUDE.md` R7):
 - `docs/decisions/` — **ADRs have the highest authority** (the *why*; amend by superseding, never by editing).
-- `docs/api-guideline.md` — API: `/api/v1`, snake_case, field glossary, error envelope
-  `{detail,error_code}`, `X-API-Key` auth, HTTPS.
-- `docs/database-guideline.md` — SQLite (WAL, `user_version` migrations, defined tables).
 - `CLAUDE.md` — hard rules for any (human or AI) contributor.
 
-If a change alters an endpoint/field/config, update the guideline **+** README **+**
-`config.example.yaml` **together** in the same PR.
+If a change alters an endpoint, field or configuration, update the affected code, tests and README
+**together** in the same PR.
 
 ## Commits — Conventional Commits (enforced)
 Format `type(scope): subject`. Scope is **mandatory** — see [`.github/SCOPES.md`](.github/SCOPES.md)
@@ -36,18 +33,11 @@ or PRs — see `CLAUDE.md` R2.
 
 ## Local setup & gates
 ```bash
-# Python app
-python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements-dev.txt
-python -m pytest -q
-python -m py_compile app/*.py
-
-# Tooling (commit lint, formatting, release) — Node
+# Repository tooling (commit lint, git hooks) — Node >= 26
 npm install          # sets up the husky commit-msg hook
-npm run format       # prettier (configs/markdown/yaml/json)
 ```
-Containers are tested with Docker on the dev VM (network `traefik-public`); avoid installing
-extra dev tooling on the host — run it in containers.
+The gates for `backend/` (Python) and `frontend/` (Node) are documented next to the code once those
+directories exist. Do not install extra dev tooling on the host — run it in containers matching CI.
 
 ## AI code review (Gemini / Copilot)
 Every PR is reviewed by AI bots. **Each finding must be resolved** — either **fixed** (note it on the

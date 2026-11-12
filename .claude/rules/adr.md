@@ -1,42 +1,39 @@
-# Architecture Decision Records (ADRs) — oberste Verbindlichkeit
+# Architecture Decision Records (ADRs) — highest authority
 
-Diese Regel lädt automatisch für jede (menschliche oder Claude-)Instanz in diesem Repo.
+This rule loads automatically for every (human or Claude) contributor in this repository.
 
-## Was ein ADR ist
-Ein **Architecture Decision Record** dokumentiert eine bewusste, bindende Entscheidung im
-Nygard-Format (**Context → Decision → Consequences**, plus „Options considered"). ADRs leben in
-`docs/decisions/` (Format: `docs/decisions/_template.md`, Übersicht: `docs/decisions/README.md`).
+## What an ADR is
+An **Architecture Decision Record** documents a deliberate, binding decision in Nygard format
+(**Context → Decision → Consequences**, plus "Options considered"). ADRs live in `docs/decisions/`
+(template: `docs/decisions/_template.md`, index: `docs/decisions/README.md`).
 
-## Autorität — ADRs gelten zuoberst
-Bei Konflikten gilt diese Rangfolge:
-1. **Akzeptierte ADRs** (`docs/decisions/`, Status `Accepted`) — **höchste Gültigkeit**
-2. Guidelines (`docs/api-guideline.md`, `docs/database-guideline.md`)
-3. README / Code-Konventionen / bestehender Code
+## Authority — ADRs rule
+On conflict this order applies:
+1. **Accepted ADRs** (`docs/decisions/`, status `Accepted`) — **highest authority**
+2. README / code conventions / existing code
 
-Widerspricht eine Guideline oder der Code einem akzeptierten ADR, ist **das ein Fehler** — zu
-beheben, oder es braucht einen **neuen, supersedenden ADR**. **Niemand — Mensch oder Claude-Agent —
-darf einen akzeptierten ADR still übergehen.** Eine Guideline ist die *operative Umsetzung* der
-ADR-Entscheidung, nicht deren Ersatz.
+If code or documentation contradicts an accepted ADR, **that is a defect** — fix it, or write a **new,
+superseding ADR**. **Nobody — human or Claude agent — may silently ignore an accepted ADR.**
 
-## Erstellen
-1. `docs/decisions/_template.md` → `docs/decisions/NNNN-kurz-slug.md` (fortlaufend, nullgepolstert).
-2. Felder ausfüllen: **Status** (`Proposed`), **Date**, **Deciders**, **Context**, **Decision**
-   (positiver Aussagesatz „Wir werden …"), **Options considered** (gewählte Option + Alternativen
-   mit Pro/Contra), **Consequences**, **References** (Issues/PRs, Guideline-Stellen `file:line`).
-3. Neue Zeile in die Index-Tabelle in `docs/decisions/README.md` eintragen.
+## Creating
+1. Copy `docs/decisions/_template.md` to `docs/decisions/NNNN-short-slug.md` (sequential, zero-padded).
+2. Fill in **Status** (`Proposed`), **Date**, **Deciders**, **Context**, **Decision** (positive
+   statement "We will …"), **Options considered** (chosen option plus alternatives with pros/cons),
+   **Consequences**, **References** (issues/PRs, `file:line`).
+3. Add a row to the index table in `docs/decisions/README.md`.
 
-Status-Werte: `Proposed` · `Accepted` · `Deprecated` · `Superseded by NNNN`.
+Status values: `Proposed` · `Accepted` · `Deprecated` · `Superseded by NNNN`.
+An ADR is `Proposed` until the change ships, then `Accepted` in the same PR.
 
-## Verwalten / Ändern
-- Ein ADR wird **nach Annahme inhaltlich nicht mehr editiert.** Eine Änderung = **neuer** ADR, der
-  den alten **supersedet**; der alte erhält Status `Superseded by NNNN`.
-- Betrifft die Entscheidung Endpoints/Felder/DB/Config, im **selben PR** die zugehörige Guideline +
-  README + `config.example.yaml` nachziehen.
+## Maintaining / changing
+- An accepted ADR is **not edited in substance**. A change = a **new** ADR that **supersedes** the old
+  one; the old one gets status `Superseded by NNNN`.
+- If the decision touches endpoints, fields, database or configuration, update the affected code,
+  tests and README in the **same PR**.
 
-## Verbindlich für Claude-Agents
-- **Vor** jeder Spec/jedem Plan/jeder Implementierung die relevanten akzeptierten ADRs lesen und
-  einhalten.
-- Die Review-Agents (`network-`, `developer-`, `research-`, `security-reviewer`) prüfen Specs &
-  Pläne **gegen die ADRs** und markieren jede Abweichung als **blockierend** (`NEEDS-CHANGES`).
-- Eine neue Richtungsentscheidung wird **nicht still** umgesetzt, sondern zuerst als ADR
-  (`Proposed`) vorgeschlagen und erst nach Annahme umgesetzt.
+## Binding for Claude agents
+- **Before** any spec, plan or implementation, read and follow the relevant accepted ADRs.
+- The review agents (`network-`, `developer-`, `research-`, `security-reviewer`) check specs and plans
+  **against the ADRs** and mark every deviation as **blocking** (`NEEDS-CHANGES`).
+- A new direction is **not** implemented silently: propose it first as an ADR (`Proposed`), implement
+  after acceptance. How decisions are reached: `.claude/rules/decision-process.md`.

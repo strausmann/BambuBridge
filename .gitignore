@@ -1,8 +1,28 @@
+# Runtime data
 data/
+
+# Python
 __pycache__/
 *.pyc
 .venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Node
 node_modules/
+dist/
+coverage/
+.vite/
+*.tsbuildinfo
+
+# Environment files (never commit secrets)
+.env
+.env.*
+!.env.example
 
 # Claude Code: ignore ALL local .claude/ files (settings.local.json, history,
 # stats, task state, …) EXCEPT the shared, version-controlled project agents/rules.

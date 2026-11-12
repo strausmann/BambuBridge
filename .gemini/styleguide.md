@@ -1,16 +1,16 @@
-# Gemini Code Assist — Style Guide (BambuBridge)
+# Gemini Code Assist — style guide (BambuBridge)
 
-Beim Review dieses Repos gelten diese **Quellen der Wahrheit** (in dieser Rangfolge):
+When reviewing this repository, these are the **sources of truth** (in this order):
 
-1. **ADRs** in `docs/decisions/` — oberste Verbindlichkeit.
-2. `docs/api-guideline.md` — `/api/v1`, snake_case, Error-Envelope `{detail,error_code}`,
-   `X-API-Key`-Auth auf mutierenden Routen, HTTPS via Proxy.
-3. `docs/database-guideline.md` — SQLite (WAL, `user_version`-Migrationen, definierte Tabellen).
-4. `CLAUDE.md` (Projektregeln) und `.github/SCOPES.md` (Commit-Scopes).
+1. **ADRs** in `docs/decisions/` — highest authority.
+2. `CLAUDE.md` (project rules) and `.github/SCOPES.md` (commit scopes).
+3. `docs/brand/` for anything visual.
 
-Hinweise für Findings:
-- Konkret und **nach Severity** priorisiert melden.
-- Stack: Python 3, FastAPI (lifespan), paho-mqtt, httpx, SQLite, Tailwind-PWA.
-- **Drucker-Schreibpfade sind bewusst „gated"** (Dev-Mode, `allow_k_write`/`allow_unload`) — das ist
-  Absicht, kein Bug.
-- Keine Secrets/Tokens hardcoden oder loggen.
+Hints for findings:
+- Report concretely and **prioritised by severity**.
+- Layout: `backend/` (Python, FastAPI, MQTT, SQL database) and `frontend/` (progressive web app).
+  The pre-0.2.0 code is gone; `docs/legacy-reference.md` explains where to find it in git history.
+- **Printer write paths are deliberately gated** (Developer Mode, explicit opt-in settings) — that is
+  intended, not a bug.
+- Never hardcode or log secrets, tokens, serial numbers or LAN access codes.
+- Commit messages follow Conventional Commits with a mandatory scope and carry no emoji.
