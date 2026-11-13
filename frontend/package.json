@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-or-later",
-  "//": "typescript stays below 6.1 (typescript-eslint 8.72.2 requires <6.1.0) and eslint stays on 9 (eslint-plugin-jsx-a11y 6.10.2 supports at most ESLint 9); see the matching ignore rules in .github/dependabot.yml.",
+  "//": "typescript stays below 6.1 (typescript-eslint 8.72.2 requires <6.1.0) and eslint stays on 9 (eslint-plugin-jsx-a11y 6.10.2 supports at most ESLint 9); see the matching ignore rules in .github/dependabot.yml. react-aria-components stays on an exact version: src/shell/overlays/useOpenUntilRevealed.ts relies on how 1.22.1 calls onEnter when it reveals a modal overlay (and cancels the transitions then running), and RevealPopover on shouldSkipAnimation and isEntering of Popover; on every upgrade re-check them and run src/shell/overlays/reveal.test.tsx, e2e/back.spec.ts and harness/popover-reveal.spec.ts.",
   "packageManager": "pnpm@12.18.0+sha512.9d7882d5dc82147ecfc4e062aa34834e0ad0296710a1837a1115ae012127d36b7109e321ac1598a1dd0a65597681b1e99917e12ed0d749eae91187943363beb3",
   "engines": {
     "node": ">=26"

@@ -17,6 +17,16 @@ function animates(): boolean {
  * (`data-exiting`) for good, over the page. The exit is therefore held back until the reveal:
  * `onEnter` (passed to `ModalOverlay`) is called by React Aria at the reveal.
  *
+ * While the exit is held the overlay is invisible (React Aria hides it with inline styles) but
+ * still modal: it traps focus and puts the rest of the page out of reach. That lasts at most two
+ * animation frames, and at most 600 ms when a text field has the focus (React Aria then waits for
+ * the on-screen keyboard to move, and gives up after 600 ms). The hold ends at the reveal at the
+ * latest, and `Popover` (see `RevealPopover`) needs no such hold.
+ *
+ * Depends on the semantics of `onEnter` in react-aria-components 1.22.1 (the pin in package.json):
+ * called by `useEnterAnimation` when it reveals the overlay, after it has cancelled the transitions
+ * that were running. Re-check this on every upgrade of that package.
+ *
  * The hold starts only when the overlay opens from nothing (`track`, the `ref` of `ModalOverlay`, tells whether
  * an overlay is still on screen, for example while it leaves): one that is reopened during its exit
  * was revealed already and would never call `onEnter` again.

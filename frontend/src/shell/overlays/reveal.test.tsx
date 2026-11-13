@@ -2,6 +2,7 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../test-utils";
+import { AppComboBox } from "./AppComboBox";
 import { AppDialog } from "./AppDialog";
 import { AppSheet } from "./AppSheet";
 
@@ -64,10 +65,14 @@ beforeEach(() => {
   Element.prototype.getAnimations = function (this: Element) {
     return FakeTransition.of(this) as unknown as Animation[];
   };
-  queued = [];
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => queued.push(callback));
+  queued.clear();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    nextFrameId += 1;
+    queued.set(nextFrameId, callback);
+    return nextFrameId;
+  });
   vi.stubGlobal("cancelAnimationFrame", (id: number) => {
-    queued[id - 1] = () => {};
+    queued.delete(id);
   });
 });
 
@@ -81,10 +86,16 @@ afterEach(() => {
 });
 
 // Animation frames run only when the test says so: the reveal comes exactly when the test wants.
-let queued: FrameRequestCallback[] = [];
+// Ids only ever grow, as in a browser, so a cancel can never hit a later request.
+const queued = new Map<number, FrameRequestCallback>();
+let nextFrameId = 0;
 const frames = (count: number) =>
   act(async () => {
-    for (let i = 0; i < count; i += 1) for (const callback of queued.splice(0)) callback(performance.now());
+    for (let i = 0; i < count; i += 1) {
+      const due = [...queued];
+      queued.clear();
+      for (const [, callback] of due) callback(performance.now());
+    }
     await Promise.resolve();
   });
 
@@ -141,5 +152,65 @@ describe.each(["dialog", "sheet"] as const)("%s closed before it is revealed", (
       finishAll();
       expect(screen.queryByRole("dialog")).toBeNull();
     });
+  });
+});
+
+describe("combo box list closed before it is revealed", () => {
+  const options = [{ id: "a", label: "P1S Keller" }];
+  const listbox = () => screen.queryByRole("listbox", { hidden: true });
+
+  // With a text field in focus React Aria waits for an on-screen keyboard that never comes here (up
+  // to 600 ms of real time). Without focus it reveals after the two frames the test controls; that
+  // is the window under test, and the e2e spec covers the one with the keyboard.
+  beforeEach(() => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(false);
+  });
+
+  it("by Escape: it leaves at once, it does not stay on screen half-way out", async () => {
+    renderWithProviders(<AppComboBox label="Drucker" options={options} emptyText="Leer" />);
+    const field = screen.getByRole("combobox", { name: "Drucker" });
+    // Focus opens the list (menuTrigger "focus"); it is hidden until its frames have run.
+    await act(async () => field.focus());
+    expect(listbox()).not.toBeNull();
+
+    fireEvent.keyDown(field, { key: "Escape" });
+    await frames(4);
+    await waitFor(() => {
+      finishAll();
+      expect(listbox()).toBeNull();
+    });
+  });
+
+  it("after it was revealed it leaves through its exit animation", async () => {
+    renderWithProviders(<AppComboBox label="Drucker" options={options} emptyText="Leer" />);
+    const field = screen.getByRole("combobox", { name: "Drucker" });
+    await act(async () => field.focus());
+    await frames(4);
+    finishAll();
+    await frames(2);
+    expect(listbox()).not.toBeNull();
+
+    fireEvent.keyDown(field, { key: "Escape" });
+    // Revealed: the exit animation is running, the list is still there until it ends.
+    expect(listbox()).not.toBeNull();
+    await waitFor(() => {
+      finishAll();
+      expect(listbox()).toBeNull();
+    });
+  });
+
+  it("opened again after it was closed unrevealed, it is revealed and stays", async () => {
+    renderWithProviders(<AppComboBox label="Drucker" options={options} emptyText="Leer" />);
+    const field = screen.getByRole("combobox", { name: "Drucker" });
+    await act(async () => field.focus());
+    fireEvent.keyDown(field, { key: "Escape" });
+    await frames(4);
+    expect(listbox()).toBeNull();
+
+    fireEvent.keyDown(field, { key: "ArrowDown" });
+    await frames(4);
+    finishAll();
+    await frames(2);
+    expect(listbox()).not.toBeNull();
   });
 });
