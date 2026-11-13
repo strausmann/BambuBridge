@@ -40,9 +40,19 @@ export function safeRedirect(value: unknown): string | undefined {
   }
   if (url.origin !== window.location.origin) return undefined;
   const { pathname } = url;
-  if (pathname.startsWith("//") || pathname.includes("\\")) return undefined;
-  if (SERVER_PATHS.some((base) => isOrBelow(pathname, base))) return undefined;
-  if (PUBLIC_PATHS.some((base) => isOrBelow(pathname, base))) return undefined;
+  // Reserved paths are also compared in the form a server or proxy may fold them to: decoded
+  // and in lower case. A path that cannot be decoded is not a path of this app.
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname).toLowerCase();
+  } catch {
+    return undefined;
+  }
+  for (const form of [pathname, decoded]) {
+    if (form.includes("//") || form.includes("\\")) return undefined;
+    if (SERVER_PATHS.some((base) => isOrBelow(form, base))) return undefined;
+    if (PUBLIC_PATHS.some((base) => isOrBelow(form, base))) return undefined;
+  }
   return `${pathname}${url.search}${url.hash}`;
 }
 

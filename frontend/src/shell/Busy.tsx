@@ -23,14 +23,17 @@ export function useDelayedBusy(busy: boolean, delay = BUSY_DELAY_MS): boolean {
 /**
  * A button's label with room for the busy mark. The label stays as it is; the mark (a turning
  * ring, or an ellipsis for people who asked for reduced motion) hangs beside it, out of the
- * flow, so its appearing cannot move the text. Decorative: the button carries `aria-busy`.
+ * flow, so its appearing cannot move the text. It takes 18 px beside the label (2 px gap, 16 px
+ * ring), less than the side padding of every button it is used in (20 px): it stays inside the
+ * button even when a long label wraps and fills its line, and costs the label no width.
+ * Decorative: the button carries `aria-busy`.
  */
 function BusyLabel({ show, children }: { show: boolean; children: ReactNode }) {
   return (
     <span className="relative">
       {children}
       {show ? (
-        <span data-testid="busy-mark" aria-hidden="true" className="absolute top-1/2 left-full ml-2 inline-flex -translate-y-1/2">
+        <span data-testid="busy-mark" aria-hidden="true" className="absolute top-1/2 left-full ml-0.5 inline-flex -translate-y-1/2">
           <svg viewBox="0 0 16 16" width="16" height="16" className="busy-ring motion-reduce:hidden">
             <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeOpacity="0.35" strokeWidth="2" />
             <path d="M8 2a6 6 0 0 1 6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />

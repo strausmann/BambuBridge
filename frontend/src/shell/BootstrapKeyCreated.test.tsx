@@ -265,4 +265,77 @@ describe("first start", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Das Token konnte nicht angelegt werden.");
     expect(screen.queryByTestId("admin-token")).not.toBeInTheDocument();
   });
+
+  async function creating() {
+    let answer!: (response: Response) => void;
+    stubFetch({
+      "GET /api/v1/auth/session": signedOut,
+      "POST /api/v1/admin/api-keys": () => new Promise<Response>((resolve) => (answer = resolve)),
+    });
+    const user = userEvent.setup();
+    const view = renderApp("/sign-in");
+    await user.click(await screen.findByRole("link", { name: "Erstes Admin-Token anlegen" }));
+    const field = await screen.findByLabelText<HTMLInputElement>("Bootstrap-Schlüssel");
+    await user.type(field, "the-key");
+    await user.click(screen.getByRole("button", { name: "Admin-Token anlegen" }));
+    return { user, field, answer: (response: Response) => answer(response), ...view };
+  }
+
+  const leaving = () => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+
+  it("while the token is being created, leaving asks first and the way back is not offered", async () => {
+    const { user, router, answer } = await creating();
+
+    // The server may already have made the token: a closed tab or a reload would lose it.
+    expect(leaving()).toBe(true);
+    const back = screen.getByRole("link", { name: "Zurück zur Anmeldung" });
+    expect(back).toHaveAttribute("aria-disabled", "true");
+    await user.click(back);
+    expect(router.state.location.pathname).toBe("/bootstrap");
+
+    void router.navigate({ to: "/sign-in", search: { redirect: undefined } });
+    const question = await screen.findByRole("alertdialog");
+    expect(question).toHaveTextContent("Das Token wird danach nicht mehr angezeigt.");
+    expect(router.state.location.pathname).toBe("/bootstrap");
+
+    // The answer arrives while the question is open: the token is shown, the question stays.
+    answer(jsonResponse(CREATED, { status: 201 }));
+    expect(await screen.findByTestId("admin-token")).toHaveTextContent("bb_abcd_plaintext-shown-once");
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Hier bleiben" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByTestId("admin-token")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Weiter zur Oberfläche" })).toHaveFocus());
+  });
+
+  it("stops guarding when the creation failed: nothing was made, so nothing can be lost", async () => {
+    const { router, answer } = await creating();
+    void router.navigate({ to: "/sign-in", search: { redirect: undefined } });
+    await screen.findByRole("alertdialog");
+
+    answer(problemResponse(401, "invalid_bootstrap_key", "Invalid bootstrap key"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Der Bootstrap-Schlüssel wurde nicht akzeptiert.");
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(leaving()).toBe(false);
+    expect(screen.getByRole("link", { name: "Zurück zur Anmeldung" })).not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("does not keep the bootstrap key in the field once the token exists or the key was refused", async () => {
+    const first = await creating();
+    first.answer(jsonResponse(CREATED, { status: 201 }));
+    await screen.findByTestId("admin-token");
+    expect(first.field.value).toBe("");
+    expect(first.field.getAttribute("value") ?? "").toBe("");
+    first.unmount();
+
+    const second = await creating();
+    second.answer(problemResponse(401, "invalid_bootstrap_key", "Invalid bootstrap key"));
+    await screen.findByRole("alert");
+    expect(second.field.value).toBe("");
+    expect(second.field.getAttribute("value") ?? "").toBe("");
+  });
 });

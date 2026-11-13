@@ -131,6 +131,32 @@ test("the unused admin token is not lost to Back or to a link: the screen asks f
   await expect(question).toHaveCount(0);
 });
 
+test("Back while the token is being created asks first; the token is then still shown", async ({ page }) => {
+  await page.goto("/sign-in");
+  await page.getByRole("link", { name: "Erstes Admin-Token anlegen" }).click();
+  let answer!: () => void;
+  const held = new Promise<void>((resolve) => (answer = resolve));
+  await page.route("**/api/v1/admin/api-keys", async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.getByLabel("Bootstrap-Schlüssel").fill(BOOTSTRAP_KEY);
+  await page.getByRole("button", { name: "Admin-Token anlegen" }).click();
+  await expect(page.getByRole("link", { name: "Zurück zur Anmeldung" })).toHaveAttribute("aria-disabled", "true");
+
+  await page.goBack();
+  const question = page.getByRole("alertdialog");
+  await expect(question).toContainText("Das Token wird danach nicht mehr angezeigt.");
+
+  answer();
+  await expect(page.getByTestId("admin-token")).toBeVisible();
+  await expect(question).toBeVisible();
+  await page.getByRole("button", { name: "Hier bleiben" }).click();
+  await expect(question).toHaveCount(0);
+  await expect(page).toHaveURL(/\/bootstrap$/);
+  await expect(page.getByRole("button", { name: "Weiter zur Oberfläche" })).toBeFocused();
+});
+
 test("a return target that resolves to another host or to a server path ends on the overview", async ({ page }) => {
   const token = await bootstrapToken(page);
   for (const target of ["/..//evil.example/p", "/.\\/evil.example/p", "/%2e%2e//evil.example/p", "/api/v1/info", "/auth/continue", "/openapi.json", "/docs"]) {

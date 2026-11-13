@@ -1,7 +1,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import { CSRF_HEADER, setCsrfToken } from "../api/client";
+import { apiFetch, CSRF_HEADER, setCsrfToken } from "../api/client";
 import { SESSION_KEY } from "../app/session";
 import { INFO, jsonResponse, problemResponse, renderApp, SESSION, stubFetch, testQueryClient } from "../test-utils";
 
@@ -385,3 +385,95 @@ describe("sign-out", () => {
     expect(await screen.findByRole("button", { name: "Abmelden" })).toHaveAccessibleDescription("Angemeldet als admin");
   });
 });
+
+describe("session answers that arrive late", () => {
+  it("a session read still under way when the sign-out completes does not bring the shell back", async () => {
+    let late: ((response: Response) => void) | null = null;
+    let reads = 0;
+    const calls = stubFetch({
+      "GET /api/v1/auth/session": () => (reads++ === 0 ? jsonResponse(SESSION) : new Promise<Response>((resolve) => (late = resolve))),
+      "GET /api/v1/info": () => jsonResponse(INFO),
+      "DELETE /api/v1/auth/session": () => new Response(null, { status: 204 }),
+      "POST /api/v1/thing": () => new Response(null, { status: 204 }),
+    });
+    const queryClient = testQueryClient();
+    const user = userEvent.setup();
+    renderApp("/protocol", queryClient);
+    await screen.findByRole("heading", { name: "Protokoll" });
+
+    // A background refresh starts (as on window focus) and the server is slow to answer it.
+    void queryClient.refetchQueries({ queryKey: SESSION_KEY });
+    await waitFor(() => expect(late).not.toBeNull());
+
+    await user.click(screen.getByRole("button", { name: "Abmelden" }));
+    expect(await screen.findByLabelText("API-Token")).toBeInTheDocument();
+
+    // Now the old answer arrives: it describes a session that no longer exists.
+    late!(jsonResponse(SESSION));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.getByLabelText("API-Token")).toBeInTheDocument();
+    expect(screen.queryByTestId("signed-in-user")).not.toBeInTheDocument();
+    expect(queryClient.getQueryData(SESSION_KEY)).toBeNull();
+    // Its CSRF token was not taken either.
+    await apiFetch("/api/v1/thing", { method: "POST" });
+    expect(calls.at(-1)!.headers.has(CSRF_HEADER)).toBe(false);
+  });
+
+  it("a 'not signed in' answer from before the sign-in does not end the fresh session", async () => {
+    let late: ((response: Response) => void) | null = null;
+    let reads = 0;
+    const calls = stubFetch({
+      "GET /api/v1/auth/session": () => (reads++ === 0 ? signedOut() : new Promise<Response>((resolve) => (late = resolve))),
+      "POST /api/v1/auth/session": () => jsonResponse(SESSION, { status: 201 }),
+      "GET /api/v1/info": () => jsonResponse(INFO),
+      "POST /api/v1/thing": () => new Response(null, { status: 204 }),
+    });
+    const queryClient = testQueryClient();
+    const user = userEvent.setup();
+    renderApp("/sign-in", queryClient);
+    const field = await screen.findByLabelText("API-Token");
+
+    void queryClient.refetchQueries({ queryKey: SESSION_KEY });
+    await waitFor(() => expect(late).not.toBeNull());
+
+    await user.type(field, "bb_token");
+    await user.click(screen.getByRole("button", { name: "Anmelden" }));
+    await screen.findByTestId("signed-in-user");
+    queryClient.setQueryData(["events"], ["mine"]);
+
+    late!(signedOut());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.getByTestId("signed-in-user")).toHaveTextContent("Angemeldet als admin");
+    expect(queryClient.getQueryData(SESSION_KEY)).toMatchObject({ user: "admin" });
+    // Neither the CSRF token nor the new user's data were dropped by the stale answer.
+    expect(queryClient.getQueryData(["events"])).toEqual(["mine"]);
+    await apiFetch("/api/v1/thing", { method: "POST" });
+    expect(calls.at(-1)!.headers.get(CSRF_HEADER)).toBe("csrf-1");
+  });
+
+  it("a late answer for another person does not drop the data of the one who signed in meanwhile", async () => {
+    let late: ((response: Response) => void) | null = null;
+    let reads = 0;
+    stubFetch({
+      "GET /api/v1/auth/session": () => (reads++ === 0 ? signedOut() : new Promise<Response>((resolve) => (late = resolve))),
+      "POST /api/v1/auth/session": () => jsonResponse(SESSION, { status: 201 }),
+      "GET /api/v1/info": () => jsonResponse(INFO),
+    });
+    const queryClient = testQueryClient();
+    const user = userEvent.setup();
+    renderApp("/sign-in", queryClient);
+    const field = await screen.findByLabelText("API-Token");
+    void queryClient.refetchQueries({ queryKey: SESSION_KEY });
+    await waitFor(() => expect(late).not.toBeNull());
+    await user.type(field, "bb_token");
+    await user.click(screen.getByRole("button", { name: "Anmelden" }));
+    await screen.findByTestId("signed-in-user");
+    queryClient.setQueryData(["events"], ["mine"]);
+
+    late!(jsonResponse({ ...SESSION, user: "Ada", identity_subject: "ada", csrf_token: "csrf-ada" }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.getByTestId("signed-in-user")).toHaveTextContent("Angemeldet als admin");
+    expect(queryClient.getQueryData(["events"])).toEqual(["mine"]);
+  });
+});
+

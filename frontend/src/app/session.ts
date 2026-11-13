@@ -51,7 +51,21 @@ function resetUserData(queryClient: QueryClient): void {
   queryClient.removeQueries({ predicate: (query) => isUserData(query.queryKey) });
 }
 
+/**
+ * Counts the changes of the sign-in state made here (signed in, signed out, session ended). A
+ * session read that started before a change describes a state that no longer exists; it
+ * compares the count when its answer arrives and then applies nothing.
+ */
+const authChanges = new WeakMap<QueryClient, number>();
+const authChangesOf = (queryClient: QueryClient): number => authChanges.get(queryClient) ?? 0;
+
+/** Marks a change of the sign-in state: session reads still under way are outdated from here on. */
+function markAuthChange(queryClient: QueryClient): void {
+  authChanges.set(queryClient, authChangesOf(queryClient) + 1);
+}
+
 function endSession(queryClient: QueryClient): void {
+  markAuthChange(queryClient);
   setCsrfToken(null);
   resetUserData(queryClient);
   queryClient.setQueryData(SESSION_KEY, null);
@@ -64,6 +78,7 @@ function sameIdentity(a: SessionData, b: SessionData): boolean {
 
 /** A new sign-in state replaces the stored one; a changed identity drops the previous user's data first. */
 function storeSession(queryClient: QueryClient, next: SessionData): void {
+  markAuthChange(queryClient);
   const previous = queryClient.getQueryData<SessionData | null>(SESSION_KEY);
   if (previous && !sameIdentity(previous, next)) resetUserData(queryClient);
   // Set before the hook's effect runs: the next request may be sent in the same tick.
@@ -73,13 +88,20 @@ function storeSession(queryClient: QueryClient, next: SessionData): void {
 
 /** The current sign-in, or null when there is none (the server answers 401 or sends to a login page). */
 async function fetchSession(queryClient: QueryClient): Promise<SessionData | null> {
+  const startedAt = authChangesOf(queryClient);
+  // The sign-in state changed while this read was under way: its answer is about the past.
+  // It then touches nothing (CSRF token, cached data) and hands back what is stored now.
+  const outdated = () => authChangesOf(queryClient) !== startedAt;
+  const stored = () => queryClient.getQueryData<SessionData | null>(SESSION_KEY) ?? null;
   try {
     const next = await apiFetch<SessionData>(SESSION_PATH, { skipAuthHandler: true });
+    if (outdated()) return stored();
     const previous = queryClient.getQueryData<SessionData | null>(SESSION_KEY);
     if (previous && !sameIdentity(previous, next)) resetUserData(queryClient);
     return next;
   } catch (error) {
     if (!(error instanceof AuthRequiredError)) throw error;
+    if (outdated()) return stored();
     setCsrfToken(null);
     resetUserData(queryClient);
     return null;

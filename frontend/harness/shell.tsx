@@ -1,7 +1,7 @@
 /**
  * Layout harness: the whole app with the API answered inside the page.
  * `?state=signed-in` shows the shell, anything else the sign-in; `&path=/x` picks the route;
- * `&signout=fail` lets the sign-out fail with a 503.
+ * `&signout=fail` lets the sign-out fail with a 503; `&slow=1` leaves a sign-in unanswered.
  */
 import { createMemoryHistory } from "@tanstack/react-router";
 import { createRoot } from "react-dom/client";
@@ -24,6 +24,9 @@ window.fetch = (input, init) => {
   if (path === "/api/v1/info") return Promise.resolve(json({ name: "BambuBridge", version: "0.2.0", build: "harness" }));
   if (path === "/api/v1/auth/session" && init?.method === "DELETE" && params.get("signout") === "fail") {
     return Promise.resolve(json({ title: "Database unavailable", status: 503, error_code: "database_unavailable" }, 503));
+  }
+  if (path === "/api/v1/auth/session" && init?.method === "POST" && params.get("slow") === "1") {
+    return new Promise<Response>(() => undefined);
   }
   if (path === "/api/v1/auth/session" && signedIn) {
     return Promise.resolve(json({ kind: "session", scope: "admin", user: "Wilhelmina Featherstonehaugh-Cholmondeley", csrf_token: "harness" }));

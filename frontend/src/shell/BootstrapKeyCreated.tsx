@@ -45,36 +45,65 @@ export function BootstrapKeyCreated({ onCreate, onContinue }: Props) {
   const keyField = useRef<HTMLInputElement>(null);
   const proceedButton = useRef<HTMLButtonElement>(null);
   const stayButton = useRef<HTMLButtonElement>(null);
+  // True while the creation request is under way: the server may already have made the token,
+  // and leaving now would lose it unseen (bootstrap is closed from then on).
+  const creating = useRef(false);
   // True from the moment the token is sent to sign in: the navigation that follows is wanted.
   const used = useRef(false);
 
-  const unusedToken = () => created !== null && !used.current;
-  const blocker = useBlocker({ shouldBlockFn: unusedToken, enableBeforeUnload: false, withResolver: true });
-  const shown = created !== null;
+  const tokenAtStake = () => creating.current || (created !== null && !used.current);
+  const blocker = useBlocker({ shouldBlockFn: tokenAtStake, enableBeforeUnload: false, withResolver: true });
+  const guarded = busy || created !== null;
   useEffect(() => {
-    if (!shown) return;
+    if (!guarded) return;
     const ask = (event: BeforeUnloadEvent) => {
-      if (!used.current) event.preventDefault();
+      if (creating.current || !used.current) event.preventDefault();
     };
     window.addEventListener("beforeunload", ask);
     return () => window.removeEventListener("beforeunload", ask);
-  }, [shown]);
+  }, [guarded]);
   const asking = blocker.status === "blocked";
+  // The creation request outlives the render it started in; it needs the question as it is then.
+  const openQuestion = useRef(blocker);
+  useEffect(() => {
+    openQuestion.current = blocker;
+  }, [blocker]);
+  const wasAsking = useRef(false);
   useEffect(() => {
     if (asking) stayButton.current?.focus();
+    // "Stay here" removed the question and its button: go on where the next step is.
+    else if (wasAsking.current) (proceedButton.current ?? keyField.current)?.focus();
+    wasAsking.current = asking;
   }, [asking]);
+
+  /** The key is of no further use: drop it from the state and from the field itself. */
+  function forgetKey(input: HTMLInputElement | null) {
+    setBootstrapKey("");
+    if (input) {
+      input.value = "";
+      input.removeAttribute("value");
+    }
+  }
 
   async function create(event: FormEvent) {
     event.preventDefault();
     if (bootstrapKey === "" || busy) return;
+    // Held before the request: once the token exists, the form and its field are gone.
+    const input = keyField.current;
+    creating.current = true;
     setBusy(true);
     setError(null);
     try {
-      setCreated(await onCreate(bootstrapKey));
-      setBootstrapKey("");
+      const token = await onCreate(bootstrapKey);
+      creating.current = false;
+      setCreated(token);
+      forgetKey(input);
     } catch (failure) {
+      creating.current = false;
+      // Nothing was made, so nothing can be lost: a question that is still open is withdrawn.
+      openQuestion.current.reset?.();
       // A refused key is of no further use; after any other failure it need not be typed again.
-      if (failure instanceof ApiError && failure.status === 401) setBootstrapKey("");
+      if (failure instanceof ApiError && failure.status === 401) forgetKey(input);
       setError(messageFor(failure));
       setBusy(false);
       keyField.current?.focus();
@@ -106,6 +135,20 @@ export function BootstrapKeyCreated({ onCreate, onContinue }: Props) {
     }
   }
 
+  const leaveQuestion = (
+    <div role="alertdialog" aria-labelledby="leave-question" className="flex flex-col gap-3 rounded-r2 border border-line-strong bg-warn-soft p-3">
+      <p id="leave-question" className="font-semibold text-ink">{t`Seite verlassen? Das Token wird danach nicht mehr angezeigt.`}</p>
+      <div className="flex flex-wrap gap-3">
+        <Button ref={stayButton} onPress={blocker.reset} className={PRIMARY_BUTTON}>
+          {t`Hier bleiben`}
+        </Button>
+        <Button onPress={blocker.proceed} className={SECONDARY_BUTTON}>
+          {t`Trotzdem verlassen`}
+        </Button>
+      </div>
+    </div>
+  );
+
   if (created === null) {
     return (
       <AuthScreen>
@@ -128,8 +171,9 @@ export function BootstrapKeyCreated({ onCreate, onContinue }: Props) {
             {t`Admin-Token anlegen`}
           </BusyButton>
         </form>
+        {asking ? leaveQuestion : null}
         <p>
-          <Link to="/sign-in" search={{ redirect: undefined }} className={TEXT_LINK}>
+          <Link to="/sign-in" search={{ redirect: undefined }} disabled={busy} className={`${TEXT_LINK} aria-disabled:text-ink-3 aria-disabled:no-underline`}>
             {t`Zurück zur Anmeldung`}
           </Link>
         </p>
@@ -177,17 +221,7 @@ export function BootstrapKeyCreated({ onCreate, onContinue }: Props) {
       </p>
       {error ? <ErrorNote>{error}</ErrorNote> : null}
       {asking ? (
-        <div role="alertdialog" aria-labelledby="leave-question" className="flex flex-col gap-3 rounded-r2 border border-line-strong bg-warn-soft p-3">
-          <p id="leave-question" className="font-semibold text-ink">{t`Seite verlassen? Das Token wird danach nicht mehr angezeigt.`}</p>
-          <div className="flex flex-wrap gap-3">
-            <Button ref={stayButton} onPress={blocker.reset} className={PRIMARY_BUTTON}>
-              {t`Hier bleiben`}
-            </Button>
-            <Button onPress={blocker.proceed} className={SECONDARY_BUTTON}>
-              {t`Trotzdem verlassen`}
-            </Button>
-          </div>
-        </div>
+        leaveQuestion
       ) : (
         <BusyButton ref={proceedButton} busy={busy} onPress={() => void proceed(created)} isDisabled={busy} className={PRIMARY_BUTTON}>
           {t`Weiter zur Oberfläche`}

@@ -197,6 +197,32 @@ async function labelInset(page: Page, name: string): Promise<number> {
   });
 }
 
+test.describe("fix round 3", () => {
+  test("the waiting mark stays inside the button when the two-line label fills its line (320 px)", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 780 });
+    await page.goto(`${SIGN_IN}?slow=1`);
+    const button = page.getByRole("button", { name: "Mit einmaliger Anmeldung (SSO) fortfahren" });
+    const label = button.locator("span.relative");
+    const before = await label.boundingBox();
+    await button.click();
+    const mark = button.getByTestId("busy-mark");
+    await expect(mark).toBeVisible();
+    const [outer, inner, after] = [await button.boundingBox(), await mark.boundingBox(), await label.boundingBox()];
+    expect(inner!.x).toBeGreaterThanOrEqual(outer!.x);
+    expect(inner!.x + inner!.width).toBeLessThanOrEqual(outer!.x + outer!.width);
+    expect(inner!.y).toBeGreaterThanOrEqual(outer!.y);
+    expect(inner!.y + inner!.height).toBeLessThanOrEqual(outer!.y + outer!.height);
+    // The room for the mark is not taken from the label: it still fits on two lines.
+    const lineHeight = await label.evaluate((element) => parseFloat(getComputedStyle(element).lineHeight));
+    expect(Math.round(before!.height / lineHeight)).toBe(2);
+    // The label does not move when the mark appears.
+    expect(after).toEqual(before);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    const shots = process.env.E2E_SCREENSHOT_DIR;
+    if (shots && test.info().project.name === "chromium") await page.screenshot({ path: `${shots}/phone-sign-in-waiting.png` });
+  });
+});
+
 test.describe("fix round 1", () => {
   for (const width of [320, 375]) {
     test(`the single sign-on label keeps clear of the button's border at ${width} px`, async ({ page }) => {

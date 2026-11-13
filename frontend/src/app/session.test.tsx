@@ -143,6 +143,39 @@ describe("safeRedirect", () => {
     }
   });
 
+  it("rejects reserved paths in any spelling of case and percent-encoding, and an encoded //", () => {
+    for (const value of [
+      "/API/v1/info",
+      "/Api",
+      "/%61pi/v1/info",
+      "/%41PI/v1/info",
+      "/a%70i/",
+      "/AUTH/continue",
+      "/%61uth/continue",
+      "/Docs",
+      "/d%6fcs",
+      "/OpenAPI.json",
+      "/openapi%2Ejson",
+      "/Sign-In",
+      "/sign%2Din",
+      "/BOOTSTRAP",
+      "/api%2Fv1%2Finfo",
+      "/%2F%2Fevil.example/p",
+      "/%2f/evil.example",
+      "/x%2f%2fevil.example",
+      "/x//y",
+      "/%E0%A4%A",
+      "/%",
+    ]) {
+      expect(safeRedirect(value), value).toBeUndefined();
+    }
+  });
+
+  it("keeps ordinary encoded characters in a path", () => {
+    expect(safeRedirect("/settings/a%20b")).toBe("/settings/a%20b");
+    expect(safeRedirect("/providers?q=%2F%2Fx&api=/api/")).toBe("/providers?q=%2F%2Fx&api=/api/");
+  });
+
   it("rejects other hosts, schemes, control characters and the public pages", () => {
     for (const value of ["//evil.example", "/\\evil.example", "https://evil.example", "javascript:alert(1)", "/\t/evil.example", "/sign-in", "/sign-in?redirect=/x", "/bootstrap", "", 7, null, undefined]) {
       expect(safeRedirect(value), String(value)).toBeUndefined();
