@@ -42,9 +42,9 @@ export function useBackClosesOverlay(isOpen: boolean, close: () => void): void {
   }, [close]);
   const entry = useRef<{ id: number; pendingBack?: number } | null>(null);
 
-  // A layout effect: the entry is in the history before the overlay is painted. With a plain
-  // effect a Back pressed right as the overlay appears could start before the entry was pushed;
-  // the push then cancelled that traversal and Back did nothing (seen in CI, phone-chromium).
+  // A layout effect: the entry is in the history before the overlay is painted, so a Back pressed
+  // as soon as the overlay appears already finds it. (The overlay that stayed on screen after such
+  // a Back in CI was not a history problem: see useOpenUntilRevealed.)
   useLayoutEffect(() => {
     if (!isOpen) return;
     let id: number;
