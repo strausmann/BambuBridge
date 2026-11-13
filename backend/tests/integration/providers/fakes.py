@@ -26,7 +26,7 @@ class _Base:
         "properties": {
             "label": {"type": "string", "default": "x"},
             "host": {"type": "string", "default": "a.example", "x-binds-secrets": True},
-            "password": {"type": "string", "x-secret": True},
+            "password": {"type": "string", "x-secret": True, "minLength": 8},
         },
         "additionalProperties": False,
     }
@@ -35,6 +35,7 @@ class _Base:
 
     def __init__(self) -> None:
         self._state: ProviderStatusState = "stopped"
+        self._message: str | None = None
         self._since = datetime.now(UTC)
         self.ctx: ProviderContext | None = None
 
@@ -59,7 +60,7 @@ class _Base:
         return {"label": self.ctx.config["label"]}
 
     def status(self) -> ProviderStatus:
-        return ProviderStatus(self._state, None, self._since)
+        return ProviderStatus(self._state, self._message, self._since)
 
 
 async def _hang(release: asyncio.Event) -> None:

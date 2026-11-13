@@ -108,6 +108,7 @@ async def test_crud_roundtrip_records_the_acting_user(
         assert admin is not None and row is not None
         assert (row.created_by, row.updated_by) == (admin.id, admin.id)
         assert set(row.secrets) == {"token"}
+        assert "token" not in row.config  # secrets never land in the plain config
         assert TOKEN not in str(row.secrets)
 
     assert (await admin_client.delete(f"{PROVIDERS_URL}/{iid}")).status_code == 204
@@ -304,7 +305,8 @@ async def test_action_requires_operate_scope(
         url, json={"params": {"label": "op"}}, headers={KEY_HEADER: operate_token}
     )
     assert r.status_code == 200, r.text
-    assert r.json()["result"]["label"] == "op"
+    assert set(r.json()["result"]) == {"sequence"}
+    assert b"op" not in r.content.replace(b"operate", b"")
 
 
 @pytest.mark.usefixtures("manager")
@@ -416,3 +418,33 @@ async def test_patch_with_empty_secret_keeps_it_and_null_clears_an_optional_one(
 
 async def test_invalid_instance_id_is_422(admin_client: httpx.AsyncClient):
     _problem(await admin_client.get(f"{PROVIDERS_URL}/not-a-uuid"), 422, "validation_failed")
+
+
+async def test_short_secret_is_refused(admin_client: httpx.AsyncClient):
+    # Shorter than the masker's MIN_KNOWN_SECRET_LENGTH, it could not be masked by value.
+    short = "seven77"
+    body = {"kind": "integration", "type_name": "demo", "name": "s", "config": {"token": short}}
+    problem = _problem(
+        await admin_client.post(PROVIDERS_URL, json=body), 422, "invalid_provider_config"
+    )
+    assert "token" in problem["detail"] and short not in problem["detail"]
+    r = await admin_client.post(
+        f"{TYPES_URL}/integration/demo/test", json={"config": body["config"]}
+    )
+    _problem(r, 422, "invalid_provider_config")
+    created = await _demo(admin_client)
+    r = await admin_client.post(
+        f"{PROVIDERS_URL}/{created['id']}/test", json={"config": body["config"]}
+    )
+    _problem(r, 422, "invalid_provider_config")
+
+
+async def test_huge_integer_is_422_not_500(admin_client: httpx.AsyncClient):
+    content = (
+        '{"kind": "integration", "type_name": "demo", "name": "big", '
+        '"config": {"token": "%s", "interval_seconds": 1%s}}' % (TOKEN, "0" * 400)
+    )
+    r = await admin_client.post(
+        PROVIDERS_URL, content=content, headers={"content-type": "application/json"}
+    )
+    assert r.status_code == 422, r.text

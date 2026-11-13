@@ -71,12 +71,16 @@ def test_check_schema_accepts_the_subset():
         },
         {
             "type": "object",
-            "properties": {"a": {"type": "string", "x-secret": True, "default": "x"}},
+            "properties": {
+                "a": {"type": "string", "x-secret": True, "minLength": 8, "default": "x" * 8}
+            },
             "additionalProperties": False,
         },
         {
             "type": "object",
-            "properties": {"a": {"type": "string", "x-secret": True, "x-binds-secrets": True}},
+            "properties": {
+                "a": {"type": "string", "x-secret": True, "minLength": 8, "x-binds-secrets": True}
+            },
             "additionalProperties": False,
         },
         {"type": "object", "properties": [], "additionalProperties": False},
@@ -153,3 +157,29 @@ def test_validate_caps_strings_without_max_length():
 
 def test_number_accepts_int():
     assert validate(SCHEMA, {"token": "12345678", "ratio": 1})["ratio"] == 1
+
+
+@pytest.mark.parametrize("min_length", [None, 0, 7])
+def test_a_secret_needs_min_length_of_the_masker(min_length: int | None):
+    prop: dict[str, Any] = {"type": "string", "x-secret": True}
+    if min_length is not None:
+        prop["minLength"] = min_length
+    schema = {"type": "object", "properties": {"s": prop}, "additionalProperties": False}
+    with pytest.raises(SchemaDefinitionError, match="minLength"):
+        check_schema(schema)
+
+
+@pytest.mark.parametrize("field", ["interval_seconds", "ratio"])
+def test_a_huge_integer_is_a_validation_error(field: str):
+    with pytest.raises(ValidationError) as caught:
+        validate(SCHEMA, {"token": "12345678", field: 10**400})
+    assert caught.value.field == field
+
+
+def test_a_huge_integer_without_bounds_is_fine():
+    schema = {
+        "type": "object",
+        "properties": {"n": {"type": "integer"}},
+        "additionalProperties": False,
+    }
+    assert validate(schema, {"n": 10**400}) == {"n": 10**400}

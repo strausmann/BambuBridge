@@ -7,7 +7,9 @@ A schema is a flat object::
 Each property is one of ``string``, ``integer``, ``number`` and ``boolean``, with the
 keywords ``title``, ``description``, ``default``, ``enum``, ``minimum``/``maximum`` (numbers)
 and ``minLength``/``maxLength`` (strings). Two extensions: ``"x-secret": true`` on a string
-marks a secret (it is sealed, never returned, and masked in the communication log), and
+marks a secret (it is sealed, never returned, and masked in the communication log; it
+must declare ``minLength`` of at least ``MIN_KNOWN_SECRET_LENGTH``, because the masker
+cannot find a shorter known value), and
 ``"x-binds-secrets": true`` marks a field the stored secrets are bound to (a host, an
 address): changing it needs the secrets entered again, so a stored secret is never sent
 somewhere it was not entered for.
@@ -24,6 +26,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.events.validation import is_storable
+from app.security.masking import MIN_KNOWN_SECRET_LENGTH
 
 # A string without its own ``maxLength`` is still bounded by this.
 MAX_STRING_LENGTH = 4096
@@ -57,7 +60,9 @@ def _is_int(value: object) -> bool:
 
 
 def _is_number(value: object) -> bool:
-    return (_is_int(value) or isinstance(value, float)) and math.isfinite(float(value))  # type: ignore[arg-type]
+    # Never through float(): an integer of hundreds of digits overflows it. Python compares
+    # int with float exactly, so the limits below need no conversion either.
+    return _is_int(value) or (isinstance(value, float) and math.isfinite(value))
 
 
 def _check_value(prop: Mapping[str, Any], value: object, field: str) -> None:
@@ -81,7 +86,7 @@ def _check_value(prop: Mapping[str, Any], value: object, field: str) -> None:
     elif not isinstance(value, bool):
         raise ValidationError(field, "must be true or false")
     if kind in ("integer", "number"):
-        number = float(value)  # type: ignore[arg-type]
+        number: float = value  # type: ignore[assignment]
         if "minimum" in prop and number < prop["minimum"]:
             raise ValidationError(field, f"must be at least {prop['minimum']}")
         if "maximum" in prop and number > prop["maximum"]:
@@ -125,6 +130,11 @@ def _check_property(name: str, prop: object) -> None:
         raise bad("a secret cannot be a binding field")
     if prop.get("x-secret") and ("default" in prop or "enum" in prop):
         raise bad("a secret has no default and no enum")
+    if prop.get("x-secret") and not (
+        _is_int(prop.get("minLength")) and prop["minLength"] >= MIN_KNOWN_SECRET_LENGTH
+    ):
+        # A shorter secret is not masked by value, so it would show in the log as it is.
+        raise bad(f"a secret needs minLength of at least {MIN_KNOWN_SECRET_LENGTH}")
     for limit in ("minimum", "maximum"):
         if limit in prop and not _is_number(prop[limit]):
             raise bad(f"{limit} must be a number")

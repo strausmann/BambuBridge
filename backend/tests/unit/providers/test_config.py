@@ -14,8 +14,8 @@ SCHEMA: dict[str, Any] = {
     "properties": {
         "host": {"type": "string", "default": "a.example", "x-binds-secrets": True},
         "label": {"type": "string", "default": "demo"},
-        "token": {"type": "string", "x-secret": True},
-        "extra": {"type": "string", "x-secret": True},
+        "token": {"type": "string", "x-secret": True, "minLength": 8},
+        "extra": {"type": "string", "x-secret": True, "minLength": 8},
     },
     "required": ["token"],
     "additionalProperties": False,
