@@ -546,3 +546,12 @@ def test_a_name_cannot_percent_decode_its_way_out():
     # "%bA" is a valid escape: decoded, the name no longer reads "authorization".
     assert Masker().text("%bAuthorization='hunter22'") == "%bAuthorization=***"
     assert Masker().text('{"%bAuthorization": "hunter22"') == '{"%bAuthorization": "***"'
+
+
+def test_searched_forms_are_what_the_masker_searches():
+    from app.security.masking import searched_forms
+
+    forms = searched_forms("  +Zq81aud+ ")
+    # Stripped, decoded both ways, and each decoded form stripped again.
+    assert {"+Zq81aud+", " Zq81aud ", "Zq81aud"} <= forms
+    assert searched_forms("pass%2Fword-123") >= {"pass%2Fword-123", "pass/word-123"}

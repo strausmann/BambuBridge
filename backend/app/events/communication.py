@@ -38,7 +38,7 @@ import asyncio
 import functools
 import logging
 import uuid
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -410,6 +410,7 @@ class CommunicationRecorder:
         direction: Literal["outbound", "inbound"] = "outbound",
         secret_paths: Collection[str] = (),
         known_secrets: Collection[str] = (),
+        still_wanted: Callable[[], bool] | None = None,
     ) -> bool:
         """:meth:`record` in a short transaction of its own, committed at once.
 
@@ -419,6 +420,10 @@ class CommunicationRecorder:
         value; the result is then ``False``. An argument of the wrong kind still raises
         ``ValueError``: that is a bug in the caller, not a state of the database.
         Use :meth:`record` instead when the entry has to be atomic with other work.
+
+        ``still_wanted`` is asked once masking is done, right before the insert: when it
+        answers ``False`` (the instance was deleted meanwhile) nothing is written and the
+        result is ``False``.
         """
         # Masking is CPU work (up to seconds for large parts and many secrets): it runs in
         # a worker thread so the event loop stays free.
@@ -436,6 +441,8 @@ class CommunicationRecorder:
             secret_paths=secret_paths,
             known_secrets=known_secrets,
         )
+        if still_wanted is not None and not still_wanted():
+            return False
         try:
             async with sessions() as session, session.begin():
                 await session.execute(insert(CommunicationEntry).values(**values))

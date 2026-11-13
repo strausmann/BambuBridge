@@ -14,6 +14,7 @@ from app.auth.scopes import SCOPES, Scope
 from app.build_info import VERSION
 from app.db.engine import make_engine
 from app.db.session import make_session_factory
+from app.providers.rotation import reencrypt_provider_instances
 from app.repositories import api_keys as api_keys_repo
 from app.repositories import users as users_repo
 from app.security.keys import decode_secret_key
@@ -23,7 +24,7 @@ from app.settings_store.rotation import reencrypt_app_settings
 EXIT_USAGE = 2
 
 # Every table that holds sealed secrets contributes one step; all run in one transaction.
-REENCRYPT_STEPS: list[ReencryptStep] = [reencrypt_app_settings]
+REENCRYPT_STEPS: list[ReencryptStep] = [reencrypt_app_settings, reencrypt_provider_instances]
 
 
 def build_parser() -> argparse.ArgumentParser:

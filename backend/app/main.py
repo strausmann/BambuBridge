@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from sqlalchemy.exc import DBAPIError
 
 from app.api.errors import CONNECTION_ERRORS, DatabaseUnavailableError, register_error_handlers
-from app.api.routes import api_keys, auth_continue, auth_session, health, system
+from app.api.routes import api_keys, auth_continue, auth_session, health, providers, system
 from app.api.routes import settings as settings_routes
 
 # ``identity`` registers the built-in identity providers before any setting is validated.
@@ -28,6 +28,8 @@ from app.db.session import connected, make_session_factory
 from app.events.partitions import PartitionMaintenance
 from app.events.retention import RetentionMaintenance
 from app.events.service import EventService
+from app.providers.manager import ProviderManager
+from app.providers.registry import ProviderRegistry
 from app.repositories import api_keys as api_keys_repo
 from app.security.secret_box import secret_box_from_settings
 from app.settings_store.listener import SettingsListener
@@ -97,8 +99,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         await listener.start()
         await partition_maintenance.start()
         await retention_maintenance.start()
+        # After the partitions: running instances emit events right away.
+        await app.state.provider_manager.start()
         yield
     finally:
+        await app.state.provider_manager.stop()
         await retention_maintenance.stop()
         app.state.retention_maintenance = None
         await partition_maintenance.stop()
@@ -120,9 +125,19 @@ def create_app(settings: Settings, *, web_dist_dir: Path | None = None) -> FastA
     app.state.web_dist_dir = web_dist_dir
     app.state.engine = make_engine(settings.database_url.get_secret_value())
     app.state.session_factory = make_session_factory(app.state.engine)
-    app.state.settings_store = SettingsStore(secret_box_from_settings(settings))
+    app.state.secret_box = secret_box_from_settings(settings)
+    app.state.settings_store = SettingsStore(app.state.secret_box)
     app.state.settings_listener = None
     app.state.event_service = EventService(app.state.settings_store)
+    # Provider types from the entry points; instances are started in the lifespan.
+    app.state.provider_registry = ProviderRegistry.discover()
+    app.state.provider_manager = ProviderManager(
+        app.state.engine,
+        app.state.session_factory,
+        app.state.secret_box,
+        app.state.provider_registry,
+        app.state.event_service,
+    )
     app.state.partition_maintenance = None
     app.state.retention_maintenance = None
     app.state.session_keys = ui_sessions.session_keys(settings)
@@ -149,6 +164,7 @@ def create_app(settings: Settings, *, web_dist_dir: Path | None = None) -> FastA
         auth_continue.router,
         api_keys.router,
         settings_routes.router,
+        providers.router,
     ):
         app.include_router(router)
     if web_dist_dir is not None:

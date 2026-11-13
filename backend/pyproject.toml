@@ -37,6 +37,11 @@ dev = [
 [project.scripts]
 bambubridge = "app.cli:main"
 
+# Provider types, one entry-point group per kind (app.providers.registry). The name of an
+# entry point is the type name.
+[project.entry-points."bambubridge.providers.integration"]
+demo = "app.providers.demo.provider:DemoProvider"
+
 [build-system]
 requires = ["hatchling==1.33.0"]
 build-backend = "hatchling.build"
