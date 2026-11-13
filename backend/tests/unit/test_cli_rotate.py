@@ -14,6 +14,10 @@ from app.cli import main
 from app.db.engine import make_engine
 from app.db.session import make_session_factory
 from app.models.app_setting import AppSetting
+from app.models.provider_instance import ProviderInstance
+from app.providers.rotation import reencrypt_provider_instances
+from app.repositories import provider_instances as provider_instances_repo
+from app.repositories.provider_instances import PROVIDERS_CHANNEL
 from app.security.rotation import RotationError, rotate_secrets
 from app.security.secret_box import SecretBox, key_id_for, secret_box_from_key
 from app.settings_store.rotation import reencrypt_app_settings
@@ -201,7 +205,7 @@ def test_rotate_reports_an_unreachable_database_with_exit_1(
 
 
 def test_the_cli_runs_the_registered_steps(env: pytest.MonkeyPatch):
-    assert [reencrypt_app_settings] == cli.REENCRYPT_STEPS
+    assert [reencrypt_app_settings, reencrypt_provider_instances] == cli.REENCRYPT_STEPS
 
 
 async def test_all_steps_share_one_transaction(engine, db_session: AsyncSession):  # type: ignore[no-untyped-def]
@@ -226,3 +230,89 @@ async def test_all_steps_share_one_transaction(engine, db_session: AsyncSession)
     await db_session.execute(text("select 1"))
     total = await rotate_secrets(engine, [reencrypt_app_settings], old_key=RAW_OLD, new_key=RAW_NEW)
     assert total == 1
+
+
+# --- provider instances ------------------------------------------------------------------
+
+
+async def _seed_provider(session: AsyncSession, box: SecretBox | None = None) -> None:
+    await provider_instances_repo.create(
+        session,
+        box or secret_box_from_key(RAW_OLD),
+        kind="integration",
+        type_name="demo",
+        name="rotated",
+        enabled=True,
+        config={"label": "x"},
+        secrets={"token": TOKEN, "other": TOKEN + "2"},
+        user_id=None,
+    )
+    await session.commit()
+
+
+async def _open_provider(session: AsyncSession, box: SecretBox) -> tuple[dict[str, str], set[str]]:
+    row = (await session.execute(select(ProviderInstance))).scalar_one()
+    return provider_instances_repo.open_secrets(box, row)
+
+
+def test_rotate_reencrypts_provider_secrets(
+    env: pytest.MonkeyPatch, test_database_url: str, capsys: pytest.CaptureFixture[str]
+):
+    _run(test_database_url, _seed_provider)
+    assert main(["secrets", "rotate"]) == 0
+    assert capsys.readouterr().out == "re-encrypted 2 secrets\n"
+    opened, undecryptable = _query(
+        test_database_url, lambda s: _open_provider(s, secret_box_from_key(RAW_NEW))
+    )
+    assert (opened, undecryptable) == ({"token": TOKEN, "other": TOKEN + "2"}, set())
+    opened, undecryptable = _query(
+        test_database_url, lambda s: _open_provider(s, secret_box_from_key(RAW_OLD))
+    )
+    assert (opened, undecryptable) == ({}, {"token", "other"})
+
+
+def test_rotate_aborts_when_a_provider_secret_opens_with_neither_key(
+    env: pytest.MonkeyPatch, test_database_url: str, capsys: pytest.CaptureFixture[str]
+):
+    _run(test_database_url, lambda s: _seed_provider(s, secret_box_from_key(b"f" * 32)))
+    assert main(["secrets", "rotate"]) == 1
+    err = capsys.readouterr().err
+    assert "provider instance" in err and "nothing was changed" in err and TOKEN not in err
+
+
+def test_rotate_notifies_running_servers_of_rotated_instances(test_database_url: str):
+    async def go() -> list[str]:
+        engine = make_engine(test_database_url)
+        received: list[str] = []
+        try:
+            await truncate_all(engine)
+            async with make_session_factory(engine)() as session:
+                await _seed_provider(session)
+            conn = await asyncpg_connect(engine)
+            got = asyncio.Event()
+            await conn.add_listener(
+                PROVIDERS_CHANNEL, lambda *a: (received.append(a[3]), got.set())
+            )
+            try:
+                await rotate_secrets(
+                    engine, [reencrypt_provider_instances], old_key=RAW_OLD, new_key=RAW_NEW
+                )
+                await asyncio.wait_for(got.wait(), 5)
+            finally:
+                await conn.close()
+            async with make_session_factory(engine)() as session:
+                row = (await session.execute(select(ProviderInstance))).scalar_one()
+                assert received == [str(row.id)]
+        finally:
+            await engine.dispose()
+        return received
+
+    assert len(asyncio.run(go())) == 1
+
+
+async def asyncpg_connect(engine: Any) -> Any:
+    import asyncpg
+
+    return await asyncpg.connect(
+        engine.url.set(drivername="postgresql").render_as_string(hide_password=False)
+    )

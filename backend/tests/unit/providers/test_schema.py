@@ -1,0 +1,155 @@
+"""The JSON-schema subset providers declare their configuration, payloads and parameters in."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from app.providers.schema import (
+    MAX_STRING_LENGTH,
+    SchemaDefinitionError,
+    ValidationError,
+    binding_fields,
+    check_schema,
+    secret_fields,
+    validate,
+)
+
+SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "interval_seconds": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 30},
+        "ratio": {"type": "number", "minimum": 0, "maximum": 1},
+        "label": {"type": "string", "minLength": 1, "maxLength": 10, "default": "demo"},
+        "mode": {"type": "string", "enum": ["a", "b"]},
+        "flag": {"type": "boolean"},
+        "host": {"type": "string", "x-binds-secrets": True},
+        "token": {"type": "string", "x-secret": True, "minLength": 8},
+    },
+    "required": ["token"],
+    "additionalProperties": False,
+}
+
+
+def test_check_schema_accepts_the_subset():
+    check_schema(SCHEMA)
+    assert secret_fields(SCHEMA) == ("token",)
+    assert binding_fields(SCHEMA) == ("host",)
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"type": "array"},
+        {"type": "object", "properties": {"a": {"type": "string"}}},  # additionalProperties
+        {
+            "type": "object",
+            "properties": {"a": {"type": "string", "pattern": ".*"}},
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {"a": {"type": "object"}},
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {"a": {"type": "integer", "x-secret": True}},
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {"a": {"type": "string"}},
+            "required": ["b"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {"a": {"type": "integer", "default": "x"}},
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {"a": {"type": "string", "x-secret": True, "default": "x"}},
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {"a": {"type": "string", "x-secret": True, "x-binds-secrets": True}},
+            "additionalProperties": False,
+        },
+        {"type": "object", "properties": [], "additionalProperties": False},
+        {
+            "type": "object",
+            "properties": {"a": {"type": "string", "enum": []}},
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {"a": {"type": "string", "maxLength": MAX_STRING_LENGTH + 1}},
+            "additionalProperties": False,
+        },
+    ],
+)
+def test_check_schema_rejects_everything_else(schema: dict[str, Any]):
+    with pytest.raises(SchemaDefinitionError):
+        check_schema(schema)
+
+
+def test_validate_applies_defaults():
+    assert validate(SCHEMA, {"token": "12345678"}) == {
+        "interval_seconds": 30,
+        "label": "demo",
+        "token": "12345678",
+    }
+
+
+@pytest.mark.parametrize(
+    ("value", "field"),
+    [
+        ({"token": "12345678", "interval_seconds": 0}, "interval_seconds"),
+        ({"token": "12345678", "interval_seconds": 3601}, "interval_seconds"),
+        ({"token": "12345678", "interval_seconds": True}, "interval_seconds"),
+        ({"token": "12345678", "interval_seconds": 1.5}, "interval_seconds"),
+        ({"token": "12345678", "ratio": "1"}, "ratio"),
+        ({"token": "12345678", "ratio": 2}, "ratio"),
+        ({"token": "12345678", "label": ""}, "label"),
+        ({"token": "12345678", "label": "x" * 11}, "label"),
+        ({"token": "12345678", "mode": "c"}, "mode"),
+        ({"token": "12345678", "flag": 1}, "flag"),
+        ({"token": "short"}, "token"),
+        ({}, "token"),
+        ({"token": "12345678", "unknown": 1}, "unknown"),
+    ],
+)
+def test_validate_rejects_and_names_the_field(value: dict[str, Any], field: str):
+    with pytest.raises(ValidationError) as caught:
+        validate(SCHEMA, value)
+    assert caught.value.field == field
+    assert field in str(caught.value)
+
+
+def test_validation_error_never_quotes_the_value():
+    with pytest.raises(ValidationError) as caught:
+        validate(SCHEMA, {"token": "s3cr3t!"})
+    assert "s3cr3t" not in str(caught.value)
+
+
+def test_validate_rejects_a_non_object():
+    with pytest.raises(ValidationError):
+        validate(SCHEMA, ["token"])  # type: ignore[arg-type]
+
+
+def test_validate_rejects_unstorable_strings():
+    with pytest.raises(ValidationError):
+        validate(SCHEMA, {"token": "1234\x005678"})
+
+
+def test_validate_caps_strings_without_max_length():
+    with pytest.raises(ValidationError):
+        validate(SCHEMA, {"token": "12345678", "host": "h" * (MAX_STRING_LENGTH + 1)})
+
+
+def test_number_accepts_int():
+    assert validate(SCHEMA, {"token": "12345678", "ratio": 1})["ratio"] == 1
