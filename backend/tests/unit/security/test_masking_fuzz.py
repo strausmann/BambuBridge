@@ -10,7 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import random
-from urllib.parse import quote
+from urllib.parse import quote, quote_plus
 
 import pytest
 
@@ -70,6 +70,13 @@ def soup(n: int) -> str:
     return "".join(rnd.choice(SOUP) for _ in range(rnd.randrange(n)))
 
 
+def fragments(secret: str) -> set[str]:
+    """Every part of ``secret`` at most two characters shorter: showing one of them shows
+    the secret all but for two characters."""
+    size = len(secret) - 2
+    return {secret[i : i + size] for i in range(len(secret) - size + 1)}
+
+
 def marker(i: int) -> str:
     return f"MRK{i:07d}K"
 
@@ -125,4 +132,60 @@ def test_no_known_secret_and_no_secret_value_survives(seed: int):
             # The input is synthetic, so it may be shown when the assertion fails.
             assert marker(i) not in out, (kind, text, out)
             for secret in SECRETS:
-                assert secret not in out, (kind, text, out)
+                for fragment in fragments(secret):
+                    assert fragment not in out, (kind, text, out)
+
+
+# Secrets that start with hex digits: a "%", "%2" or "%25" in front of them forms a percent
+# escape with their first characters once the text is decoded as a whole.
+HEX_SECRETS = ["34567890", "C0FFEE12ab", "abcdef12%4", "2Bad-c0de-77"]
+HEX_PREFIXES = ["%", "%2", "%25", "%%", "%2%", "%25%2"]
+# Pairs that only show decoded: they make a decoded round the one stored.
+ENCODED_PAIRS = [
+    "token%3D{m}",
+    "password+%3D+{m}",
+    "secret%253D{m}",
+    "pw%3A{m}",
+    "x=%2Fp%3Ftoken%3D{m}",
+]
+
+
+def hex_spell(secret: str) -> str:
+    kind = rnd.randrange(6)
+    if kind == 0:
+        return quote(secret, safe="")
+    if kind == 1:
+        return quote_plus(secret)
+    if kind == 2:
+        return quote(quote(secret, safe=""), safe="")
+    if kind == 3:
+        return "".join(f"%25{byte:02X}" for byte in secret.encode())
+    return secret
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_a_prefix_before_a_known_secret_reveals_no_fragment_of_it(seed: int):
+    global rnd
+    rnd = random.Random(seed)  # noqa: S311
+    maskers = {secret: Masker(known_secrets=[secret]) for secret in HEX_SECRETS}
+    for i in range(1000):
+        secret = rnd.choice(HEX_SECRETS)
+        parts = []
+        for _ in range(rnd.randrange(1, 4)):
+            parts.append(soup(3))
+            parts.append(
+                rnd.choice(["", *HEX_PREFIXES]) + hex_spell(secret) + rnd.choice(["", "1", "%41"])
+            )
+        parts.insert(rnd.randrange(len(parts) + 1), rnd.choice(ENCODED_PAIRS).format(m=marker(i)))
+        text = rnd.choice(["", " ", "&"]).join(parts)
+        masker = maskers[secret]
+        outputs = {
+            "text": masker.text(text),
+            "body": masker.body(text),
+            "body-json": json.loads(masker.body(json.dumps({"r": text})))["r"],
+            "target": masker.target(text),
+        }
+        for kind, out in outputs.items():
+            assert marker(i) not in out, (kind, text, out)
+            for fragment in fragments(secret):
+                assert fragment not in out, (kind, text, out)

@@ -928,12 +928,78 @@ def test_a_known_value_that_decoding_removes_entirely_leaves_nothing_to_mask():
 
 
 # --- fix round 5 (audit run 10) --------------------------------------------------------------
+# F1: a "%" (or "%2", "%25") just before a known secret that starts with hex digits must not
+# form a percent escape with it when the text is decoded.
+
+HEX_SECRET = "3456" + "7890"
+HEX_SECRET_2 = "C0FFEE" + "12ab-made-up"
+
+
+def _twice_encoded(value: str) -> str:
+    """Every byte as ``%25HH``: a percent escape of a percent escape."""
+    return "".join(f"%25{byte:02X}" for byte in value.encode())
+
+
+def _fragments(secret: str) -> set[str]:
+    size = len(secret) - 2
+    return {secret[i : i + size] for i in range(len(secret) - size + 1)}
+
+
+def _shows_a_fragment(out: str, secret: str) -> bool:
+    return any(fragment in out for fragment in _fragments(secret))
+
+
+def test_a_percent_before_a_known_secret_does_not_eat_its_first_characters():
+    out = Masker(known_secrets=[HEX_SECRET]).text("code=%" + HEX_SECRET + " token%3Dabc")
+    assert out == "code=%*** token=***"
+
+
+@pytest.mark.parametrize("secret", [HEX_SECRET, HEX_SECRET_2])
+@pytest.mark.parametrize("prefix", ["%", "%2", "%25", "%%", "%2%"])
+@pytest.mark.parametrize(
+    "trigger",
+    ["token%3D" + REMOTE, "password+%3D+" + REMOTE, "secret%253D" + REMOTE, "twice"],
+    ids=["encoded-pair", "plus-pair", "pair-encoded-twice", "secret-encoded-twice"],
+)
+def test_a_prefix_cannot_join_a_known_secret_when_the_text_is_decoded(
+    secret: str, prefix: str, trigger: str
+):
+    masker = Masker(known_secrets=[secret])
+    trigger = _twice_encoded(secret) if trigger == "twice" else trigger
+    text = f"code={prefix}{secret} {trigger}"
+    exchange = _exchange(masker)
+    outputs = {
+        "text": masker.text(text),
+        "target": exchange.target("/p?" + text.replace(" ", "&")),
+        "body": exchange.body(text),
+        "json": exchange.body(json.dumps({"r": text})),
+        "header": str(exchange.headers([("X-Note", text)])),
+    }
+    for part, out in outputs.items():
+        assert not _shows_a_fragment(out, secret), (part, out)
+        assert REMOTE not in out, (part, out)
 
 
 def _exchange(masker: Masker):
     from app.events.communication import _Exchange
 
     return _Exchange(masker)
+
+
+def test_a_decoding_round_that_would_reveal_a_fragment_is_not_adopted(monkeypatch):
+    # The backstop, shown by breaking the positional decoding on purpose: the known spans
+    # are decoded together with what stands before them again (the run-10 regression).
+    # The round then shows a fragment the previous output did not, and is not adopted.
+    import app.security.masking as masking
+
+    def joined(decode, segments):
+        text = masking._normalized(decode, "".join(piece for piece, _ in segments))
+        return text, [], []
+
+    monkeypatch.setattr(masking, "_decode_segments", joined)
+    out = Masker(known_secrets=[HEX_SECRET]).text("code=%" + HEX_SECRET + " token%3Dabc")
+    assert not _shows_a_fragment(out, HEX_SECRET), out
+    assert out == "code=%*** token%3Dabc"
 
 
 # F2: every mark (category M, also those of combining class 0) and every
@@ -972,3 +1038,10 @@ def test_an_ignorable_character_inside_a_known_secret_does_not_hide_it(hider: st
     assert out == "x *** y", out
     configured = Masker(known_secrets=[secret[:9] + "\u034f" + secret[9:]])
     assert configured.text(f"x {secret} y") == "x *** y"
+
+
+def test_a_name_inside_a_masked_credential_is_still_a_name_once_decoded():
+    # The scheme rule takes "password+" as the credential after "basic"; decoded, the same
+    # word is the name of a pair whose value must go as well.
+    out = Masker().text("basic password+%3D+" + REMOTE)
+    assert REMOTE not in out, out

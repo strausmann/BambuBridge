@@ -20,7 +20,8 @@ Three rules decide what becomes ``***``:
    ``MIN_KNOWN_SECRET_LENGTH`` characters (surrounding white space removed), in any
    spelling an encoder writes: each character as itself or escaped (percent escape of its
    UTF-8 bytes in either case, ``\\uXXXX`` in either case and as a surrogate pair, ``\\xNN``,
-   ``\\UXXXXXXXX``, the short escapes such as ``\\/`` and ``\\"``, ``+`` for a space, HTML and
+   ``\\UXXXXXXXX``, the short escapes such as ``\\/`` and ``\\"``, ``+`` for a space, a percent
+   escape encoded again up to ``_DECODE_ROUNDS`` times (``%2541``), HTML and
    XML character references ``&#N;``, ``&#xH;`` and ``&amp; &lt; &gt; &quot; &apos;``), each
    backslash escape also as ``json.dumps`` or ``repr()`` write it a second time, the
    Python ``repr`` spellings, the UTF-8 bytes read as ISO 8859-1, and base64 or base64url of
@@ -34,9 +35,12 @@ before anything is searched, in every decoding round, and also where they are wr
 escape (``&#8203;``, ``\\u200b``, ``\\U000e0001``, a surrogate pair, percent or ``\\x`` bytes
 judged one UTF-8 character at a time).
 
-Declared limit: a hostile peer obfuscating a known secret with encoded invisible characters
+Declared limits: a hostile peer obfuscating a known secret with encoded invisible characters
 beyond these cases is not caught; neither is a run of backslashes in a secret spelled in two
-ways at once (``\\\\`` next to ``\\x5c``), which no encoder writes.
+ways at once (``\\\\`` next to ``\\x5c``), which no encoder writes. A pair whose separator is
+written as an HTML or XML reference (``password&#61;x``, ``token&#x3d;x``) or a ``\\u003d``
+escape is not seen as a pair, and neither is a name or a separator percent-encoded more
+often than ``_DECODE_ROUNDS`` times; a known secret in such a text is still masked.
 
 In text that is not parsed JSON (an address, an error message, a body in another format,
 broken JSON) the names are found by patterns: ``"name": value`` and ``'name': value`` (a
@@ -48,8 +52,11 @@ information in ``scheme://user:password@host`` (up to the last ``@``; without a 
 whole of it, a token given as the user name) and the credential after ``Bearer`` or
 ``Basic``. Each pattern and the known values are looked for in the same text and the union
 of what they find is masked, so no pattern depends on what another one left. The same is
-then done once more on the percent-decoded text (and on that decoded again, for an address
-encoded into another one): if that finds anything, the decoded text is what is stored.
+then done once more on the decoded text (escaped invisible characters dropped, then percent
+escapes resolved, up to ``_DECODE_ROUNDS`` times each, for an address encoded into another
+one): if that finds anything, the decoded text is what is stored. What a rule or a known
+value found is decoded on its own and masked at its place in the decoded text, so nothing in
+front of it can form an escape with its first characters.
 
 Masking prefers hiding too much over showing a secret: a field called ``monkey`` is masked
 because its name contains ``key``. What it cannot do: find a secret nobody named or marked,
@@ -435,8 +442,23 @@ def _char_pattern(char: str) -> tuple[str, int]:
         _char_forms(char) | set(_NAMED_REFERENCES.get(char, ())), key=lambda f: (-len(f), f)
     )
     references, reference_length = _reference_patterns(char)
-    longest = max(reference_length, *(len(_escape_twice(f)[0]) for f in forms))
-    return "(?>" + "|".join([*references, *(_form_pattern(f) for f in forms)]) + ")", longest
+    nested, nested_length = _nested_percent_pattern(char)
+    longest = max(reference_length, nested_length, *(len(_escape_twice(f)[0]) for f in forms))
+    alternatives = [nested, *references, *(_form_pattern(f) for f in forms)]
+    return "(?>" + "|".join(alternatives) + ")", longest
+
+
+def _nested_percent_pattern(char: str) -> tuple[str, int]:
+    """``char`` percent-encoded two to ``_DECODE_ROUNDS + 1`` times (``%2541``, ``%252541``).
+
+    Matched as written, without decoding: a text decoded as a whole lets a ``%`` or ``%2``
+    in front of the value form an escape with its first characters (``%2abc...`` reads
+    ``*bc...``), so a secret encoded twice behind such a prefix would never show decoded.
+    """
+    data = char.encode("utf-8", "surrogatepass")
+    levels = f"(?:25){{1,{_DECODE_ROUNDS}}}"
+    pattern = "".join(f"%{levels}{byte:02x}" for byte in data)
+    return f"(?i:{pattern})", len(data) * (3 + 2 * _DECODE_ROUNDS)
 
 
 def _runs(secret: str) -> list[str]:
@@ -708,11 +730,6 @@ class Masker:
             *self._multipart_spans(value),
         }
 
-    def _masked_pair(self, value: str) -> tuple[str, str]:
-        """``value`` masked in full, and with the name rules only (known values in place)."""
-        rules = self._rule_spans(value)
-        return _apply(value, rules | set(self._known_spans(value))), _apply(value, rules)
-
     # -- public -------------------------------------------------------------
 
     def text(self, value: str) -> str:
@@ -722,35 +739,43 @@ class Masker:
         are taken out first: they would otherwise split a known secret so that its search
         no longer finds it.
         """
-        # Two probes are decoded each round. ``names``: the text with the name rules applied
-        # but the known values still in place, so a known secret that is also a name
-        # (``password%3Dx``) is still a name once ``%3D`` is decoded. ``shown``: the output
-        # so far, so that whatever it still hides in an encoded form is found. If either
-        # finds something, the decoded form is kept, masked in full; it never loses a mask:
-        # every known value masked before is carried along in its decoded spelling (a secret
-        # with ``+`` or ``%2B`` reads differently once decoded) and masked as well.
+        # The text is decoded as segments: plain text, the regions a name rule found and
+        # the known values, each kept as written. Every segment is decoded on its own, so a
+        # ``%`` in front of a known value can never form an escape with its first
+        # characters; a held region stays at a recorded position and is masked there,
+        # without a search that decoding could defeat. Held regions stay in the probe as
+        # text, so a known secret or masked word that is also a name (``password%3Dx``,
+        # ``basic password+%3D+x``) is still a name once ``%3D`` is decoded. A decoded round
+        # is kept when it shows anything new (a name rule or a known value outside the
+        # recorded positions), masked in full, and only if it shows no fragment of a
+        # carried known value that the previous output did not show already (fail closed:
+        # otherwise the previous output stays).
         base = _FORMAT.sub("", value)
-        out, names = self._masked_pair(base)
-        seen = {base[start:end] for start, end in self._known_spans(base)}
+        rules = self._rule_spans(base)
+        known = set(self._known_spans(base))
+        out = _apply(base, rules | known)
+        adopted = _segments(base, _regions(rules, known))
         # Escaped format characters first: that leaves percent escapes alone, so a secret
         # that holds a literal ``%2D`` is still itself (the percent rounds drop them as well).
         decoders: tuple[Callable[[str], str], ...] = (_drop_encoded_format, unquote, unquote_plus)
         for decode in decoders:
-            probe, shown, carried = names, out, seen
+            probe = adopted
             for _ in range(_DECODE_ROUNDS):
-                decoded, decoded_shown = _normalized(decode, probe), _normalized(decode, shown)
-                if decoded == probe and decoded_shown == shown:
+                decoded, regions, carried = _decode_segments(decode, probe)
+                if decoded == "".join(piece for piece, _ in probe):
                     break
-                carried = {_normalized(decode, value) for value in carried}
-                full, rules_only = self._masked_pair(decoded)
-                if rules_only != decoded or self._masked_pair(decoded_shown)[0] != decoded_shown:
-                    out = shown = _apply(full, _literal_spans(full, carried))
-                    names = probe = rules_only
-                    seen = carried = carried | {
-                        decoded[start:end] for start, end in self._known_spans(decoded)
-                    }
-                else:
-                    probe, shown = decoded, decoded_shown
+                at = {(start, end) for start, end, _ in regions}
+                rules = self._rule_spans(decoded)
+                known = set(self._known_spans(decoded))
+                literal = _literal_spans(decoded, carried)
+                full = _apply(decoded, rules | known | at | literal)
+                spellings = [piece for piece, kind in probe if kind == _KNOWN] + carried
+                shows_more = _apply(decoded, rules | known | at) != _apply(decoded, at)
+                if shows_more and not _reveals(full, out, spellings, decode):
+                    out = full
+                    regions += _regions(rules, known | literal)
+                    adopted = _segments(decoded, regions)
+                probe = _segments(decoded, regions)
         return out
 
     def value(self, value: Any) -> Any:
@@ -849,17 +874,92 @@ def _normalized(decode: Callable[[str], str], text: str) -> str:
     return _drop_encoded_format(_FORMAT.sub("", decode(text).replace("\x00", "")))
 
 
+_PLAIN, _HELD, _KNOWN = 0, 1, 2  # kinds of a segment, see _segments
+
+
+def _segments(text: str, regions: Collection[tuple[int, int, int]]) -> list[tuple[str, int]]:
+    """``text`` as segments for the next decoding round, split at ``regions`` (start, end,
+    kind): ``_KNOWN`` for a region that holds a known value, ``_HELD`` for one only a name
+    rule found, everything else ``_PLAIN``. Every region keeps its text, so a name a rule
+    covered (``basic password+%3D+x``) is still a name once decoded; it is masked by
+    position. Overlapping regions are one, of the stronger kind; neighbouring plain pieces
+    are joined, so they are decoded together."""
+    merged: list[list[int]] = []
+    for start, end, kind in sorted(r for r in regions if r[1] > r[0]):
+        if merged and start < merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+            merged[-1][2] = max(merged[-1][2], kind)
+        else:
+            merged.append([start, end, kind])
+    segments: list[tuple[str, int]] = []
+    position = 0
+    for start, end, kind in merged:
+        if start > position:
+            segments.append((text[position:start], _PLAIN))
+        segments.append((text[start:end], kind))
+        position = end
+    if position < len(text):
+        segments.append((text[position:], _PLAIN))
+    return segments
+
+
+def _decode_segments(
+    decode: Callable[[str], str], segments: list[tuple[str, int]]
+) -> tuple[str, list[tuple[int, int, int]], list[str]]:
+    """One decoding round over ``segments``, each decoded on its own: the decoded text, the
+    regions of the held segments in it (start, end, kind) and the decoded spellings of the
+    known values. A segment that decoding leaves empty has nothing left to show."""
+    pieces: list[str] = []
+    regions: list[tuple[int, int, int]] = []
+    carried: list[str] = []
+    length = 0
+    for piece, kind in segments:
+        decoded = _normalized(decode, piece)
+        if kind != _PLAIN and decoded:
+            regions.append((length, length + len(decoded), kind))
+            if kind == _KNOWN:
+                carried.append(decoded)
+        pieces.append(decoded)
+        length += len(decoded)
+    return "".join(pieces), regions, carried
+
+
+def _regions(
+    rules: Collection[tuple[int, int]], known: Collection[tuple[int, int]]
+) -> list[tuple[int, int, int]]:
+    return [(s, e, _HELD) for s, e in rules] + [(s, e, _KNOWN) for s, e in known]
+
+
+def _fragments(spelling: str) -> set[str]:
+    """The parts of a spelling at most two characters shorter than it."""
+    size = len(spelling) - 2
+    return {spelling[i : i + size] for i in range(len(spelling) - size + 1)}
+
+
+def _reveals(
+    candidate: str, previous: str, spellings: Collection[str], decode: Callable[[str], str]
+) -> bool:
+    """Whether ``candidate`` shows a fragment of a carried spelling (one long enough to be a
+    known secret) that ``previous`` did not show, as written or decoded the same way."""
+    before = (previous, _normalized(decode, previous))
+    for spelling in spellings:
+        if len(spelling) < MIN_KNOWN_SECRET_LENGTH:
+            continue
+        for fragment in _fragments(spelling):
+            if fragment in candidate and not any(fragment in text for text in before):
+                return True
+    return False
+
+
 def _literal_spans(text: str, values: Collection[str]) -> set[tuple[int, int]]:
     """Every occurrence of each value, whatever its length.
 
     The values are spellings of known values that were matched (and so long enough) before
     a decoding round; decoded, one may be shorter (``%41%42%43%44`` reads ``ABCD``) and is
-    masked all the same. An empty one is skipped: decoding left nothing of it to show.
+    masked all the same. None is empty (:func:`_decode_segments` carries no empty one).
     """
     spans: set[tuple[int, int]] = set()
     for value in values:
-        if not value:
-            continue
         start = text.find(value)
         while start >= 0:
             spans.add((start, start + len(value)))
