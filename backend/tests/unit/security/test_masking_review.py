@@ -1213,3 +1213,17 @@ def test_the_codex_reproducers_of_the_earlier_threads_stay_masked():
     assert "credential" not in Masker(known_secrets=[REMOTE]).target(target)
     # 02:10Z: an escaped format character next to another \u escape (fixed in fd6aa05).
     assert Masker(known_secrets=["abcd" + "efgh"]).text(r"a​bcdefgh") == "***"
+
+
+@pytest.mark.timing
+def test_numbering_many_repeated_json_keys_takes_linear_time():
+    # Codex 14:00Z: the suffix search restarted at #2 for every repeat (quadratic).
+    def body(count: int) -> str:
+        return "{" + ",".join(['"x":0'] * count) + "}"
+
+    assert_linear(Masker().body, body(1_024), body(4_096))
+
+
+def test_repeated_keys_are_numbered_in_order_also_next_to_a_written_suffix():
+    out = Masker().body('{"x":1,"x#2":2,"x":3,"x":4}')
+    assert json.loads(out) == {"x": 1, "x#2": 2, "x#3": 3, "x#4": 4}

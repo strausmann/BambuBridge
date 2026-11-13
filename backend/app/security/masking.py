@@ -893,6 +893,9 @@ class Masker:
 
     def _items(self, items: Iterator[tuple[Any, Any]]) -> dict[str, Any]:
         out: dict[str, Any] = {}
+        # The next number to try for each repeated name: the search goes on from there
+        # instead of starting at 2 again, which keeps many repeats linear.
+        next_number: dict[str, int] = {}
         for key, item in items:
             name = key if isinstance(key, str) else str(key)
             if self._is_secret_written_name(name):
@@ -902,9 +905,10 @@ class Masker:
             written = self.text(name)
             if written in out:
                 # A repeated name (or two that mask the same): numbered, so no value is lost.
-                number = 2
+                number = next_number.get(written, 2)
                 while f"{written}#{number}" in out:
                     number += 1
+                next_number[written] = number + 1
                 written = f"{written}#{number}"
             out[written] = masked
         return out
