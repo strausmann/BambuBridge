@@ -1062,3 +1062,18 @@ def test_a_name_inside_a_masked_credential_is_still_a_name_once_decoded():
     # word is the name of a pair whose value must go as well.
     out = Masker().text("basic password+%3D+" + REMOTE)
     assert REMOTE not in out, out
+
+
+# --- final dispatch (audit run 11) -----------------------------------------------------------
+
+
+def test_a_prefix_before_a_secret_encoded_twice_in_plain_text_is_masked():
+    # Nothing matches before decoding unless a percent escape encoded again is a spelling
+    # of its own: decoded as a whole, "%2a" reads "*" and the secret never shows.
+    secret = "abcdef12" + "%4"
+    twice = quote(quote(secret, safe=""), safe="")
+    masker = Masker(known_secrets=[secret])
+    for text in (f" %2{twice}1 token%3D{REMOTE}", f"x=%2{twice}", f"%25{twice} y"):
+        out = masker.text(text)
+        assert not _shows_a_fragment(out, secret), out
+        assert REMOTE not in out, out
