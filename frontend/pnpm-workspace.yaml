@@ -1,0 +1,10 @@
+# pnpm installs a release only after it has been public for a while (minimumReleaseAge), so a
+# freshly published, possibly compromised version does not reach a lockfile. Strict: a version
+# younger than that fails the install instead of being let through with a note.
+minimumReleaseAgeStrict: true
+# One scoped exception: this exact version was published on 2026-11-12 and locked the same day
+# (integrity in pnpm-lock.yaml equals the registry's). Without the entry the strict check fails
+# the install. Remove it on or after 2026-11-20, or with the next update of the package,
+# whichever comes first; `pnpm install --frozen-lockfile` must then pass without it.
+minimumReleaseAgeExclude:
+  - '@testing-library/user-event@14.6.10'

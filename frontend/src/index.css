@@ -1,0 +1,132 @@
+@import "tailwindcss";
+@import "./design/fonts.css";
+@import "./design/tokens.css";
+
+/* Short viewports (a phone in landscape, or any phone with the on-screen keyboard open). */
+/* `[data-short]` is the same state measured by shell/useShortViewport.ts, for browsers whose
+   layout viewport does not shrink with the keyboard (iOS Safari). Keep 560 px equal there. */
+@custom-variant short {
+  @media (max-height: 560px) {
+    @slot;
+  }
+  &:where([data-short], [data-short] *) {
+    @slot;
+  }
+}
+
+@layer base {
+  html {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: 1.5;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+  }
+  body {
+    margin: 0;
+    min-height: 100dvh;
+  }
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
+  a,
+  button,
+  [role="button"],
+  [role="radio"] {
+    touch-action: manipulation;
+  }
+  button,
+  [role="button"] {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  /* Navigation entries are controls: a long press must not select their label or open the link callout. */
+  nav a {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  input,
+  textarea,
+  select {
+    font-size: 16px; /* iOS zooms into smaller fields */
+  }
+  :focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: 2px;
+  }
+  code,
+  kbd,
+  samp {
+    font-family: var(--font-mono);
+    font-size: 0.95em;
+    /* Variable names and identifiers are one long word; they may break anywhere on a narrow screen. */
+    overflow-wrap: anywhere;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  /* Press feedback on everything tappable: instant, small, ease-out. */
+  .press {
+    transition-property: transform, background-color, color, border-color;
+    transition-duration: 120ms;
+    transition-timing-function: var(--ease-out);
+  }
+  .press:active {
+    transform: scale(0.97);
+  }
+
+  /* Busy mark in a button (shell/Busy.tsx). Constant motion: linear. With reduced motion the
+     ring is replaced by an ellipsis instead of being stopped mid-turn. */
+  .busy-ring {
+    animation: busy-turn 700ms linear infinite;
+  }
+  @keyframes busy-turn {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* The logo exists in a light and a dark drawing; the theme (system or chosen) picks one. */
+  .logo-dark {
+    display: none;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .logo-light {
+      display: none;
+    }
+    :root:not([data-theme="light"]) .logo-dark {
+      display: block;
+    }
+  }
+  :root[data-theme="dark"] .logo-light {
+    display: none;
+  }
+  :root[data-theme="dark"] .logo-dark {
+    display: block;
+  }
+}
+
+/*
+ * Theme change (shell/theme.ts): the old and the new picture of the page cross-fade.
+ * Opacity only, 200 ms; reduced motion never starts the transition.
+ */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 200ms;
+  animation-timing-function: var(--ease-out);
+}

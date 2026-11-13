@@ -1,0 +1,251 @@
+msgid ""
+msgstr ""
+"POT-Creation-Date: 2026-11-12 20:36+0000\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"X-Generator: @lingui/cli\n"
+"Language: de\n"
+
+#: src/shell/TopBar.tsx
+msgid "Abmelden"
+msgstr "Abmelden"
+
+#: src/shell/TopBar.tsx
+msgid "Abmelden fehlgeschlagen, die Sitzung ist noch offen"
+msgstr "Abmelden fehlgeschlagen, die Sitzung ist noch offen"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Admin-Token"
+msgstr "Admin-Token"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Admin-Token anlegen"
+msgstr "Admin-Token anlegen"
+
+#: src/pages/placeholders.tsx
+#: src/shell/nav.tsx
+msgid "Anbieter"
+msgstr "Anbieter"
+
+#. placeholder {0}: session.user
+#: src/shell/TopBar.tsx
+msgid "Angemeldet als {0}"
+msgstr "Angemeldet als {0}"
+
+#: src/shell/SignIn.tsx
+msgid "Anmelden"
+msgstr "Anmelden"
+
+#: src/shell/SignIn.tsx
+msgid "API-Token"
+msgstr "API-Token"
+
+#: src/shell/Sidebar.tsx
+#: src/shell/TopBar.tsx
+msgid "BambuBridge, zur Übersicht"
+msgstr "BambuBridge, zur Übersicht"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Bootstrap-Schlüssel"
+msgstr "Bootstrap-Schlüssel"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Das Token konnte nicht angelegt werden."
+msgstr "Das Token konnte nicht angelegt werden."
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Dein Admin-Token"
+msgstr "Dein Admin-Token"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Der Bootstrap-Schlüssel wurde nicht akzeptiert."
+msgstr "Der Bootstrap-Schlüssel wurde nicht akzeptiert."
+
+#: src/app/router.tsx
+#: src/shell/BootstrapKeyCreated.tsx
+#: src/shell/SignIn.tsx
+msgid "Der Server ist nicht erreichbar."
+msgstr "Der Server ist nicht erreichbar."
+
+#: src/shell/ThemeSwitch.tsx
+msgid "Design"
+msgstr "Design"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Die Anmeldung mit dem neuen Token ist fehlgeschlagen."
+msgstr "Die Anmeldung mit dem neuen Token ist fehlgeschlagen."
+
+#: src/shell/SignIn.tsx
+msgid "Die einmalige Anmeldung hat dich nicht erkannt. Öffne die BambuBridge über deinen Anmeldedienst oder melde dich mit einem Token an."
+msgstr "Die einmalige Anmeldung hat dich nicht erkannt. Öffne die BambuBridge über deinen Anmeldedienst oder melde dich mit einem Token an."
+
+#: src/pages/placeholders.tsx
+msgid "Diese Adresse gibt es in der BambuBridge nicht."
+msgstr "Diese Adresse gibt es in der BambuBridge nicht."
+
+#: src/pages/placeholders.tsx
+msgid "Diese Seite ist noch leer. Ihr Inhalt folgt in einer der nächsten Versionen."
+msgstr "Diese Seite ist noch leer. Ihr Inhalt folgt in einer der nächsten Versionen."
+
+#: src/shell/SignIn.tsx
+msgid "Dieser Benutzer ist deaktiviert."
+msgstr "Dieser Benutzer ist deaktiviert."
+
+#: src/pages/placeholders.tsx
+msgid "Dieses Gerät"
+msgstr "Dieses Gerät"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Dieses Token wird nur jetzt angezeigt. Lege es in deinem Passwortmanager ab, bevor du fortfährst."
+msgstr "Dieses Token wird nur jetzt angezeigt. Lege es in deinem Passwortmanager ab, bevor du fortfährst."
+
+#: src/shell/SignIn.tsx
+msgid "Dieses Token wurde nicht akzeptiert."
+msgstr "Dieses Token wurde nicht akzeptiert."
+
+#: src/shell/ThemeSwitch.tsx
+msgid "Dunkles Design"
+msgstr "Dunkles Design"
+
+#: src/pages/placeholders.tsx
+#: src/shell/nav.tsx
+msgid "Einstellungen"
+msgstr "Einstellungen"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Entferne <0>BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY</0> aus dem Container; der Schlüssel wirkt nicht mehr, sobald dieses Token existiert."
+msgstr "Entferne <0>BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY</0> aus dem Container; der Schlüssel wirkt nicht mehr, sobald dieses Token existiert."
+
+#: src/app/router.tsx
+msgid "Erneut versuchen"
+msgstr "Erneut versuchen"
+
+#: src/shell/SignIn.tsx
+msgid "Erster Start?"
+msgstr "Erster Start?"
+
+#: src/shell/BootstrapKeyCreated.tsx
+#: src/shell/SignIn.tsx
+msgid "Erstes Admin-Token anlegen"
+msgstr "Erstes Admin-Token anlegen"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Es gibt bereits ein Admin-Token. Melde dich damit an."
+msgstr "Es gibt bereits ein Admin-Token. Melde dich damit an."
+
+#: src/shell/SignIn.tsx
+msgid "Etwas ist schiefgegangen."
+msgstr "Etwas ist schiefgegangen."
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Gib den Bootstrap-Schlüssel ein, den du dem Container als <0>BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY</0> mitgegeben hast. Er kann genau eines: das erste Admin-Token anlegen."
+msgstr "Gib den Bootstrap-Schlüssel ein, den du dem Container als <0>BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY</0> mitgegeben hast. Er kann genau eines: das erste Admin-Token anlegen."
+
+#: src/shell/Sidebar.tsx
+#: src/shell/TabBar.tsx
+msgid "Hauptnavigation"
+msgstr "Hauptnavigation"
+
+#: src/shell/ThemeSwitch.tsx
+msgid "Helles Design"
+msgstr "Helles Design"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Hier bleiben"
+msgstr "Hier bleiben"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Kopieren fehlgeschlagen. Markiere das Token und kopiere es von Hand."
+msgstr "Kopieren fehlgeschlagen. Markiere das Token und kopiere es von Hand."
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Kopiert"
+msgstr "Kopiert"
+
+#: src/app/router.tsx
+msgid "Lädt …"
+msgstr "Lädt …"
+
+#: src/shell/SignIn.tsx
+msgid "Melde dich mit einem API-Token an."
+msgstr "Melde dich mit einem API-Token an."
+
+#: src/shell/TopBar.tsx
+msgid "Meldung schließen"
+msgstr "Meldung schließen"
+
+#: src/shell/SignIn.tsx
+msgid "Mit einmaliger Anmeldung (SSO) fortfahren"
+msgstr "Mit einmaliger Anmeldung (SSO) fortfahren"
+
+#: src/pages/placeholders.tsx
+#: src/shell/nav.tsx
+msgid "Protokoll"
+msgstr "Protokoll"
+
+#: src/app/router.tsx
+msgid "Prüfe die Verbindung und versuche es erneut."
+msgstr "Prüfe die Verbindung und versuche es erneut."
+
+#: src/pages/placeholders.tsx
+msgid "Seite nicht gefunden"
+msgstr "Seite nicht gefunden"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Seite verlassen? Das Token wird danach nicht mehr angezeigt."
+msgstr "Seite verlassen? Das Token wird danach nicht mehr angezeigt."
+
+#: src/shell/Sidebar.tsx
+msgid "Server nicht erreichbar"
+msgstr "Server nicht erreichbar"
+
+#: src/shell/ThemeSwitch.tsx
+msgid "Systemdesign"
+msgstr "Systemdesign"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Token kopieren"
+msgstr "Token kopieren"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Token verloren? Auf dem Server legt <0>bambubridge admin create-key</0> ein neues an."
+msgstr "Token verloren? Auf dem Server legt <0>bambubridge admin create-key</0> ein neues an."
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Trotzdem verlassen"
+msgstr "Trotzdem verlassen"
+
+#: src/pages/placeholders.tsx
+#: src/shell/nav.tsx
+msgid "Übersicht"
+msgstr "Übersicht"
+
+#: src/shell/Sidebar.tsx
+msgid "Verbinde …"
+msgstr "Verbinde …"
+
+#: src/shell/Sidebar.tsx
+msgid "Version {version}"
+msgstr "Version {version}"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Weiter zur Oberfläche"
+msgstr "Weiter zur Oberfläche"
+
+#: src/shell/BootstrapKeyCreated.tsx
+#: src/shell/SignIn.tsx
+msgid "Zu viele Versuche. Warte eine Minute und versuche es erneut."
+msgstr "Zu viele Versuche. Warte eine Minute und versuche es erneut."
+
+#: src/shell/AppShell.tsx
+msgid "Zum Inhalt springen"
+msgstr "Zum Inhalt springen"
+
+#: src/pages/placeholders.tsx
+msgid "Zur Übersicht"
+msgstr "Zur Übersicht"
+
+#: src/shell/BootstrapKeyCreated.tsx
+msgid "Zurück zur Anmeldung"
+msgstr "Zurück zur Anmeldung"

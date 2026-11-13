@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+# Compiled message catalogs (lingui compile) and icons generated from docs/brand at build time.
+src/i18n/locales/*/messages.ts
+public/favicon.ico
+public/favicon.svg
+public/icons/

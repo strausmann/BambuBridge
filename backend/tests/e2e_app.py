@@ -1,0 +1,213 @@
+"""The app the browser tests (Playwright, ``frontend/e2e``) run against.
+
+``uvicorn tests.e2e_app:app`` serves the real FastAPI app and the built web UI on a
+throw-away PostgreSQL database. Nothing is faked: sign-in, sessions, CSRF and bootstrap
+are the production code paths.
+
+Environment:
+
+- ``BAMBUBRIDGE_TEST_DATABASE_URL``: the PostgreSQL server of the test suite (see
+  ``tests/conftest.py``). The module creates the database ``bb_e2e_<port>`` on it, migrated
+  to head, and drops a leftover of the same name first.
+- ``E2E_PORT``: the port uvicorn listens on (default 8765); it forms the public URL
+  ``http://127.0.0.1:<port>``, which the sign-in checks ``Origin`` against.
+- ``E2E_WEB_DIST_DIR``: the built web UI (default ``../frontend/dist``).
+
+- ``E2E_BOOTSTRAP_KEY``: the bootstrap key of this run. The Playwright configuration makes a
+  random one per run and hands the same value to the tests. Without it the server makes its
+  own, which nobody else knows.
+
+One control path exists only here: ``POST /__e2e/reset`` empties every table and forgets
+the rate-limit counters, so each browser test starts from a fresh install (bootstrap open).
+
+The server is a tool on a developer's machine, and it is built so that a web page open in a
+browser on that machine cannot use it:
+
+- It refuses to start when uvicorn is told to listen on anything but the loopback interface,
+  and it refuses every request that did not arrive on a loopback address.
+- It answers only for the ``Host`` ``127.0.0.1:<port>`` or ``localhost:<port>``. A page that
+  points its own host name at 127.0.0.1 (DNS rebinding) sends its own name and is refused.
+- The reset path needs the header ``X-BambuBridge-E2E: reset``. A page of another origin
+  cannot send a custom header without a preflight, which the server does not grant.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import ipaddress
+import os
+import secrets
+import sys
+import threading
+from collections.abc import Sequence
+from functools import lru_cache
+from pathlib import Path
+
+from alembic import command
+from fastapi import FastAPI
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.routing import Route
+from starlette.types import ASGIApp, Receive, Scope, Send
+
+from app.auth.rate_limit import SlidingWindowRateLimiter
+from app.config import Settings
+from app.main import create_app
+from app.migrations import make_alembic_config
+from tests.db_support import admin_url, truncate_all, url_for_database
+
+RESET_PATH = "/__e2e/reset"
+RESET_HEADER = "X-BambuBridge-E2E"
+RESET_HEADER_VALUE = "reset"
+DEFAULT_PORT = 8765
+LOOPBACK_NAMES = ("127.0.0.1", "localhost")
+_LIMITERS = (
+    "rate_limiter",
+    "failed_auth_limiter",
+    "failed_auth_client_limiter",
+    "sign_in_limiter",
+    "failed_bootstrap_limiter",
+)
+
+
+def e2e_settings(database_url: str, port: int, bootstrap_key: str) -> Settings:
+    """Settings of the server under test: fake key material, the loopback public URL."""
+    key = base64.urlsafe_b64encode(b"e2e-secret-key-0123456789abcdef!").decode()
+    return Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        database_url=database_url,  # type: ignore[arg-type]
+        secret_key=key,  # type: ignore[arg-type]
+        public_url=f"http://127.0.0.1:{port}",  # type: ignore[arg-type]
+        bootstrap_admin_key=bootstrap_key,  # type: ignore[arg-type]
+    )
+
+
+def is_loopback(host: str) -> bool:
+    """True for ``localhost`` and for addresses of the loopback interface (127.0.0.0/8, ::1)."""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def refuse_non_loopback_bind(argv: Sequence[str]) -> None:
+    """Stop when the uvicorn command line names a host other than the loopback interface."""
+    host = "127.0.0.1"  # uvicorn's default
+    for index, arg in enumerate(argv):
+        if arg == "--host" and index + 1 < len(argv):
+            host = argv[index + 1]
+        elif arg.startswith("--host="):
+            host = arg.removeprefix("--host=")
+    if not is_loopback(host):
+        raise RuntimeError(
+            f"tests.e2e_app must only listen on the loopback interface, not on {host!r}: "
+            "it has a path that empties the database"
+        )
+
+
+class LoopbackOnly:
+    """Refuses requests that did not arrive on a loopback address or name another host.
+
+    A pure ASGI middleware around the whole app, the web UI included.
+    """
+
+    def __init__(self, app: ASGIApp, port: int) -> None:
+        self.app = app
+        self.hosts = frozenset(f"{name}:{port}".encode() for name in LOOPBACK_NAMES)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        server = scope.get("server")
+        named = [value for key, value in scope["headers"] if key == b"host"]
+        arrived_on_loopback = server is None or is_loopback(str(server[0]))
+        if not arrived_on_loopback or len(named) != 1 or named[0].lower() not in self.hosts:
+            refused = Response("This test server answers on the loopback interface only.\n", 421)
+            await refused(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
+async def _reset(request: Request) -> Response:
+    """Back to a fresh install: empty tables, no rate-limit history."""
+    if request.headers.get(RESET_HEADER) != RESET_HEADER_VALUE:
+        return Response(status_code=403)
+    app: FastAPI = request.app
+    await truncate_all(app.state.engine)
+    for name in _LIMITERS:
+        setattr(app.state, name, SlidingWindowRateLimiter())
+    return Response(status_code=204)
+
+
+def build_app(
+    database_url: str, port: int, web_dist_dir: Path | None, bootstrap_key: str | None = None
+) -> FastAPI:
+    """The production app on ``database_url`` plus the reset path and the loopback guard.
+
+    Without ``bootstrap_key`` a random one is made; it is kept on ``app.state.e2e_bootstrap_key``.
+    """
+    key = bootstrap_key or secrets.token_urlsafe(32)
+    app = create_app(e2e_settings(database_url, port, key), web_dist_dir=web_dist_dir)
+    app.state.e2e_bootstrap_key = key
+    # First in the table: the web UI's catch-all route would answer the path otherwise.
+    app.router.routes.insert(0, Route(RESET_PATH, _reset, methods=["POST"]))
+    app.add_middleware(LoopbackOnly, port=port)
+    return app
+
+
+async def _recreate_database(name: str) -> None:
+    admin = create_async_engine(admin_url(), isolation_level="AUTOCOMMIT")
+    try:
+        async with admin.connect() as conn:
+            await conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+            await conn.execute(text(f'CREATE DATABASE "{name}"'))
+    finally:
+        await admin.dispose()
+
+
+def prepare_database(name: str) -> str:
+    """Create ``name`` empty, migrate it to head and return its URL."""
+    url = url_for_database(admin_url(), name)
+
+    def work() -> None:
+        asyncio.run(_recreate_database(name))
+        command.upgrade(make_alembic_config(url), "head")
+
+    # uvicorn imports this module inside its running event loop; the database work needs
+    # loops of its own, so it runs on a separate thread.
+    failure: list[BaseException] = []
+
+    def guarded() -> None:
+        try:
+            work()
+        except BaseException as exc:  # re-raised on the calling thread below
+            failure.append(exc)
+
+    thread = threading.Thread(target=guarded, name="e2e-database")
+    thread.start()
+    thread.join()
+    if failure:
+        raise failure[0]
+    return url
+
+
+@lru_cache
+def _default_app() -> FastAPI:
+    refuse_non_loopback_bind(sys.argv)
+    port = int(os.environ.get("E2E_PORT", str(DEFAULT_PORT)))
+    dist = Path(os.environ.get("E2E_WEB_DIST_DIR", "../frontend/dist"))
+    key = os.environ.get("E2E_BOOTSTRAP_KEY") or None
+    return build_app(prepare_database(f"bb_e2e_{port}"), port, dist, key)
+
+
+def __getattr__(name: str) -> FastAPI:
+    """Build ``tests.e2e_app:app`` for uvicorn on first use, not at import by pytest."""
+    if name == "app":
+        return _default_app()
+    raise AttributeError(name)

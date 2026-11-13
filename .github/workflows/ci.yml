@@ -64,3 +64,94 @@ jobs:
 
       - name: Coverage gate for auth and security code (at least 90 %)
         run: uv run coverage report --include='app/auth/*,app/security/*' --fail-under=90
+
+  web:
+    name: web
+    runs-on: ubuntu-24.04
+    # Two browsers and a real backend; a hung browser or server must not hold a runner for hours.
+    timeout-minutes: 30
+    services:
+      # The browser tests run against the real backend (backend/tests/e2e_app.py).
+      postgres:
+        image: postgres:18.6-trixie
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      BAMBUBRIDGE_TEST_DATABASE_URL: postgresql+asyncpg://postgres:test@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: frontend/package.json
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      # The backend environment exports the OpenAPI document ("API types up to date") and
+      # serves the app for the browser tests.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          python-version: "3.14.10"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit tests with coverage (API types must be up to date)
+        env:
+          REQUIRE_API_EXPORT: "1"
+        run: pnpm test:coverage
+
+      - name: Build
+        run: pnpm build
+
+      - name: Build test (no external URLs, no inline script, CSP style hashes)
+        run: pnpm build-test
+
+      - name: Install browsers
+        run: pnpm exec playwright install --with-deps chromium webkit
+
+      - name: Browser tests (Chromium and WebKit)
+        run: pnpm e2e
+
+      - name: Layout harness
+        run: pnpm e2e:harness
+
+      - name: Upload the browser test report
+        if: ${{ !cancelled() && failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          retention-days: 7
