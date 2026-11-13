@@ -441,11 +441,11 @@ async def test_short_secret_is_refused(admin_client: httpx.AsyncClient):
 
 
 async def test_huge_integer_is_422_not_500(admin_client: httpx.AsyncClient):
-    # Built by hand: json.dumps would refuse nothing, but the number must reach the server
-    # as JSON text of 401 digits.
-    body = {"kind": "integration", "type_name": "demo", "name": "big", "config": {"token": TOKEN}}
-    huge = "1" + "0" * 400
-    content = json.dumps(body).replace('"token"', f'"interval_seconds": {huge}, "token"')
+    # 1 followed by 400 zeros, as JSON text (too large for a float).
+    config = {"token": TOKEN, "interval_seconds": 10**400}
+    content = json.dumps(
+        {"kind": "integration", "type_name": "demo", "name": "big", "config": config}
+    )
     r = await admin_client.post(
         PROVIDERS_URL, content=content, headers={"content-type": "application/json"}
     )

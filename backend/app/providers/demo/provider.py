@@ -4,7 +4,8 @@ Every ``interval_seconds`` it emits ``integration.demo.tick`` (payload ``{label,
 ``dedup_key`` = the sequence) and records a pseudo call ``GET demo://tick?token=<token>``
 in the communication log. The pseudo peer echoes the token in its answer under a name no
 masking rule knows, so the log shows masking by name (the query) and by value (the answer)
-end to end. The action ``emit_now`` emits one tick at once (optionally with another label).
+end to end. The action ``emit_now`` emits one tick at once (optionally with another label)
+and returns only its ``sequence``.
 
 It is shipped in the image; no instance is created by default.
 
@@ -147,8 +148,10 @@ class DemoProvider:
         name: str,  # noqa: ARG002  # one action only; the manager checks the name
         params: dict[str, Any],
     ) -> dict[str, Any]:
-        # The manager checks the name and the parameters against ``actions``.
-        return await self._tick(params.get("label"))
+        # The manager checks the name and the parameters against ``actions``. The result
+        # never echoes the parameters (see ``Provider.run_action``).
+        payload = await self._tick(params.get("label"))
+        return {"sequence": payload["sequence"]}
 
     async def tick_once(self) -> dict[str, Any] | None:
         """One scheduled tick; a failure is reported in the status, not raised."""

@@ -122,7 +122,12 @@ class Provider(Protocol):
         """Try the given, possibly unsaved values; never keeps anything."""
 
     async def run_action(self, name: str, params: dict[str, Any]) -> dict[str, Any]:
-        """Run a declared action with checked parameters; return a JSON object."""
+        """Run a declared action with checked parameters; return a JSON object.
+
+        The result must not echo caller input. The manager masks it with the instance's
+        secrets, so an echoed parameter would tell a caller with scope ``operate`` whether a
+        guess equals a stored secret (it comes back as ``***``).
+        """
 
     def status(self) -> ProviderStatus:
         """The current state, without I/O."""

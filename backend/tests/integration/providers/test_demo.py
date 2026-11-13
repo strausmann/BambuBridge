@@ -110,8 +110,9 @@ async def test_emit_now_uses_the_given_label_and_a_rising_sequence(engine: Async
     assert events[0]["schema_version"] == 1
     assert events[0]["dedup_key"] == str(events[0]["payload"]["sequence"])
     assert events[1]["payload"]["sequence"] > events[0]["payload"]["sequence"]
-    assert first["sequence"] == events[0]["payload"]["sequence"]
-    assert second["label"] == "given"
+    # The result never echoes caller input (it would be a guess oracle against masking).
+    assert first == {"sequence": events[0]["payload"]["sequence"]}
+    assert second == {"sequence": events[1]["payload"]["sequence"]}
 
 
 async def test_sequence_keeps_rising_across_a_restart(engine: AsyncEngine):
