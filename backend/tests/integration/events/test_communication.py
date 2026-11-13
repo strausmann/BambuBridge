@@ -9,15 +9,19 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.db.engine import make_engine
+from app.db.session import make_session_factory
 from app.events import communication
 from app.events.communication import (
     MAX_BODY_BYTES,
+    MAX_HEADERS_INPUT,
     MAX_MASK_INPUT,
     CommunicationRecorder,
     Message,
     truncate_utf8,
 )
 from app.models.communication_entry import CommunicationEntry
+from tests.conftest import DEAD_DATABASE_URL
 
 INSTANCE = uuid.UUID("00000000-0000-4000-8000-0000000000c1")
 # Obviously fake values, readable text only.
@@ -363,4 +367,134 @@ async def test_record_logs_nothing(db_session: AsyncSession, caplog: pytest.LogC
 
 def test_the_stored_sizes():
     assert communication.MAX_BODY_BYTES == 8192
-    assert communication.MAX_MASK_INPUT > 10 * communication.MAX_BODY_BYTES
+    assert communication.MAX_MASK_INPUT == 65_536
+    assert communication.MAX_HEADERS_INPUT == 65_536
+    assert communication.MAX_MASK_INPUT > 4 * communication.MAX_BODY_BYTES
+
+
+# --- fix round 1: header input, header bytes, record_isolated ------------------------------
+
+
+async def test_the_header_input_of_one_side_is_bounded(db_session: AsyncSession):
+    import time
+
+    huge = [(f"X-H{i}", f"v{i}-" + "y" * 60_000) for i in range(100)]
+    started = time.monotonic()
+
+    entry = await _record(db_session, request=Message(headers=huge), known_secrets=[SECRET])
+
+    assert time.monotonic() - started < 10
+    # 65,536 characters in all: the first header whole, the second up to what is left.
+    assert list(entry.request_headers) == ["X-H0", "X-H1"]
+    assert entry.request_headers["X-H1"].startswith("v1-")
+    assert entry.truncated is True
+
+
+async def test_a_header_cut_at_the_bound_never_keeps_part_of_a_known_secret(
+    db_session: AsyncSession,
+):
+    first = "a" * (MAX_HEADERS_INPUT - 4 - 10)  # "X-A" + value; 10 characters left after it
+    entry = await _record(
+        db_session,
+        request=Message(headers=[("X-A", first), ("X-B", SECRET + " tail")]),
+        known_secrets=[SECRET],
+    )
+
+    assert "fake-acc" not in json.dumps(entry.request_headers)
+    assert entry.truncated is True
+
+
+async def test_header_bytes_are_read_as_utf_8_when_they_are(db_session: AsyncSession):
+    secret = "kn\u00f6wn-v\u00e4lue-3"
+    entry = await _record(
+        db_session,
+        request=Message(
+            headers=[(b"X-Debug", f"echo {secret}".encode()), (b"X-Name", "caf\u00e9".encode())]  # type: ignore[list-item]
+        ),
+        known_secrets=[secret],
+    )
+
+    assert entry.request_headers == {"X-Debug": "echo ***", "X-Name": "caf\u00e9"}
+
+
+def _arguments(**overrides: Any) -> dict[str, Any]:
+    arguments: dict[str, Any] = {
+        "instance_id": INSTANCE,
+        "method": "GET",
+        "target": f"https://printer.example.com/status?token={SECRET}",
+        "status": 200,
+        "duration_ms": 12,
+        "request": Message(headers={"Authorization": f"Bearer {SECRET}"}),
+        "response": Message(body=f"echo {SECRET}"),
+        "known_secrets": [SECRET],
+    }
+    arguments.update(overrides)
+    return arguments
+
+
+async def test_record_isolated_commits_an_entry_of_its_own(
+    sessions: async_sessionmaker[AsyncSession], db_session: AsyncSession
+):
+    # The caller is in the middle of other work: that transaction is not touched.
+    await db_session.execute(select(1))
+
+    assert await recorder.record_isolated(sessions, **_arguments()) is True
+
+    assert await _count(sessions) == 1
+    async with sessions() as session:
+        entry = (await session.scalars(select(CommunicationEntry))).one()
+    assert SECRET not in json.dumps(
+        [entry.target, entry.request_headers, entry.response_body], ensure_ascii=False
+    )
+    assert db_session.in_transaction()
+
+
+async def test_record_isolated_swallows_a_database_error_and_logs_its_class_only(
+    caplog: pytest.LogCaptureFixture,
+):
+    engine = make_engine(DEAD_DATABASE_URL)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="app.events.communication"):
+            ok = await recorder.record_isolated(make_session_factory(engine), **_arguments())
+    finally:
+        await engine.dispose()
+
+    assert ok is False
+    messages = [r.getMessage() for r in caplog.records if r.name == "app.events.communication"]
+    assert len(messages) == 1
+    assert messages[0].startswith("communication log entry not recorded (")
+    assert not any(part in messages[0] for part in (SECRET, "127.0.0.1", "://", "printer"))
+
+
+async def test_record_isolated_swallows_a_missing_partition(
+    sessions: async_sessionmaker[AsyncSession], caplog: pytest.LogCaptureFixture
+):
+    from sqlalchemy import text
+
+    async with sessions() as session:
+        names = (
+            await session.scalars(
+                text(
+                    "SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid "
+                    "WHERE i.inhparent = 'communication_log'::regclass"
+                )
+            )
+        ).all()
+        for name in names:
+            await session.execute(text(f'DROP TABLE "{name}"'))
+        await session.commit()
+
+    with caplog.at_level(logging.WARNING, logger="app.events.communication"):
+        assert await recorder.record_isolated(sessions, **_arguments()) is False
+
+    assert [r.getMessage() for r in caplog.records] == [
+        "communication log entry not recorded (IntegrityError, SQLSTATE 23514)"
+    ]
+
+
+async def test_record_isolated_still_refuses_wrong_arguments(
+    sessions: async_sessionmaker[AsyncSession],
+):
+    with pytest.raises(ValueError, match="duration_ms"):
+        await recorder.record_isolated(sessions, **_arguments(duration_ms=-1))
+    assert await _count(sessions) == 0

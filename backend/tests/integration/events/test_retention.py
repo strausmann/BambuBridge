@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
@@ -17,7 +18,13 @@ from app.db.session import make_session_factory
 from app.events import partitions, retention
 from app.events.daily import next_run_at
 from app.events.partitions import ensure_partitions
-from app.events.retention import RetentionMaintenance, RetentionResult, run_retention
+from app.events.retention import (
+    STARTUP_DELAY_SECONDS,
+    RetentionMaintenance,
+    RetentionResult,
+    may_drop,
+    run_retention,
+)
 from app.models.communication_entry import CommunicationEntry
 from app.models.event import Event
 from app.security.secret_box import secret_box_from_key
@@ -36,6 +43,26 @@ SECOND = timedelta(seconds=1)
 
 def at(month: int, day: int, hour: int = 0, minute: int = 0, second: int = 0) -> datetime:
     return datetime(2045, month, day, hour, minute, second, tzinfo=UTC)
+
+
+REAL_DATABASE_NOW = retention._database_now
+
+
+class DatabaseClock:
+    """Stands in for the database clock, which a test cannot move to 2045."""
+
+    def __init__(self) -> None:
+        self.source: Callable[[], datetime] = lambda: NOW
+
+    async def now(self, session: AsyncSession) -> datetime:
+        return self.source()
+
+
+@pytest.fixture(autouse=True)
+def database_clock(monkeypatch: pytest.MonkeyPatch) -> DatabaseClock:
+    clock = DatabaseClock()
+    monkeypatch.setattr(retention, "_database_now", clock.now)
+    return clock
 
 
 async def _children(sessions: async_sessionmaker[AsyncSession], parent: str) -> list[str]:
@@ -125,11 +152,24 @@ def _log(*months: int) -> list[str]:
     return [f"communication_log_y2045m{month:02d}" for month in months]
 
 
+_CLOCK: list[DatabaseClock] = []
+
+
 async def _run(
     sessions: async_sessionmaker[AsyncSession], store: SettingsStore, now: datetime = NOW
 ) -> RetentionResult:
+    """One run at ``now``, with the database clock showing the same moment."""
+    if _CLOCK:
+        _CLOCK[0].source = lambda: now
     async with sessions() as session:
         return await run_retention(session, now, store)
+
+
+@pytest.fixture(autouse=True)
+def _clock_for_run(database_clock: DatabaseClock) -> Iterator[None]:
+    _CLOCK[:] = [database_clock]
+    yield
+    _CLOCK.clear()
 
 
 async def test_retention_drops_whole_partitions_and_deletes_partial(
@@ -306,7 +346,8 @@ async def test_retention_prunes_deliveries_but_never_one_under_a_live_lease(
 
     result = await _run(sessions, store)
 
-    assert result.deleted_deliveries == 4
+    # Finished ones and unfinished ones nobody holds are counted apart.
+    assert (result.deleted_deliveries, result.deleted_pending_deliveries) == (2, 2)
     assert await _subscribers(sessions) == ["new_done", "new_pending", "old_leased"]
 
     # Once the worker is done (or its lease has run out) a later run removes it.
@@ -319,7 +360,7 @@ async def test_retention_prunes_deliveries_but_never_one_under_a_live_lease(
             )
         )
         await session.commit()
-    assert (await _run(sessions, store)).deleted_deliveries == 1
+    assert (await _run(sessions, store)).deleted_pending_deliveries == 1
     assert await _subscribers(sessions) == ["new_done", "new_pending"]
 
 
@@ -433,6 +474,7 @@ async def test_job_runs_at_start_and_again_at_0015_utc(
     sessions: async_sessionmaker[AsyncSession],
     store: SettingsStore,
     monkeypatch: pytest.MonkeyPatch,
+    database_clock: DatabaseClock,
 ):
     runs: list[datetime] = []
     real = retention.run_retention
@@ -444,18 +486,20 @@ async def test_job_runs_at_start_and_again_at_0015_utc(
         return await real(session, now, settings)
 
     monkeypatch.setattr(retention, "run_retention", recording)
-    time = FakeTime(at(6, 20, 23, 50), max_sleeps=2)
+    time = FakeTime(at(6, 20, 23, 50), max_sleeps=3)
+    database_clock.source = time.clock
     job = RetentionMaintenance(sessions, store, clock=time.clock, sleep=time.sleep)
 
     await job.start()
     for _ in range(500):
-        if len(time.sleeps) >= 2:  # the second sleep starts once the second run is through
+        if len(time.sleeps) >= 3:  # the third sleep starts once the second run is through
             break
         await asyncio.sleep(0.01)
     await job.stop()
 
-    assert runs[:2] == [at(6, 20, 23, 50), at(6, 21, 0, 15)]
-    assert time.sleeps[0] == 1500.0
+    # 15 minutes after the start, then at 00:15.
+    assert runs[:2] == [at(6, 21, 0, 5), at(6, 21, 0, 15)]
+    assert time.sleeps[:2] == [STARTUP_DELAY_SECONDS, 600.0]
     assert await _children(sessions, "events") == _events(3, 4, 5, 6)
 
 
@@ -476,7 +520,7 @@ async def test_job_start_does_not_wait_for_the_first_run_and_stop_cancels_it(
         raise AssertionError("not reached")
 
     monkeypatch.setattr(retention, "run_retention", hanging)
-    job = RetentionMaintenance(sessions, store)
+    job = RetentionMaintenance(sessions, store, startup_delay_seconds=0)
 
     with caplog.at_level(logging.DEBUG, logger="app.events.retention"):
         await asyncio.wait_for(job.start(), timeout=1)
@@ -503,24 +547,37 @@ async def test_job_logs_names_and_counts_only(
         await _add_delivery(
             session, subscriber="old_done", status="done", event_occurred_at=at(1, 1)
         )
+        for name in ("old_pending_1", "old_pending_2"):
+            await _add_delivery(
+                session, subscriber=name, status="pending", event_occurred_at=at(1, 1)
+            )
         await session.commit()
     job = RetentionMaintenance(sessions, store, clock=lambda: NOW)
+    cutoffs = (
+        "retention cut-offs: events before 2045-03-22T12:00:00+00:00, "
+        "communication log before 2045-05-21T12:00:00+00:00"
+    )
 
     with caplog.at_level(logging.INFO, logger="app.events.retention"):
         assert await job.run_once() is True
-        assert await job.run_once() is True  # nothing left: no further line
+        assert await job.run_once() is True  # nothing left: only the cut-offs again
 
-    assert [r.getMessage() for r in caplog.records] == [
-        "dropped partitions: " + ", ".join([*_events(1, 2), *_log(1, 2, 3, 4)]),
-        "deleted 1 rows and 1 deliveries past retention",
+    assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
+        ("INFO", cutoffs),
+        ("INFO", "dropped partitions: " + ", ".join([*_events(1, 2), *_log(1, 2, 3, 4)])),
+        ("INFO", "deleted 1 rows and 1 finished deliveries past retention"),
+        ("WARNING", "deleted 2 pending deliveries whose event is past retention"),
+        ("INFO", cutoffs),
     ]
 
 
 async def test_job_logs_a_failure_by_type_and_retries(
-    store: SettingsStore, caplog: pytest.LogCaptureFixture
+    store: SettingsStore, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ):
     engine = make_engine(DEAD_DATABASE_URL)
-    time = FakeTime(at(6, 20, 23, 50), max_sleeps=2)
+    time = FakeTime(at(6, 20, 23, 50), max_sleeps=3)
+    # The real database clock: reading it is what fails.
+    monkeypatch.setattr(retention, "_database_now", REAL_DATABASE_NOW)
     job = RetentionMaintenance(
         make_session_factory(engine), store, clock=time.clock, sleep=time.sleep, retry_seconds=7.0
     )
@@ -528,14 +585,15 @@ async def test_job_logs_a_failure_by_type_and_retries(
         with caplog.at_level(logging.ERROR, logger="app.events.retention"):
             await job.start()
             for _ in range(200):
-                if len(time.sleeps) >= 2:
+                if len(time.sleeps) >= 3:
                     break
                 await asyncio.sleep(0.01)
             await job.stop()
     finally:
         await engine.dispose()
 
-    assert time.sleeps == [7.0, 7.0]
+    # Not a lock timeout: retried after the fixed time, after the delay at startup.
+    assert time.sleeps == [STARTUP_DELAY_SECONDS, 7.0, 7.0]
     messages = [r.getMessage() for r in caplog.records]
     assert messages
     assert all(m.startswith("retention failed (") for m in messages)
@@ -555,7 +613,7 @@ async def test_job_reports_a_lock_timeout_with_its_sqlstate(
 
     with caplog.at_level(logging.ERROR, logger="app.events.retention"):
         assert await asyncio.wait_for(job.run_once(), timeout=5) is False
-    assert [r.getMessage() for r in caplog.records] == [
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == [
         "retention failed (DBAPIError, SQLSTATE 55P03)"
     ]
 
@@ -574,3 +632,129 @@ async def test_app_runs_retention_in_its_lifespan(app: FastAPI):
 
     assert task.done()
     assert app.state.retention_maintenance is None
+
+
+# --- fix round 1: start delay, logs, back-off, the drop guard ------------------------------
+
+
+def test_the_first_run_waits_15_minutes_after_startup():
+    assert STARTUP_DELAY_SECONDS == 900.0
+
+
+async def test_cutoffs_are_logged_before_anything_is_deleted(
+    sessions: async_sessionmaker[AsyncSession],
+    store: SettingsStore,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    seen: list[list[str]] = []
+    real = retention._delete_rows
+
+    async def deleting(*args: object) -> object:
+        seen.append([r.getMessage() for r in caplog.records])
+        return await real(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(retention, "_delete_rows", deleting)
+    with caplog.at_level(logging.INFO, logger="app.events.retention"):
+        await _run(sessions, store)
+
+    assert len(seen) == 1
+    assert seen[0] == [
+        "retention cut-offs: events before 2045-03-22T12:00:00+00:00, "
+        "communication log before 2045-05-21T12:00:00+00:00"
+    ]
+
+
+async def test_the_cutoffs_come_from_the_database_clock(
+    sessions: async_sessionmaker[AsyncSession],
+    store: SettingsStore,
+    database_clock: DatabaseClock,
+):
+    await _add_events(sessions, EVENTS_CUTOFF + 60 * SECOND)
+    database_clock.source = lambda: NOW
+    async with sessions() as session:
+        # The application clock runs two minutes ahead (within the allowed difference).
+        result = await run_retention(session, NOW + 120 * SECOND, store)
+
+    assert result.deleted_rows == 0
+    assert await _event_times(sessions) == [EVENTS_CUTOFF + 60 * SECOND]
+
+
+@pytest.mark.parametrize("ahead", [timedelta(days=60), timedelta(days=160), -timedelta(hours=1)])
+async def test_retention_is_skipped_when_the_clocks_differ(
+    ahead: timedelta,
+    sessions: async_sessionmaker[AsyncSession],
+    store: SettingsStore,
+    database_clock: DatabaseClock,
+    caplog: pytest.LogCaptureFixture,
+):
+    await _add_events(sessions, at(1, 15))
+    database_clock.source = lambda: NOW
+
+    with caplog.at_level(logging.INFO, logger="app.events.retention"):
+        async with sessions() as session:
+            result = await run_retention(session, NOW + ahead, store)
+
+    assert result == RetentionResult(skipped=True)
+    assert await _children(sessions, "events") == _events(1, 2, 3, 4, 5, 6)
+    assert await _children(sessions, "communication_log") == _log(1, 2, 3, 4, 5, 6)
+    seconds = int(abs(ahead).total_seconds())
+    assert [r.getMessage() for r in caplog.records] == [
+        f"retention skipped: application and database clocks differ by {seconds} s"
+    ]
+
+
+def test_a_partition_is_dropped_only_when_it_ends_before_the_cutoff_and_the_database_now():
+    end, cutoff, now = at(4, 1), at(4, 1), at(4, 1)
+    assert may_drop(end, cutoff=cutoff, database_now=now)
+    assert not may_drop(end, cutoff=cutoff - SECOND, database_now=now)
+    # A cut-off after "now" (a period of zero or less) must not drop the current month.
+    assert not may_drop(at(5, 1), cutoff=at(6, 1), database_now=at(4, 15))
+    assert not may_drop(at(4, 16), cutoff=at(6, 1), database_now=at(4, 15))
+
+
+def _lock_timeout() -> DBAPIError:
+    class OrigError(Exception):
+        sqlstate = "55P03"
+
+    return DBAPIError("DROP TABLE x", {}, OrigError())
+
+
+async def test_job_backs_off_after_a_lock_timeout(
+    sessions: async_sessionmaker[AsyncSession],
+    store: SettingsStore,
+    monkeypatch: pytest.MonkeyPatch,
+    database_clock: DatabaseClock,
+    caplog: pytest.LogCaptureFixture,
+):
+    failures = [_lock_timeout() for _ in range(4)]
+    real = retention.run_retention
+
+    async def flaky(
+        session: AsyncSession, now: datetime, settings: SettingsStore
+    ) -> RetentionResult:
+        if failures:
+            raise failures.pop()
+        return await real(session, now, settings)
+
+    monkeypatch.setattr(retention, "run_retention", flaky)
+    time = FakeTime(at(6, 20, 23, 0), max_sleeps=5)
+    database_clock.source = time.clock
+    job = RetentionMaintenance(
+        sessions, store, clock=time.clock, sleep=time.sleep, startup_delay_seconds=0
+    )
+
+    with caplog.at_level(logging.ERROR, logger="app.events.retention"):
+        await job.start()
+        for _ in range(500):
+            if len(time.sleeps) >= 5:
+                break
+            await asyncio.sleep(0.01)
+        await job.stop()
+
+    # 1, 5 and 15 minutes, then 15 minutes again; after the success the daily schedule.
+    assert time.sleeps[:4] == [60.0, 300.0, 900.0, 900.0]
+    assert time.sleeps[4] < 3600
+    assert [r.getMessage() for r in caplog.records].count(
+        "retention failed (DBAPIError, SQLSTATE 55P03)"
+    ) == 4

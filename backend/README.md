@@ -171,60 +171,87 @@ was committed. `emit` does not commit; the caller does.
 ## Communication log
 
 What a provider instance sends and receives is written to `communication_log` by
-`CommunicationRecorder.record` (`app/events/communication.py`), and only by it. It adds one
-row to the caller's transaction and does not commit. A database error (for example a missing
-partition) aborts that transaction, so record in a short transaction of its own.
+`CommunicationRecorder` (`app/events/communication.py`), and only by it. Provider code uses
+`record_isolated(session_factory, ...)`: it writes the row in a short transaction of its own
+and swallows a database error (for example a missing partition), with one warning that
+names the error class and SQLSTATE only, so a failed log entry never fails the work it
+describes. `record(session, ...)` adds the row to the caller's transaction instead and does
+not commit; a database error then aborts that transaction. Use it only where the entry has
+to be atomic with other work.
 
 Every stored part (address, headers, both bodies, the error text) goes through three steps,
 in this order:
 
 1. **Make it storable.** NUL characters are removed and surrogate code points replaced by
    U+FFFD; nothing a peer sends makes the log fail. A body given as bytes that is not UTF-8
-   text, or contains a NUL byte, is stored as `<binary N bytes>`.
+   text, or contains a NUL byte, is stored as `<binary N bytes>`. Header bytes are read as
+   UTF-8 when they are valid UTF-8, otherwise as ISO 8859-1.
 2. **Mask** (`app/security/masking.py`); `***` takes the place of
    - the value of a header, JSON field, query or form parameter named `authorization`,
      `cookie`, `set-cookie` or `x-bambubridge-key`, or whose name contains `token`,
      `secret`, `passw`, `pwd`, `key`, `auth` (not `author`), `cookie`, `credential`,
-     `session` or `signature`, in any case;
-   - JSON fields the provider schema marks with `"x-secret": true`
-     (`secret_paths_from_schema`), wherever a field path ends with the marked path;
-   - every occurrence of a known secret value of 8 characters or more, also percent-encoded,
-     as base64 of the whole value and JSON-escaped;
-   - the password in `scheme://user:password@host` and the credential after `Bearer` or
-     `Basic`.
+     `session`, `sessid`, `signature`, `access_code` (also `accessCode`, `access-code`),
+     `passcode`, `passphrase`, `pincode`, `totp`, `jwt`, `ticket`, `assertion`, `psk`,
+     `csrf`, `xsrf` or `samlresponse`, or has `pass`, `pw`, `pin`, `otp`, `sig` or `sid` as
+     a word of its own (`user_pass`, `userPW`, `pin_code`), in any case;
+   - every field named like the last segment of a path the provider schema marks with
+     `"x-secret": true` (`secret_paths_from_schema`), wherever it stands;
+   - every occurrence of a known secret value of 8 characters or more (surrounding white
+     space removed) in any spelling an encoder writes: each character as itself or escaped
+     (percent escapes in either case, `\uXXXX`, `\xNN`, `\/`, `+` for a space ...), the
+     Python `repr` spellings, and base64 or base64url, also inside a longer base64 value and
+     wrapped over several lines;
+   - the user information in `scheme://user:password@host` up to the last `@` (the whole of
+     it when there is no colon), and the credential after `Bearer` or `Basic`.
 
-   A JSON body is masked on its parsed values. Any other text is searched for
-   `"name": value` and `name=value` (quoted or bare) at every position, also inside the
-   quoted value of another name.
+   A JSON body is masked on its parsed values (after a byte order mark); an object that
+   repeats a name is rewritten with the repeats numbered (`name#2`), so no parser can pick
+   another value. Any other text is searched at every position for `"name": value` and
+   `'name': value`, `name=value` and `name = value` (quoted, or bare up to `&` or white
+   space), `name: value` (the rest of the line, as in `Authorization: Token x` or
+   `Cookie: a=1; sid=x`), `--name value`, and multipart form fields
+   (`Content-Disposition: form-data; name="password"`), also inside the quoted value of
+   another name; and once more in the percent-decoded text (decoded up to three times), which
+   is then the text stored if that finds anything.
 3. **Cut.** Each body is stored up to 8192 bytes of UTF-8 (never cut inside a character),
    the address up to 2048 characters, the error up to 2000, at most 100 headers with values
    up to 2048 characters. Any cut sets `truncated`.
 
 Masking comes before cutting: a secret across the 8192-byte limit would otherwise be stored
-as a fragment that no rule recognises. Only the first 262144 characters of a text are
-looked at; that first cut never goes through a known secret.
+as a fragment that no rule recognises. Only the first 65536 characters of a text are looked
+at, and 65536 characters of the headers of one side in all; that first cut never goes
+through a known secret.
 
 The limits of masking: it prefers hiding too much (a field called `monkey` is masked), it
 cannot find a secret that has neither a telling name, nor a schema mark, nor a known value,
 and it does not recognise a known value that was transformed in another way (hashed,
-base64 as part of a longer value, encoded twice). A provider has to pass all the secrets of
-its instance as `known_secrets`. `record` writes nothing to the application log.
+encrypted, escaped in two different ways at once). A provider has to pass all the secrets of
+its instance as `known_secrets` (strings or UTF-8 bytes; anything else is refused).
+`record` writes nothing to the application log.
 
 ## Retention
 
 Events are kept for `retention.events_days` (default 90), communication log entries for
 `retention.communication_days` (default 30); both are runtime settings (1 to 3650). The
-server applies them at startup and every day at 00:15 UTC, and reads the two values from
-the database for every run, so a change needs no restart.
+server applies them 15 minutes after startup and every day at 00:15 UTC, and reads the two
+values from the database for every run, so a change needs no restart. Each run logs its two
+cut-offs before it removes anything.
+
+The periods are counted back from the database clock. If the host clock differs from it by
+more than five minutes the run is skipped with a warning (`retention skipped: ...`): a host
+clock far ahead would otherwise delete what is current. A partition whose range holds or
+follows the database's present moment is never dropped.
 
 A run deletes the rows older than the period in the month the cut-off falls into and drops
 the monthly partitions that lie entirely before it. Outbox deliveries of events older than
 the period are deleted with them, except pending ones a worker holds under a lease that has
-not run out; those go with a later run. Dropping a partition needs the table exclusively for
-a moment: as for creating one, the server gives up after 3 seconds if a long transaction
-still uses the table, logs `retention failed (...)` and tries again a minute later. Rows
-that were already deleted stay deleted. Only partitions with the server's own names are
-dropped; a partition attached under another name is left alone.
+not run out; those go with a later run. Finished deliveries are counted in the info line,
+pending ones that were deleted get a warning of their own. Dropping a partition needs the
+table exclusively for a moment: as for creating one, the server gives up after 3 seconds if
+a long transaction still uses the table, logs `retention failed (... SQLSTATE 55P03)` and
+tries again after 1, 5 and then every 15 minutes; other failures are retried after a
+minute. Rows that were already deleted stay deleted. Only partitions with the server's own
+names are dropped; a partition attached under another name is left alone.
 
 A shorter period takes effect with the next run and cannot be undone: what is older is
 removed.

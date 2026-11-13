@@ -16,26 +16,34 @@ part of an exchange it works in this order:
 Masking before cutting matters: a secret that straddles the cut would otherwise be stored
 as a fragment that no rule recognises any more.
 
-To bound the work, at most ``MAX_MASK_INPUT`` characters of a text are masked. That first
-cut is made by :meth:`app.security.masking.Masker.safe_prefix`, which never cuts through a
-known secret.
+To bound the work, at most ``MAX_MASK_INPUT`` characters of a text are masked, and at most
+``MAX_HEADERS_INPUT`` characters of the headers of one side (names and values together;
+headers after that are left out). That first cut is made by
+:meth:`app.security.masking.Masker.safe_prefix`, which never cuts through a known secret.
 
 Arguments the caller controls (ids, numbers, direction, types) are checked instead, with a
 ``ValueError`` that names the argument and never a value, before a statement is sent.
 
-Nothing here logs, and nothing here commits.
+:meth:`CommunicationRecorder.record` neither logs nor commits: the entry joins the caller's
+transaction. :meth:`CommunicationRecorder.record_isolated` writes it in a short transaction
+of its own and swallows a database error (one log line, the error class and SQLSTATE only)
+- that is the one provider code uses, so that a failed log entry never fails the work it
+describes.
 """
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from sqlalchemy import func, insert
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.events.daily import describe_error
 from app.events.validation import make_storable
 from app.models.communication_entry import CommunicationEntry
 from app.security.masking import Masker
@@ -48,8 +56,11 @@ MAX_ERROR_LENGTH = 2000
 MAX_HEADERS = 100
 MAX_HEADER_NAME_LENGTH = 200
 MAX_HEADER_VALUE_LENGTH = 2048
-# How much of one text is looked at (masked) at all.
-MAX_MASK_INPUT = 262_144
+# How much of one text is looked at (masked) at all, and of all headers of one side.
+MAX_MASK_INPUT = 65_536
+MAX_HEADERS_INPUT = 65_536
+
+_log = logging.getLogger(__name__)
 
 DIRECTIONS = ("outbound", "inbound")
 # ``status`` and ``duration_ms`` are ``integer`` columns.
@@ -85,13 +96,13 @@ class _Exchange:
         self._masker = masker
         self.truncated = False
 
-    def _visible(self, text: str, *, complete: bool = True) -> str:
-        """The storable beginning of ``text`` that is masked at all."""
+    def _visible(self, text: str, *, complete: bool = True, limit: int = MAX_MASK_INPUT) -> str:
+        """The storable beginning of ``text`` that is masked at all (at most ``limit``)."""
         # A little more than the limit, so that a secret straddling it is seen whole.
-        window = MAX_MASK_INPUT + self._masker.longest_secret
+        window = limit + self._masker.longest_secret
         complete = complete and len(text) <= window
         prefix, cut = self._masker.safe_prefix(
-            make_storable(text[:window]), complete=complete, limit=MAX_MASK_INPUT
+            make_storable(text[:window]), complete=complete, limit=limit
         )
         self.truncated |= cut
         return prefix
@@ -113,11 +124,16 @@ class _Exchange:
         """Masked headers; a name that occurs more than once gets a list of its values."""
         pairs = headers.items() if isinstance(headers, Mapping) else headers
         collected: dict[str, list[str]] = {}
+        budget = MAX_HEADERS_INPUT
         for count, (name, value) in enumerate(pairs):
-            if count >= MAX_HEADERS:
+            if count >= MAX_HEADERS or budget <= 0:
                 self.truncated = True
                 break
-            collected.setdefault(self._visible(_text(name)), []).append(self._visible(_text(value)))
+            visible_name = self._visible(_text(name), limit=min(MAX_MASK_INPUT, budget))
+            budget -= len(visible_name)
+            visible_value = self._visible(_text(value), limit=max(0, min(MAX_MASK_INPUT, budget)))
+            budget -= len(visible_value)
+            collected.setdefault(visible_name, []).append(visible_value)
         masked = self._masker.value(
             {name: values[0] if len(values) == 1 else values for name, values in collected.items()}
         )
@@ -153,9 +169,13 @@ class _Exchange:
 
 
 def _text(value: object) -> str:
-    """Header names and values as text; bytes as the wire has them (ISO 8859-1)."""
+    """Header names and values as text; bytes as UTF-8 if they are, otherwise as the wire
+    has them (ISO 8859-1)."""
     if isinstance(value, bytes):
-        return value.decode("latin-1")
+        try:
+            return value.decode("utf-8")
+        except UnicodeDecodeError:
+            return value.decode("latin-1")
     return value if isinstance(value, str) else str(value)
 
 
@@ -207,8 +227,9 @@ class CommunicationRecorder:
 
         Raises ``ValueError`` for an argument of the wrong type or range before anything is
         sent to the database. A database error (for example no partition for the current
-        month) is raised as it comes and aborts the caller's transaction, so record in a
-        short transaction of its own rather than inside other work.
+        month) is raised as it comes and aborts the caller's transaction: use this only
+        when the entry has to be atomic with other work, and :meth:`record_isolated`
+        otherwise.
         """
         if not isinstance(instance_id, uuid.UUID):
             raise ValueError("instance_id must be a UUID")
@@ -250,3 +271,49 @@ class CommunicationRecorder:
         # Last: every part above may have set it.
         values["truncated"] = exchange.truncated
         await session.execute(insert(CommunicationEntry).values(**values))
+
+    async def record_isolated(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        *,
+        instance_id: uuid.UUID,
+        method: str,
+        target: str,
+        status: int | None,
+        duration_ms: int,
+        request: Message | None,
+        response: Message | None,
+        error: str | None = None,
+        direction: Literal["outbound", "inbound"] = "outbound",
+        secret_paths: Collection[str] = (),
+        known_secrets: Collection[str] = (),
+    ) -> bool:
+        """:meth:`record` in a short transaction of its own, committed at once.
+
+        **Provider code records with this** (Task 11): the log entry is a side note of the
+        work, and a database error must not fail that work. Such an error (no partition,
+        database away) is swallowed and logged once, by class and SQLSTATE, never with a
+        value; the result is then ``False``. An argument of the wrong kind still raises
+        ``ValueError``: that is a bug in the caller, not a state of the database.
+        Use :meth:`record` instead when the entry has to be atomic with other work.
+        """
+        try:
+            async with sessions() as session, session.begin():
+                await self.record(
+                    session,
+                    instance_id=instance_id,
+                    method=method,
+                    target=target,
+                    status=status,
+                    duration_ms=duration_ms,
+                    request=request,
+                    response=response,
+                    error=error,
+                    direction=direction,
+                    secret_paths=secret_paths,
+                    known_secrets=known_secrets,
+                )
+        except (SQLAlchemyError, OSError) as exc:
+            _log.warning("communication log entry not recorded (%s)", describe_error(exc))
+            return False
+        return True
