@@ -244,3 +244,33 @@ def test_an_escaped_invisible_character_inside_a_known_secret_reveals_no_fragmen
             for view in readable(out):
                 for fragment in fragments(secret):
                     assert fragment not in view, (kind, text, out)
+
+
+SECRET_KEY_NAMES = ["token", "password", "Authorization", "api_key", "secret"]
+
+
+def encode_name(name: str) -> str:
+    """``name`` with one letter percent-encoded one to four times."""
+    i = rnd.randrange(len(name))
+    escaped = f"%{ord(name[i]):02X}"
+    for _ in range(rnd.randrange(3)):
+        escaped = escaped.replace("%", "%25", 1)
+    return name[:i] + escaped + name[i + 1 :]
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_a_json_key_encoded_several_times_next_to_a_masked_sibling(seed: int):
+    global rnd
+    rnd = random.Random(seed)  # noqa: S311
+    masker = Masker()
+    for i in range(500):
+        fields = {encode_name(rnd.choice(SECRET_KEY_NAMES)): marker(i)}
+        if rnd.random() < 0.7:
+            fields[rnd.choice(SECRET_KEY_NAMES)] = "x"
+        if rnd.random() < 0.5:
+            fields[rnd.choice(PLAIN)] = "plain"
+        items = list(fields.items())
+        rnd.shuffle(items)
+        body = json.dumps(dict(items) if rnd.random() < 0.7 else {"wrap": [dict(items)]})
+        out = masker.body(body)
+        assert marker(i) not in out, (body, out)

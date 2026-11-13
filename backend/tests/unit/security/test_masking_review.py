@@ -1227,3 +1227,22 @@ def test_numbering_many_repeated_json_keys_takes_linear_time():
 def test_repeated_keys_are_numbered_in_order_also_next_to_a_written_suffix():
     out = Masker().body('{"x":1,"x#2":2,"x":3,"x":4}')
     assert json.loads(out) == {"x": 1, "x#2": 2, "x#3": 3, "x#4": 4}
+
+
+# --- Codex P2 on 5c011fb: a JSON key encoded more than once next to a masked sibling ---------
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["%2574oken", "%252574oken", "pass%2577ord", "%2541uthorization", "to%25E2%2580%258Bken"],
+)
+def test_a_json_key_encoded_more_than_once_is_still_a_secret_name(key: str):
+    masker = Masker()
+    for body in (
+        json.dumps({key: REMOTE, "password": "x"}),
+        json.dumps({key: REMOTE}),
+        json.dumps({"a": [{key: REMOTE}], "token": "t"}),
+    ):
+        out = masker.body(body)
+        assert REMOTE not in out and "credential" not in out, (body, out)
+    assert REMOTE not in str(_exchange(masker).headers([(key, REMOTE)]))

@@ -705,9 +705,21 @@ class Masker:
         return is_sensitive_name(name) or _fold(name) in self._leaf_names
 
     def _is_secret_written_name(self, name: str) -> bool:
-        """For a name as written: judged as it stands and percent-decoded (``pass%77ord``;
-        but ``%bAuthorization`` must not decode its way out)."""
-        return self._is_secret_name(name) or self._is_secret_name(unquote_plus(name))
+        """For a name as written: judged as it stands and in every decoded form, up to
+        ``_DECODE_ROUNDS + 1`` rounds (``pass%77ord``, ``%2574oken``), the same reach the
+        text rules have. Any form that is a secret name counts, so ``%bAuthorization``
+        cannot decode its way out."""
+        forms = {name}
+        for _ in range(_DECODE_ROUNDS + 1):
+            if any(self._is_secret_name(form) for form in forms):
+                return True
+            forms = {
+                _normalized(decode, form)
+                for form in forms
+                if "%" in form or "&" in form or "\\" in form or "+" in form
+                for decode in (unquote, unquote_plus, _drop_encoded_format)
+            } - forms
+        return any(self._is_secret_name(form) for form in forms)
 
     def _is_secret_quoted_name(self, raw: str, quote_char: str) -> bool:
         """``raw`` is the name as written between the quotes, escapes included."""
@@ -967,6 +979,10 @@ class Masker:
                     # Every string in it went through the text rules already. A surrogate
                     # that came in as an escape sequence cannot be stored as a character.
                     written = json.dumps(masked, ensure_ascii=False, separators=(",", ":"))
+                    # Not the text rules over the whole document: a value ending in
+                    # ``token=`` would eat the fields after it. Every key and every string
+                    # went through them already, keys judged as the text rules judge names
+                    # (``_is_secret_written_name``, every decoded form).
                     return self._replace_known(_SURROGATE.sub("\ufffd", written))
             except RecursionError:
                 return NESTED_TOO_DEEPLY
