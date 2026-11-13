@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { StrictMode, useState } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../test-utils";
 import { AppComboBox } from "./AppComboBox";
@@ -139,6 +139,25 @@ describe("useBackClosesOverlay", () => {
     rerender(<Probe open={false} onClose={() => {}} />);
     expect(back).not.toHaveBeenCalled();
     back.mockRestore();
+  });
+
+  it("the entry is in the history before any passive effect runs, so an early Back already closes the overlay", () => {
+    // A sibling rendered before the probe: its passive effect runs first. It must already see the entry.
+    const seen: unknown[] = [];
+    function Earlier() {
+      useEffect(() => {
+        seen.push((window.history.state as { bbOverlay?: unknown } | null)?.bbOverlay);
+      }, []);
+      return null;
+    }
+    const { unmount } = renderWithProviders(
+      <>
+        <Earlier />
+        <Probe open onClose={() => {}} />
+      </>,
+    );
+    expect(seen).toEqual([expect.any(Number)]);
+    unmount();
   });
 
   it("a popstate that lands on its own entry again does not close it", () => {

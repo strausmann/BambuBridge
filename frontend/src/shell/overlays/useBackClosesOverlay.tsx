@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 let counter = 0;
 
@@ -42,7 +42,10 @@ export function useBackClosesOverlay(isOpen: boolean, close: () => void): void {
   }, [close]);
   const entry = useRef<{ id: number; pendingBack?: number } | null>(null);
 
-  useEffect(() => {
+  // A layout effect: the entry is in the history before the overlay is painted. With a plain
+  // effect a Back pressed right as the overlay appears could start before the entry was pushed;
+  // the push then cancelled that traversal and Back did nothing (seen in CI, phone-chromium).
+  useLayoutEffect(() => {
     if (!isOpen) return;
     let id: number;
     if (entry.current !== null && overlayOf(window.history.state) === entry.current.id) {
