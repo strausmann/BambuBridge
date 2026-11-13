@@ -35,8 +35,15 @@ from typing import Any, Literal
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from app.events.communication import CommunicationRecorder, Message, masker_for
+from app.events.communication import (
+    MAX_MASK_INPUT,
+    CommunicationRecorder,
+    Message,
+    masker_for,
+    omitted,
+)
 from app.events.service import EventService
+from app.events.validation import make_storable
 from app.models.provider_instance import ProviderInstance
 from app.providers.base import (
     ProbeResult,
@@ -227,9 +234,13 @@ class ProviderManager:
         if raw is None:
             return reported
         message = raw if isinstance(raw, str) else f"<{type(raw).__name__}>"
-        masked = masker_for(running.secret_paths, running.secrets).text(
-            message[: 4 * MAX_STATUS_MESSAGE_LENGTH]
-        )
+        # Masked whole or not at all, as in the communication log: a cut before masking can
+        # leave part of a secret that no rule recognises any more. Too large to mask:
+        # replaced by the placeholder (fail closed). The cap comes after masking.
+        size = len(message.encode("utf-8", "surrogatepass"))
+        if size > MAX_MASK_INPUT:
+            return ProviderStatus(reported.state, omitted(size), reported.since)
+        masked = masker_for(running.secret_paths, running.secrets).text(make_storable(message))
         return ProviderStatus(reported.state, _cap(masked), reported.since)
 
     async def _set_state(

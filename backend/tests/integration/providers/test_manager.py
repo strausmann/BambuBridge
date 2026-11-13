@@ -350,3 +350,84 @@ async def test_status_message_is_masked_and_capped(
         assert TOKEN not in row.status_message
         assert row.status_message.startswith("connected with ***")
         assert len(row.status_message) <= manager_module.MAX_STATUS_MESSAGE_LENGTH
+
+
+async def test_status_message_secret_across_the_old_pre_cut_is_masked(
+    admin_client: httpx.AsyncClient,
+    manager: ProviderManager,
+    engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Masking runs on the whole message: no cut before it may leave part of a secret.
+
+    The message repeats the token so often that masking shrinks it, then puts one more
+    copy across character 2000. Cut there before masking, the first ten characters of that
+    copy match nothing and, once the copies before it are ``***``, land inside the 500
+    characters that are kept.
+    """
+    from datetime import UTC, datetime
+
+    from app.providers.base import ProviderStatus
+    from app.providers.demo.provider import DemoProvider
+
+    token = "Zq8vLw3Np5Rt7Ys9Ub2X"  # 20 characters, no part of it occurs elsewhere
+    message = "x" * 10 + (token + " ") * 94 + token + " tail"
+    assert message.index(token, 10 + 21 * 94) == 1984  # straddles 2000: 16 before, 4 after
+    assert len(message) == 2009
+
+    def leaky_status(self: DemoProvider) -> ProviderStatus:
+        return ProviderStatus("connected", message, datetime.now(UTC))
+
+    monkeypatch.setattr(DemoProvider, "status", leaky_status)
+    created = await create(
+        admin_client,
+        kind="integration",
+        type_name="demo",
+        name="straddling",
+        config={"label": "x", "token": token},
+    )
+    r = await eventually(
+        lambda: admin_client.get(f"{PROVIDERS_URL}/{created['id']}"),
+        lambda resp: resp.json()["status"]["state"] == "connected",
+        5,
+    )
+    async with make_session_factory(engine)() as session:
+        row = await session.get(ProviderInstance, uuid.UUID(created["id"]))
+        assert row is not None and row.status_message is not None
+        stored = row.status_message
+    # Not even in part: no 6 consecutive characters of the token.
+    parts = {token[i : i + 6] for i in range(len(token) - 5)}
+    for part in parts:
+        assert part.encode() not in r.content, part
+        assert part not in stored, part
+
+
+async def test_status_message_too_large_to_mask_is_replaced(
+    admin_client: httpx.AsyncClient, manager: ProviderManager, monkeypatch: pytest.MonkeyPatch
+):
+    from datetime import UTC, datetime
+
+    from app.events.communication import MAX_MASK_INPUT
+    from app.providers.base import ProviderStatus
+    from app.providers.demo.provider import DemoProvider
+
+    message = TOKEN + "y" * MAX_MASK_INPUT
+
+    def huge_status(self: DemoProvider) -> ProviderStatus:
+        return ProviderStatus("connected", message, datetime.now(UTC))
+
+    monkeypatch.setattr(DemoProvider, "status", huge_status)
+    created = await create(
+        admin_client,
+        kind="integration",
+        type_name="demo",
+        name="huge status",
+        config={"label": "x", "token": TOKEN},
+    )
+    r = await eventually(
+        lambda: admin_client.get(f"{PROVIDERS_URL}/{created['id']}"),
+        lambda resp: resp.json()["status"]["state"] == "connected",
+        5,
+    )
+    assert r.json()["status"]["message"] == f"<omitted: {len(message)} bytes>"
+    assert TOKEN.encode() not in r.content
