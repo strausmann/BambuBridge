@@ -628,3 +628,108 @@ async def test_an_abandoned_provider_cannot_write_for_a_deleted_instance(
     assert mgr.status(iid) is None
     assert await _stored_payloads(engine, iid) == []
     await mgr.stop()
+
+
+class _Pause:
+    """Holds a worker-thread step until released; ``entered`` tells the test it is there."""
+
+    def __init__(self) -> None:
+        import threading
+
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def hold(self) -> None:
+        self.entered.set()
+        self.release.wait(10)
+
+    async def reached(self) -> None:
+        assert await asyncio.to_thread(self.entered.wait, 5)
+
+
+async def _delete_and_forget(mgr: ProviderManager, engine: AsyncEngine, iid: uuid.UUID) -> None:
+    async with make_session_factory(engine)() as session:
+        assert await repo.delete(session, iid)
+        await session.commit()
+    await mgr.apply(iid)
+    assert iid not in mgr._applied
+
+
+async def test_a_recording_in_flight_when_the_instance_is_forgotten_writes_nothing(
+    mgr: ProviderManager, engine: AsyncEngine, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+):
+    from sqlalchemy import func, select
+
+    from app.events import communication
+    from app.models.communication_entry import CommunicationEntry
+
+    mgr.step_timeout = 10.0
+    iid = await _instance(engine, app, "recording")
+    await mgr.apply(iid)
+    ctx = fakes.RecordingProvider.starts[-1]
+    pause = _Pause()
+    real = communication._entry_values
+
+    def paused(**kwargs: Any) -> Any:
+        pause.hold()  # masking, in the worker thread
+        return real(**kwargs)
+
+    monkeypatch.setattr(communication, "_entry_values", paused)
+    job = asyncio.create_task(
+        ctx.record.record_isolated(method="GET", target="demo://x", status=200, duration_ms=1)
+    )
+    await pause.reached()
+    await _delete_and_forget(mgr, engine, iid)
+    pause.release.set()
+    assert await job is False
+    # And every later call through the same recorder is a no-op as well.
+    assert (
+        await ctx.record.record_isolated(method="GET", target="demo://y", status=200, duration_ms=1)
+        is False
+    )
+    async with make_session_factory(engine)() as session:
+        count = await session.scalar(
+            select(func.count())
+            .select_from(CommunicationEntry)
+            .where(CommunicationEntry.instance_id == iid)
+        )
+    assert count == 0
+    await mgr.stop()
+
+
+@pytest.mark.parametrize("payload", [{"session": "harmless"}, {"session": f"has {SECRET}"}])
+async def test_an_emit_in_flight_when_the_instance_is_forgotten_writes_nothing(
+    mgr: ProviderManager,
+    engine: AsyncEngine,
+    app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, Any],
+):
+    from app.providers import manager as manager_module
+    from app.providers.manager import ProviderNotRunningError
+
+    iid, ctx = await _payloads_instance(mgr, engine, app)
+    pause = _Pause()
+    real = manager_module.masker_for
+
+    class _Paused:
+        def __init__(self, masker: Any) -> None:
+            self._masker = masker
+
+        def text(self, value: str) -> str:
+            pause.hold()  # the payload check, in the worker thread
+            result: str = self._masker.text(value)
+            return result
+
+    monkeypatch.setattr(manager_module, "masker_for", lambda *a: _Paused(real(*a)))
+    job = asyncio.create_task(
+        ctx.emit(type="integration.payloads.seen", payload=payload, schema_version=1)
+    )
+    await pause.reached()
+    await _delete_and_forget(mgr, engine, iid)
+    pause.release.set()
+    with pytest.raises(ProviderNotRunningError):
+        await job
+    assert iid not in mgr._notices
+    assert await _stored_payloads(engine, iid) == []
+    await mgr.stop()

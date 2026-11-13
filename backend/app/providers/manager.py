@@ -174,7 +174,9 @@ class InstanceRecorder:
         instance_id: uuid.UUID,
         secret_paths: Collection[str],
         known_secrets: Collection[str],
+        alive: Callable[[], bool] | None = None,
     ) -> None:
+        self._alive = alive
         self._recorder = recorder
         self._sessions = sessions
         self._instance_id = instance_id
@@ -193,7 +195,13 @@ class InstanceRecorder:
         error: str | None = None,
         direction: Literal["outbound", "inbound"] = "outbound",
     ) -> bool:
-        """Record one exchange; ``error`` should be an error class name, never a message."""
+        """Record one exchange; ``error`` should be an error class name, never a message.
+
+        Once the instance is gone (deleted, forgotten by the manager) this writes nothing
+        and returns ``False`` - also for a call that was masking when it went.
+        """
+        if self._alive is not None and not self._alive():
+            return False
         return await self._recorder.record_isolated(
             self._sessions,
             instance_id=self._instance_id,
@@ -207,6 +215,7 @@ class InstanceRecorder:
             direction=direction,
             secret_paths=self._secret_paths,
             known_secrets=self._known_secrets,
+            still_wanted=self._alive,
         )
 
 
@@ -548,6 +557,7 @@ class ProviderManager:
                 instance_id=iid,
                 secret_paths=paths,
                 known_secrets=tuple(secrets.values()),
+                alive=lambda: self._known(iid),
             ),
         )
         await self._set_state(iid, "starting")
@@ -629,6 +639,9 @@ class ProviderManager:
                 return next((path for path, text in texts if masker.text(text) != text), None)
 
             path = await asyncio.to_thread(offending_path)
+            if not self._known(instance_id):
+                # Forgotten while the check ran in the worker thread.
+                raise ProviderNotRunningError("the instance no longer exists")
             if path is not None:
                 message = event_rejected_message(path[:_MAX_PATH_LENGTH])
                 # The event type and the path only: the value is what must not be shown.
@@ -648,6 +661,9 @@ class ProviderManager:
                         dedup_key=dedup_key,
                         correlation_id=correlation_id,
                     )
+                    if not self._known(instance_id):
+                        # Forgotten while the event was written: it never happened.
+                        raise ProviderNotRunningError("the instance no longer exists")
                     await session.commit()
                 except BaseException:
                     await session.rollback()
