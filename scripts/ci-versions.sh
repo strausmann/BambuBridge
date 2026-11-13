@@ -65,13 +65,15 @@ playwright)
 	;;
 esac
 
-if [ "$(case $value in
+# Characters first: a value that fails here is never printed, not even in an error message.
+# (Several matches arrive one per line; the line breaks between them are not part of a value.)
+case $(printf '%s' "$value" | tr -d '\n') in
 *[!0-9A-Za-z.:_/@-]*)
 	echo "ci-versions.sh: refusing the $where: it holds a character outside 0-9 A-Z a-z . : _ / @ -" >&2
 	exit 1
 	;;
 esac
-printf '%s\n' "$value" | grep -c .)" != 1 ]; then
+if [ "$(printf '%s\n' "$value" | grep -c .)" != 1 ]; then
 	echo "ci-versions.sh: cannot read the $where (found: '$(echo $value)')" >&2
 	exit 1
 fi

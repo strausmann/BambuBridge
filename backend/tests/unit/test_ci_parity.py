@@ -296,8 +296,30 @@ def test_a_value_with_a_character_outside_the_allowed_set_is_refused(
     result = _extract(field, tmp_path)
     assert result.returncode == 1, result.stdout
     assert result.stdout == ""
-    assert "refusing the " in result.stderr or "cannot read the " in result.stderr
+    # One message, which names the field and never repeats the refused value.
+    assert result.stderr.count("\n") == 1, result.stderr
+    assert result.stderr.startswith("ci-versions.sh: refusing the ")
     assert f" in {file_name}" in result.stderr
+    assert bad not in result.stderr
+
+
+def test_a_refused_value_is_not_printed_when_it_stands_next_to_a_good_one(tmp_path: Path):
+    bad = "3.14; touch /tmp/x"
+    current = _from_yaml("python")
+    spelled = f'python-version: "{current}"'
+    for source in WORKFLOWS.glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "ci.yml":
+            assert text.count(spelled) >= 2
+            text = text.replace(spelled, f'python-version: "{bad}"', 1)
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    result = _extract("python", tmp_path)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr.count("\n") == 1, result.stderr
+    assert result.stderr.startswith("ci-versions.sh: refusing the ")
+    assert bad not in result.stderr
 
 
 def test_every_real_value_passes_the_character_check():
