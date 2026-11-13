@@ -604,3 +604,23 @@ async def test_a_start_that_finished_as_its_caller_was_cancelled_is_stopped(
     # It started, it is not in the running set: it must have been stopped all the same.
     assert iid not in mgr._running
     assert _FastStart.stopped == 1
+
+
+async def test_an_abandoned_provider_cannot_write_for_a_deleted_instance(
+    mgr: ProviderManager, engine: AsyncEngine, app: FastAPI
+):
+    from app.providers.manager import ProviderNotRunningError
+
+    iid, ctx = await _payloads_instance(mgr, engine, app)
+    async with make_session_factory(engine)() as session:
+        assert await repo.delete(session, iid)
+        await session.commit()
+    await mgr.apply(iid)
+    # The old provider object still holds its context and keeps going.
+    for payload in ({"session": f"has {SECRET}"}, {"session": "harmless"}):
+        with pytest.raises(ProviderNotRunningError):
+            await ctx.emit(type="integration.payloads.seen", payload=payload, schema_version=1)
+    assert iid not in mgr._notices
+    assert mgr.status(iid) is None
+    assert await _stored_payloads(engine, iid) == []
+    await mgr.stop()

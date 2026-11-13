@@ -78,6 +78,7 @@ from app.events.service import EventService
 from app.events.validation import make_storable
 from app.models.provider_instance import ProviderInstance
 from app.providers.base import (
+    STATUS_STATES,
     ProbeResult,
     Provider,
     ProviderContext,
@@ -96,6 +97,9 @@ STEP_TIMEOUT_SECONDS = 10.0
 MAX_STATUS_MESSAGE_LENGTH = 500
 
 _log = logging.getLogger(__name__)
+
+
+INVALID_STATUS_MESSAGE = "provider reported an invalid status"
 
 
 def event_rejected_message(path: str) -> str:
@@ -341,6 +345,14 @@ class ProviderManager:
         cached = self._status_cache.get(instance_id)
         if cached is not None and cached[0] == key:
             return cached[1]
+        state: object = reported.state
+        since: object = reported.since
+        if not isinstance(state, str) or state not in STATUS_STATES:
+            cleaned = ProviderStatus("error", INVALID_STATUS_MESSAGE, _now())
+            self._status_cache[instance_id] = (key, cleaned)
+            return cleaned
+        if not isinstance(since, datetime) or since.tzinfo is None:
+            reported = ProviderStatus(reported.state, reported.message, _now())
         raw: object = reported.message  # provider code: do not trust the annotation
         if raw is None:
             cleaned = reported
@@ -350,9 +362,19 @@ class ProviderManager:
         self._status_cache[instance_id] = (key, cleaned)
         return cleaned
 
+    def _known(self, instance_id: uuid.UUID) -> bool:
+        """Whether the instance is one this manager applied and has not forgotten.
+
+        Writes for any other id are ignored: an abandoned provider object of a deleted
+        instance still holds its context and must not bring the instance back.
+        """
+        return instance_id in self._applied
+
     async def _set_state(
         self, instance_id: uuid.UUID, state: ProviderStatusState, message: str | None = None
     ) -> None:
+        if not self._known(instance_id):
+            return
         message = None if message is None else _cap(message)
         self._states[instance_id] = ProviderStatus(state, message, _now())
         await self._persist(instance_id, state, message)
@@ -362,6 +384,8 @@ class ProviderManager:
     ) -> None:
         # Messages reach this point masked (``status``) or fixed by the manager; capped
         # once more so the column never holds more than the API would show.
+        if not self._known(instance_id):
+            return
         message = None if message is None else _cap(message)
         try:
             async with self._sessions() as session, session.begin():
@@ -584,6 +608,9 @@ class ProviderManager:
             dedup_key: str | None = None,
             correlation_id: uuid.UUID | None = None,
         ) -> uuid.UUID | None:
+            if not self._known(instance_id):
+                # An abandoned object of a deleted instance: nothing is written for it.
+                raise ProviderNotRunningError("the instance no longer exists")
             event_type = declared.get(type)
             if event_type is None or event_type.schema_version != schema_version:
                 raise ValueError("the provider does not declare this event type and version")

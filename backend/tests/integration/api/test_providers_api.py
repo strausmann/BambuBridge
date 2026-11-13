@@ -486,3 +486,85 @@ async def test_padded_short_secret_is_refused_and_never_logged(
     async with make_session_factory(engine)() as session:
         assert await session.scalar(select(func.count()).select_from(ProviderInstance)) == 0
         assert await session.scalar(select(func.count()).select_from(CommunicationEntry)) == 0
+
+
+ENCODED_PASSWORD = "pass%2Fword-123"  # its decoded form is "pass/word-123"
+
+
+@pytest.mark.usefixtures("manager")
+async def test_a_decoded_secret_is_masked_in_status_and_action_result(
+    admin_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+):
+    from datetime import UTC, datetime
+    from urllib.parse import unquote
+
+    from app.providers.base import ProviderStatus
+
+    decoded = unquote(ENCODED_PASSWORD)
+
+    async def echo(self: Any, name: str, params: dict[str, Any]) -> dict[str, Any]:
+        return {"echo": f"sent {decoded}"}
+
+    fixed = ProviderStatus("connected", f"logged in as {decoded}", datetime.now(UTC))
+    monkeypatch.setattr(fakes.RecordingProvider, "status", lambda self: fixed)
+    monkeypatch.setattr(fakes.RecordingProvider, "run_action", echo)
+    created = await create(
+        admin_client,
+        kind="integration",
+        type_name="recording",
+        name="decoded",
+        config={"password": ENCODED_PASSWORD},
+    )
+    r = await eventually(
+        lambda: admin_client.get(f"{PROVIDERS_URL}/{created['id']}"),
+        lambda resp: resp.json()["status"]["state"] == "connected",
+        5,
+    )
+    assert decoded.encode() not in r.content
+    action = await admin_client.post(
+        f"{PROVIDERS_URL}/{created['id']}/actions/echo", json={"params": {}}
+    )
+    assert action.status_code == 200
+    assert decoded.encode() not in action.content
+
+
+@pytest.mark.usefixtures("manager")
+async def test_an_invalid_reported_state_or_since_never_breaks_the_list(
+    admin_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+):
+    from datetime import UTC, datetime
+
+    from app.providers.base import ProviderStatus
+
+    bad = [
+        ProviderStatus("exploded", None, datetime.now(UTC)),  # type: ignore[arg-type]
+        ProviderStatus("connected", None, "yesterday"),  # type: ignore[arg-type]
+    ]
+    calls: dict[int, ProviderStatus] = {}
+
+    def status(self: Any) -> ProviderStatus:
+        return calls.setdefault(id(self), bad[len(calls) % 2])
+
+    monkeypatch.setattr(fakes.RecordingProvider, "status", status)
+    ids = [
+        (await create(admin_client, kind="integration", type_name="recording", name=n, config={}))[
+            "id"
+        ]
+        for n in ("bad state", "bad since")
+    ]
+    listed = await eventually(
+        lambda: admin_client.get(PROVIDERS_URL),
+        lambda resp: (
+            resp.status_code == 200
+            and {i["status"]["state"] for i in resp.json()} <= {"error", "connected"}
+            and len(calls) == 2
+        ),
+        5,
+    )
+    assert listed.status_code == 200, listed.text
+    states = {i["id"]: i["status"] for i in listed.json()}
+    assert {states[i]["state"] for i in ids} == {"error", "connected"}
+    broken = next(s for s in states.values() if s["state"] == "error")
+    assert broken["message"] == "provider reported an invalid status"
+    since = next(s for s in states.values() if s["state"] == "connected")["since"]
+    assert datetime.fromisoformat(since).year == datetime.now(UTC).year
