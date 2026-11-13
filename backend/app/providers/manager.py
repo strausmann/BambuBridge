@@ -56,7 +56,7 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import Awaitable, Collection, Coroutine
+from collections.abc import Awaitable, Callable, Collection, Coroutine
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -262,6 +262,8 @@ class ProviderManager:
         # Abandoned calls are not per-instance state: they leave the set when they end, and
         # dropping one earlier would let a still-running task be garbage collected.
         self._abandoned: set[asyncio.Task[Any]] = set()
+        # Cleanups of abandoned or failed starts (``stop()`` once the start has ended).
+        self._cleanups: set[asyncio.Task[None]] = set()
         self.listener = ProviderListener(engine, self)
 
     # -- lifecycle ----------------------------------------------------------
@@ -274,6 +276,10 @@ class ProviderManager:
         """Stop listening and stop every running instance (each bounded in time)."""
         await self.listener.stop()
         await asyncio.gather(*(self._shutdown(iid) for iid in list(self._running)))
+        # Starts interrupted by the shutdown are stopped once they end; wait for that, but
+        # never longer than one step.
+        if self._cleanups:
+            await asyncio.wait(set(self._cleanups), timeout=self.step_timeout)
 
     async def start_all(self) -> None:
         """Bring every instance in line with the database (start, restart, stop)."""
@@ -350,25 +356,50 @@ class ProviderManager:
 
     # -- steps --------------------------------------------------------------
 
-    async def _step(self, call: Coroutine[Any, Any, Any]) -> tuple[bool, Any, asyncio.Task[Any]]:
+    async def _step(
+        self,
+        call: Coroutine[Any, Any, Any],
+        *,
+        on_abandon: Callable[[asyncio.Task[Any]], Awaitable[None]] | None = None,
+    ) -> tuple[bool, Any, asyncio.Task[Any]]:
         """Run ``call`` for at most ``step_timeout``: ``(finished, result or exception, task)``.
 
         A call that does not finish in time is cancelled and not awaited: a provider that
         ignores the cancellation cannot hold up the manager. It stays referenced in
         ``_abandoned`` until it ends. The task is returned to the caller, never kept in a
         shared attribute: another apply may time out in the meantime.
+
+        The same happens when the caller itself is cancelled (shutdown cancels a running
+        apply): the call is cancelled and abandoned, ``on_abandon(task)`` is scheduled as a
+        cleanup, and the cancellation goes on to the caller. On a timeout ``on_abandon`` is
+        scheduled as well.
         """
         task = asyncio.ensure_future(call)
-        done, _ = await asyncio.wait({task}, timeout=self.step_timeout)
+        try:
+            done, _ = await asyncio.wait({task}, timeout=self.step_timeout)
+        except asyncio.CancelledError:
+            self._abandon(task, on_abandon)
+            raise
         if not done:
-            task.cancel()
-            self._abandoned.add(task)
-            task.add_done_callback(self._forget)
+            self._abandon(task, on_abandon)
             return False, None, task
         if task.cancelled():
             return True, asyncio.CancelledError(), task
         exc = task.exception()
         return True, exc if exc is not None else task.result(), task
+
+    def _abandon(
+        self,
+        task: asyncio.Task[Any],
+        on_abandon: Callable[[asyncio.Task[Any]], Awaitable[None]] | None,
+    ) -> None:
+        if task.done():
+            return
+        task.cancel()
+        self._abandoned.add(task)
+        task.add_done_callback(self._forget)
+        if on_abandon is not None:
+            self._background(on_abandon(task))
 
     def _forget(self, task: asyncio.Task[Any]) -> None:
         self._abandoned.discard(task)
@@ -482,11 +513,13 @@ class ProviderManager:
         except Exception as exc:
             await self._set_state(iid, "error", f"start failed ({type(exc).__name__})")
             return
-        finished, outcome, start_task = await self._step(provider.start(ctx))
+        # A start that is abandoned (timeout, or the apply cancelled on shutdown) may still
+        # finish after its cancellation: it is stopped only once its own start has ended,
+        # never while it is still running.
+        finished, outcome, _ = await self._step(
+            provider.start(ctx), on_abandon=lambda task: self._stop_after(task, provider)
+        )
         if not finished:
-            # It may still finish starting after the cancellation: stop it only once its own
-            # start has ended, never while it is still running.
-            self._background(self._stop_after(start_task, provider))
             await self._set_state(iid, "error", "timeout during start")
             return
         if isinstance(outcome, BaseException):
@@ -512,8 +545,8 @@ class ProviderManager:
                 _log.warning("provider cleanup ended with %s", type(exc).__name__)
 
         task = asyncio.ensure_future(bounded())
-        self._abandoned.add(task)
-        task.add_done_callback(self._abandoned.discard)
+        self._cleanups.add(task)
+        task.add_done_callback(self._cleanups.discard)
 
     def _emitter(
         self,

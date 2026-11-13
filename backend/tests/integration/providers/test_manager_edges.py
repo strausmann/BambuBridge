@@ -511,3 +511,22 @@ async def test_the_status_cache_key_holds_the_masking_inputs(mgr: ProviderManage
     iid = uuid.uuid4()
     assert mgr._clean(iid, before, reported).message == f"using {SECRET}"
     assert mgr._clean(iid, after, reported).message == "using ***"
+
+
+async def test_a_start_interrupted_by_shutdown_is_stopped_before_stop_returns(
+    mgr: ProviderManager, engine: AsyncEngine, app: FastAPI
+):
+    """The listener cancels a running apply on shutdown; the start it waited for must not
+    be left running without ever seeing stop()."""
+    app.state.provider_registry.register(_LateStart)
+    _LateStart.order = []
+    mgr.step_timeout = 2.0
+    iid = await _instance(engine, app, "late_start")
+    job = asyncio.create_task(mgr.apply(iid))
+    await asyncio.sleep(0.3)  # inside start()
+    job.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await job
+    await mgr.stop()
+    # By the time stop() returns, the interrupted start has ended and been stopped.
+    assert _LateStart.order == ["started", "stopped"]
