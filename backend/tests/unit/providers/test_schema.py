@@ -218,3 +218,24 @@ def test_a_secret_with_white_space_around_it_is_refused_even_when_long():
 
 def test_a_plain_secret_of_eight_characters_is_fine():
     assert validate(SECRET_SCHEMA, {"s": "abcd1234"}) == {"s": "abcd1234"}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "Zq%2F8%3Dxy",  # decodes to "Zq/8=xy": 7 characters
+        "+Zq81aud+",  # unquote_plus: " Zq81aud ", 7 without the spaces
+        "%20Zq81aud%20",  # unquote: " Zq81aud ", 7 without the spaces
+    ],
+)
+def test_every_form_the_masker_searches_must_be_long_enough(value: str):
+    # The masker also searches the percent-decoded forms and drops any shorter than 8;
+    # such a form would be stored in clear wherever it appears.
+    with pytest.raises(ValidationError) as caught:
+        validate(SECRET_SCHEMA, {"s": value})
+    assert caught.value.field == "s"
+    assert value not in str(caught.value)
+
+
+def test_a_percent_encoded_secret_with_long_forms_is_fine():
+    assert validate(SECRET_SCHEMA, {"s": "pass%2Fword-123"}) == {"s": "pass%2Fword-123"}

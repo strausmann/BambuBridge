@@ -26,7 +26,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.events.validation import is_storable
-from app.security.masking import MIN_KNOWN_SECRET_LENGTH, known_secret_form
+from app.security.masking import MIN_KNOWN_SECRET_LENGTH, known_secret_form, searched_forms
 
 # A string without its own ``maxLength`` is still bounded by this.
 MAX_STRING_LENGTH = 4096
@@ -98,7 +98,7 @@ def _check_value(prop: Mapping[str, Any], value: object, field: str) -> None:
 
 
 def _check_secret(value: str, low: int, field: str) -> None:
-    """A secret is measured as the masker searches for it (:func:`known_secret_form`).
+    """A secret is measured as the masker searches for it (:func:`searched_forms`).
 
     White space or an invisible character at either end is refused outright: the masker
     drops them, so they would only pad a short secret past ``minLength``. Invisible
@@ -111,6 +111,13 @@ def _check_secret(value: str, low: int, field: str) -> None:
     if len(known_secret_form(value)) < low:
         raise ValidationError(
             field, f"must be at least {low} characters long, invisible characters not counted"
+        )
+    # The masker also searches the percent-decoded forms and skips any that is too short:
+    # every one of them has to be long enough to be masked.
+    if min(len(form) for form in searched_forms(value)) < MIN_KNOWN_SECRET_LENGTH:
+        raise ValidationError(
+            field,
+            f"must stay at least {MIN_KNOWN_SECRET_LENGTH} characters long once percent-decoded",
         )
 
 
