@@ -99,8 +99,8 @@ class _Exchange:
 
     def _visible(self, text: str, *, complete: bool = True, limit: int = MAX_MASK_INPUT) -> str:
         """The storable beginning of ``text`` that is masked at all (at most ``limit``)."""
-        # A little more than the limit, so that a secret straddling it is seen whole.
-        window = limit + self._masker.longest_secret
+        # More than the limit, so that a secret straddling it is seen whole, also encoded.
+        window = limit + self._masker.cut_margin
         complete = complete and len(text) <= window
         prefix, cut = self._masker.safe_prefix(
             make_storable(text[:window]), complete=complete, limit=limit
@@ -163,7 +163,7 @@ class _Exchange:
             text = body
         else:
             # Enough bytes for the window of ``_visible`` whatever the characters are.
-            window = 4 * (MAX_MASK_INPUT + self._masker.longest_secret)
+            window = 4 * (MAX_MASK_INPUT + self._masker.cut_margin)
             head = bytes(body[:window])
             complete = len(body) <= window
             decoded = _decode(head, complete=complete)

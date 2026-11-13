@@ -227,8 +227,9 @@ async def test_a_huge_body_is_masked_up_to_the_input_limit_only(db_session: Asyn
         known_secrets=[SECRET],
     )
 
-    assert entry.request_body == "password=***&x="
-    assert entry.response_body == "password=***&x="
+    # "&x" may start a reference, so the zone before the cut goes as well.
+    assert entry.request_body == "password=***"
+    assert entry.response_body == "password=***"
     assert entry.truncated is True
 
 

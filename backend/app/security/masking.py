@@ -31,7 +31,8 @@ decoding round, and also where they are written as an escape (``&#8203;``, ``\\u
 ``\\U000e0001``, a surrogate pair, percent or ``\\x`` bytes judged one UTF-8 character at a
 time). The first cut (:meth:`Masker.safe_prefix`) looks at the text the same way.
 Declared limit: a hostile peer obfuscating a known secret with encoded invisible characters
-beyond these cases is not caught.
+beyond these cases is not caught; neither is a run of backslashes in a secret spelled in two
+ways at once (``\\\\`` next to ``\\x5c``), which no encoder writes.
 
 In text that is not parsed JSON (an address, an error message, a body in another format,
 broken JSON) the names are found by patterns: ``"name": value`` and ``'name': value`` (a
@@ -52,7 +53,8 @@ find a known secret that was transformed in a way not listed above (hashed, encr
 quoted-printable, ES6 ``\\u{..}`` or octal escapes, a look-alike letter), or keep the
 structure below a masked field.
 
-Nothing here logs, and no error message quotes a value.
+Nothing here logs except :meth:`Masker.safe_prefix` when its cut does not settle (one line
+without values), and no error message quotes a value.
 """
 
 from __future__ import annotations
@@ -60,6 +62,7 @@ from __future__ import annotations
 import base64
 import bisect
 import json
+import logging
 import re
 import unicodedata
 from collections.abc import Callable, Collection, Iterator, Mapping
@@ -88,10 +91,13 @@ _NAME_WORD = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 _PERCENT_ESCAPE = re.compile(r"%[0-9A-F]{2}")
 # How often the text is percent-decoded to look for names and known values once more.
 _DECODE_ROUNDS = 3
-# ``safe_prefix``: how far around the cut it looks for a secret that only shows decoded (in
-# multiples of the longest spelling) and how often it moves the cut back at most.
-_CUT_REACH = 3
+# ``safe_prefix``: how far an encoded secret can reach (in multiples of the longest
+# spelling), and how often the cut moves back before nothing is kept.
+_MAX_EXPANSION = 2
 _CUT_ROUNDS = 8
+# The start of an escape or reference: percent escape, backslash, ``&#``, ``&name``.
+_ESCAPE_START = re.compile(r"%[0-9A-Fa-f]{2}|\\|&#|&[A-Za-z]")
+_log = logging.getLogger(__name__)
 
 # The text rules below each name the spans of a text that hold a secret; ``Masker.text``
 # replaces the union of all spans. No rule works on the output of another one, so none can
@@ -684,7 +690,9 @@ class Masker:
             for _ in range(_DECODE_ROUNDS):
                 # Without the NUL an escape can bring in: taken out later, it could join two
                 # halves of a secret.
-                decoded = _FORMAT.sub("", decode(probe).replace("\x00", ""))
+                # The same normalisation as the cut (``_views``): format characters, also
+                # written as escapes, go after every decoding.
+                decoded = _drop_encoded_format(_FORMAT.sub("", decode(probe).replace("\x00", "")))
                 if decoded == probe:
                     break
                 masked = self._mask_once(decoded)
@@ -783,43 +791,58 @@ class Masker:
                 pass  # not JSON after all: the text rules below still apply
         return self.text(text)
 
+    @property
+    def cut_margin(self) -> int:
+        """How far an encoded known secret can reach: the longest spelling, doubled for
+        escaped invisible characters in it. A caller that cuts gives :meth:`safe_prefix`
+        this much text beyond the limit."""
+        return _MAX_EXPANSION * self.longest_secret
+
     def safe_prefix(self, text: str, *, complete: bool, limit: int) -> tuple[str, bool]:
         """Cut ``text`` to at most ``limit`` characters without cutting a known secret.
 
         Returns the prefix and whether anything was left out. ``complete`` says whether
         ``text`` is all there is; if the caller already holds only the beginning, the end of
-        ``text`` may be the first part of a secret, so the last ``longest_secret`` characters
+        ``text`` may be the first part of a secret, so the last ``cut_margin`` characters
         are dropped as well. A known secret that would straddle the cut is left out whole:
         half a secret would no longer be recognised and masked.
+
+        The text is looked at the way masking looks at it: without invisible format
+        characters (the prefix is returned without them). If the ``cut_margin`` characters
+        before the cut hold an escape or a reference, they are left out as a whole: an
+        encoded secret may start anywhere in them. Then the cut moves back as long as a
+        known secret straddles it, raw or decoded; if that does not settle within
+        ``_CUT_ROUNDS`` moves, nothing is kept (fail closed, one log line without values).
         """
-        # The same text that masking will see: without invisible format characters, so that
-        # a secret they split is found here as well and never cut in two.
         text = _FORMAT.sub("", text)
         if complete and len(text) <= limit:
             return text, False
-        cut = min(limit, len(text) if complete else max(0, len(text) - self.longest_secret))
+        margin = self.cut_margin
+        cut = min(limit, len(text) if complete else max(0, len(text) - margin))
+        if margin and _ESCAPE_START.search(text, max(0, cut - margin), cut):
+            cut = max(0, cut - margin)
         for _ in range(_CUT_ROUNDS):
+            moved = False
             for start, end in self._known_spans(text):
                 if start >= cut:
                     break
                 if end > cut:
-                    cut = start
+                    cut, moved = start, True
                     break
             # A secret that only shows once escapes are resolved (split by an encoded format
-            # character, percent-encoded): it may straddle the cut without a raw span. If
-            # the text around the cut holds more of them than the parts before and after
-            # it, one straddles, and the cut moves back by the widest it can be written.
-            reach = _CUT_REACH * self.longest_secret
-            start = max(0, cut - reach)
-            if self._known is None or start == cut:
-                break
-            around = self._count_known(text[start : cut + reach])
-            if around <= self._count_known(text[start:cut]) + self._count_known(
-                text[cut : cut + reach]
-            ):
-                break
-            cut = start
-        return text[:cut], True
+            # character, percent-encoded) may straddle the cut without a raw span: then the
+            # text around the cut holds more of them than the parts before and after it.
+            start = max(0, cut - margin)
+            if self._known is not None and start < cut:
+                around = self._count_known(text[start : cut + margin])
+                if around > self._count_known(text[start:cut]) + self._count_known(
+                    text[cut : cut + margin]
+                ):
+                    cut, moved = start, True
+            if not moved:
+                return text[:cut], True
+        _log.warning("the first cut of a text did not settle: nothing of it is kept")
+        return "", True
 
     def _count_known(self, text: str) -> int:
         return max(sum(1 for _ in self._known_spans(view)) for view in _views(text))

@@ -722,11 +722,12 @@ def test_a_secret_split_by_an_encoded_format_character_across_the_cut_leaves_no_
     assert not any(fragment in out for fragment in _fragments(SECRET_R2)), out
 
 
-def test_an_encoded_text_without_secrets_keeps_its_prefix():
+def test_an_encoded_text_without_secrets_loses_only_the_zone_before_the_cut():
     masker = Masker(known_secrets=[SECRET_R2])
-    text = "q=" + "%41%42" * 200
-    prefix, _ = masker.safe_prefix(text, complete=True, limit=300)
-    assert prefix == text[:300]
+    limit = 4 * masker.cut_margin
+    text = "q=" + "%41%42" * limit
+    prefix, _ = masker.safe_prefix(text, complete=True, limit=limit)
+    assert prefix == text[: limit - masker.cut_margin]
 
 
 @pytest.mark.parametrize(
@@ -757,3 +758,72 @@ def test_long_escapes_and_surrogate_pairs_of_format_characters_are_dropped(separ
 def test_a_surrogate_pair_of_a_visible_character_stays():
     text = "smile \\ud83d\\ude00 and \\U0001F600 here"
     assert Masker(known_secrets=[SECRET_R2]).text(text) == text
+
+
+# --- fix round 2, third follow-up: safe_prefix fails closed, escape zone before the cut --
+
+
+def test_an_escape_near_the_cut_moves_the_cut_back_by_the_whole_zone():
+    # The secret starts just before the cut; its tail is spread far past the cut by encoded
+    # format characters, so the text around the cut never shows it whole.
+    masker = Masker(known_secrets=[SECRET_R2])
+    # A plain head of eight characters before the first escape: moving the cut only to
+    # that escape would leave the head readable.
+    left = SECRET_R2[:8] + "%E2%80%8B" + SECRET_R2[8:10]
+    right = "%E2%80%8B" * (masker.cut_margin // 3) + SECRET_R2[10:]
+    filler = "a " * 400
+    text = filler + left + right + " tail"
+
+    prefix, cut = masker.safe_prefix(text, complete=True, limit=len(filler) + len(left))
+    out = masker.text(prefix)
+
+    assert cut is True
+    assert not any(fragment in out for fragment in _fragments(SECRET_R2)), out
+    assert len(prefix) >= len(filler) - 2 * masker.cut_margin  # only the zone goes
+
+
+def test_plain_text_near_the_cut_is_kept():
+    masker = Masker(known_secrets=[SECRET_R2])
+    text = "a " * 1000
+    assert masker.safe_prefix(text, complete=True, limit=1000) == (text[:1000], True)
+
+
+def test_a_cut_that_does_not_settle_keeps_nothing(caplog: pytest.LogCaptureFixture):
+    import logging
+
+    # Copies of a secret split by encoded format characters, back to back: whereever the
+    # cut moves, a copy that only shows decoded straddles it again.
+    masker = Masker(known_secrets=[SECRET_R2])
+    one = _split(SECRET_R2, "%E2%80%8B")
+    margin = masker.cut_margin
+    chain = one * (40 * margin // len(one))
+    # A limit whose every later cut (limit - k * margin) falls strictly inside a copy.
+    limit = next(
+        limit
+        for limit in range(len(chain) // 2, len(chain) // 2 + len(one))
+        if all(0 < (limit - k * margin) % len(one) < len(one) - 1 for k in range(1, 10))
+    )
+
+    with caplog.at_level(logging.WARNING, logger="app.security.masking"):
+        prefix, cut = masker.safe_prefix(chain, complete=True, limit=limit)
+
+    assert (prefix, cut) == ("", True)
+    assert [r.getMessage() for r in caplog.records] == [
+        "the first cut of a text did not settle: nothing of it is kept"
+    ]
+    assert not any(SECRET_R2[:6] in r.getMessage() for r in caplog.records)
+
+
+def test_text_and_the_cut_resolve_mixed_escapes_the_same_way():
+    # Separators in three encodings in one secret: text() decodes like safe_prefix does.
+    spelled = (
+        SECRET_R2[:5]
+        + "%E2%80%8B"
+        + SECRET_R2[5:11]
+        + "&#x0200b;"
+        + SECRET_R2[11:16]
+        + "%25E2%2580%258B"
+        + SECRET_R2[16:]
+    )
+    out = Masker(known_secrets=[SECRET_R2]).text(f"x {spelled} y")
+    assert not any(fragment in out for fragment in _fragments(SECRET_R2)), out
