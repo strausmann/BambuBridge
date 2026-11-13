@@ -333,11 +333,18 @@ async def test_event_carrying_a_secret_is_rejected_and_not_stored(
             )
         status = mgr.status(iid)
         assert status is not None
-        assert status.message == "event rejected: contains a secret"
+        field = "dedup_key" if dedup_key is not None else next(iter(payload))
+        hint = f"event rejected: field '{field}' looks like a credential or contains a secret"
+        assert status.message == hint
+        assert f"field '{field}'" in caplog.text
     finally:
         await mgr.stop()
     assert await _stored_payloads(engine, iid) == []
-    assert SECRET not in caplog.text
+    # Nothing of the value, neither in the status nor in the log.
+    offending = dedup_key if dedup_key is not None else str(next(iter(payload.values())))
+    for part in {offending[i : i + 5] for i in range(len(offending) - 4)}:
+        assert part not in caplog.text, part
+        assert part not in hint, part
 
 
 async def test_event_payload_is_still_checked_against_its_schema(
@@ -530,3 +537,70 @@ async def test_a_start_interrupted_by_shutdown_is_stopped_before_stop_returns(
     await mgr.stop()
     # By the time stop() returns, the interrupted start has ended and been stopped.
     assert _LateStart.order == ["started", "stopped"]
+
+
+async def test_a_rejected_tick_names_the_field_and_nothing_of_its_value(
+    mgr: ProviderManager, engine: AsyncEngine, app: FastAPI, caplog: pytest.LogCaptureFixture
+):
+    """A harmless label that looks like a credential: fail closed, but say where."""
+    label = "Garage key: shelf 3"
+    async with make_session_factory(engine)() as session:
+        row = await repo.create(
+            session,
+            app.state.secret_box,
+            kind="integration",
+            type_name="demo",
+            name="garage",
+            enabled=True,
+            config={"interval_seconds": 3600, "label": label},
+            secrets={"token": "garage-token-123456"},
+            user_id=None,
+        )
+        await session.commit()
+    await mgr.apply(row.id)
+    try:
+        with pytest.raises(ActionFailedError):
+            await mgr.run_action(row.id, "emit_now", {})
+        status = mgr.status(row.id)
+        assert status is not None
+        assert status.message == (
+            "event rejected: field 'label' looks like a credential or contains a secret"
+        )
+        for word in ("Garage", "shelf", "key: "):
+            assert word not in status.message
+            assert word not in caplog.text
+    finally:
+        await mgr.stop()
+
+
+class _FastStart(fakes.RecordingProvider):
+    """Finishes its start and, in the same step, cancels the apply that waits for it."""
+
+    type_name: ClassVar[str] = "fast_start"
+    caller: ClassVar[asyncio.Task[Any] | None] = None
+    stopped: ClassVar[int] = 0
+
+    async def start(self, ctx: ProviderContext) -> None:
+        caller = type(self).caller
+        if caller is not None:
+            caller.cancel()
+
+    async def stop(self) -> None:
+        type(self).stopped += 1
+
+
+async def test_a_start_that_finished_as_its_caller_was_cancelled_is_stopped(
+    mgr: ProviderManager, engine: AsyncEngine, app: FastAPI
+):
+    app.state.provider_registry.register(_FastStart)
+    _FastStart.stopped = 0
+    iid = await _instance(engine, app, "fast_start")
+    job = asyncio.create_task(mgr.apply(iid))
+    _FastStart.caller = job
+    with pytest.raises(asyncio.CancelledError):
+        await job
+    _FastStart.caller = None
+    await mgr.stop()
+    # It started, it is not in the running set: it must have been stopped all the same.
+    assert iid not in mgr._running
+    assert _FastStart.stopped == 1

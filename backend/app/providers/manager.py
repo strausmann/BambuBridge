@@ -35,9 +35,12 @@ value of the payload (never a field name) and the ``dedup_key`` is run through t
 as text: if masking would change any of them - a known secret of the instance in any
 spelling, or a credential by its form (``Bearer ...``, ``token=...``, user information in
 an address) - the event is refused (:class:`EventRejectedError`), not stored, and the
-instance shows ``event rejected: contains a secret``. Fail closed: a value with an
-invisible character is refused as well (masking removes it). Declared limit: a secret
-split across several values is not detected.
+instance shows ``event rejected: field '<path>' looks like a credential or contains a
+secret`` (the JSON path, never the value), until its next stop or start. Fail
+closed: a value with an invisible character is refused as well (masking removes it), and
+so is a harmless one that only looks like a credential (``Garage key: shelf 3``); the path
+in the message says which field to change. Declared limit: a secret split across several
+values is not detected.
 
 Declared limit: an admin can test whether a config value equals an instance secret (set a
 plain field such as ``label`` to a guess and watch for ``event rejected``). Every check of
@@ -95,27 +98,39 @@ MAX_STATUS_MESSAGE_LENGTH = 500
 _log = logging.getLogger(__name__)
 
 
-EVENT_REJECTED_MESSAGE = "event rejected: contains a secret"
+def event_rejected_message(path: str) -> str:
+    """The status message for a refused event: where, never what (the path, not the value)."""
+    return f"event rejected: field '{path}' looks like a credential or contains a secret"
 
 
 class EventRejectedError(ValueError):
     """An event held a secret of its instance and was not stored."""
 
 
-def _values(value: object) -> list[str]:
-    """Every value of a JSON value as text (strings, numbers) - never its field names."""
-    found: list[str] = []
-    pending: list[object] = [value]
+# A path in a status message is cut to this length (field names come from the schema).
+_MAX_PATH_LENGTH = 100
+
+
+def _values(value: object) -> list[tuple[str, str]]:
+    """``(json path, text)`` of every value (strings, numbers) - never a field name as text.
+
+    The path is built from field names and list positions only (``a.b[0]``), in payload
+    order.
+    """
+    found: list[tuple[str, str]] = []
+    pending: list[tuple[str, object]] = [("", value)]
     while pending:
-        item = pending.pop()
+        path, item = pending.pop(0)
         if isinstance(item, str):
-            found.append(item)
+            found.append((path, item))
         elif isinstance(item, dict):
-            pending.extend(item.values())
+            pending.extend(
+                (f"{path}.{key}" if path else str(key), child) for key, child in item.items()
+            )
         elif isinstance(item, list | tuple):
-            pending.extend(item)
+            pending.extend((f"{path}[{index}]", child) for index, child in enumerate(item))
         elif isinstance(item, int | float) and not isinstance(item, bool):
-            found.append(str(item))
+            found.append((path, str(item)))
     return found
 
 
@@ -394,6 +409,10 @@ class ProviderManager:
         on_abandon: Callable[[asyncio.Task[Any]], Awaitable[None]] | None,
     ) -> None:
         if task.done():
+            # Finished in the same step its caller was cancelled: a start that succeeded is
+            # not in the running set, so it is stopped like any other abandoned one.
+            if on_abandon is not None and not task.cancelled():
+                self._background(on_abandon(task))
             return
         task.cancel()
         self._abandoned.add(task)
@@ -574,22 +593,23 @@ class ProviderManager:
                 raise ValueError(f"payload does not match the event type ({exc})") from None
             # Not masked (that would break the payload schema): an event with a value that
             # masking would change is refused as a whole. Values only, never field names.
-            texts = _values(payload) + ([dedup_key] if isinstance(dedup_key, str) else [])
+            texts = _values(payload)
+            if isinstance(dedup_key, str):
+                texts.append(("dedup_key", dedup_key))
 
-            def holds_secret() -> bool:
+            def offending_path() -> str | None:
                 masker = masker_for(secret_paths, secrets)
-                return any(masker.text(text) != text for text in texts)
+                return next((path for path, text in texts if masker.text(text) != text), None)
 
-            if await asyncio.to_thread(holds_secret):
-                _log.warning(
-                    "provider %s: event %s rejected (it holds a secret)", instance_id, type
-                )
-                self._notices[instance_id] = (EVENT_REJECTED_MESSAGE, _now())
+            path = await asyncio.to_thread(offending_path)
+            if path is not None:
+                message = event_rejected_message(path[:_MAX_PATH_LENGTH])
+                # The event type and the path only: the value is what must not be shown.
+                _log.warning("provider %s: event %s refused: %s", instance_id, type, message)
+                self._notices[instance_id] = (message, _now())
                 state = self.status(instance_id)
-                await self._persist(
-                    instance_id, state.state if state else "error", EVENT_REJECTED_MESSAGE
-                )
-                raise EventRejectedError(EVENT_REJECTED_MESSAGE)
+                await self._persist(instance_id, state.state if state else "error", message)
+                raise EventRejectedError(message)
             async with self._sessions() as session:
                 try:
                     event_id = await self._events.emit(
