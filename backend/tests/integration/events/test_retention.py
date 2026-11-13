@@ -758,3 +758,52 @@ async def test_job_backs_off_after_a_lock_timeout(
     assert [r.getMessage() for r in caplog.records].count(
         "retention failed (DBAPIError, SQLSTATE 55P03)"
     ) == 4
+
+
+async def test_a_clock_jump_shared_by_host_and_database_keeps_the_newest_rows(
+    sessions: async_sessionmaker[AsyncSession], store: SettingsStore
+):
+    # Audit run 7, R-H4: both clocks jump to December; the comparison cannot see it.
+    await _add_events(sessions, at(5, 3), at(6, 10))
+    await _add_log(sessions, at(6, 1))
+    jumped = datetime(2045, 12, 20, 12, 0, tzinfo=UTC)
+
+    result = await _run(sessions, store, jumped)
+
+    assert result.dropped_partitions == [*_events(1, 2, 3, 4, 5), *_log(1, 2, 3, 4, 5)]
+    assert await _children(sessions, "events") == _events(6)
+    assert await _children(sessions, "communication_log") == _log(6)
+    assert await _event_times(sessions) == [at(6, 10)]
+    assert await _log_times(sessions) == [at(6, 1)]
+
+
+async def test_an_empty_table_loses_all_its_old_partitions(
+    sessions: async_sessionmaker[AsyncSession], store: SettingsStore
+):
+    # Nothing to protect: no row anywhere, the partitions before the cut-off go.
+    result = await _run(sessions, store)
+    assert result.dropped_partitions == [*_events(1, 2), *_log(1, 2, 3, 4)]
+
+
+async def test_repeated_skipped_runs_are_logged_as_an_error(
+    sessions: async_sessionmaker[AsyncSession],
+    store: SettingsStore,
+    database_clock: DatabaseClock,
+    caplog: pytest.LogCaptureFixture,
+):
+    database_clock.source = lambda: NOW
+    job = RetentionMaintenance(sessions, store, clock=lambda: NOW + timedelta(hours=2))
+
+    with caplog.at_level(logging.WARNING, logger="app.events.retention"):
+        for _ in range(4):
+            assert await job.run_once() is True
+        database_clock.source = lambda: NOW + timedelta(hours=2)
+        assert await job.run_once() is True  # clocks agree again: the count starts anew
+        database_clock.source = lambda: NOW
+        assert await job.run_once() is True
+
+    errors = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
+    assert errors == [
+        "retention skipped 3 runs in a row: the clocks still differ, nothing is pruned",
+        "retention skipped 4 runs in a row: the clocks still differ, nothing is pruned",
+    ]

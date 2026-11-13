@@ -173,11 +173,11 @@ was committed. `emit` does not commit; the caller does.
 What a provider instance sends and receives is written to `communication_log` by
 `CommunicationRecorder` (`app/events/communication.py`), and only by it. Provider code uses
 `record_isolated(session_factory, ...)`: it writes the row in a short transaction of its own
-and swallows a database error (for example a missing partition), with one warning that
-names the error class and SQLSTATE only, so a failed log entry never fails the work it
-describes. `record(session, ...)` adds the row to the caller's transaction instead and does
-not commit; a database error then aborts that transaction. Use it only where the entry has
-to be atomic with other work.
+and swallows a database error (for example a missing partition), with one warning that names
+the error class and SQLSTATE only, so a failed log entry never fails the work it describes;
+it masks in a worker thread, so the event loop is not held up. `record(session, ...)` adds
+the row to the caller's transaction instead and does not commit; a database error then
+aborts that transaction. Use it only where the entry has to be atomic with other work.
 
 Every stored part (address, headers, both bodies, the error text) goes through three steps,
 in this order:
@@ -193,17 +193,22 @@ in this order:
      `session`, `sessid`, `signature`, `access_code` (also `accessCode`, `access-code`),
      `passcode`, `passphrase`, `pincode`, `totp`, `jwt`, `ticket`, `assertion`, `psk`,
      `csrf`, `xsrf` or `samlresponse`, or has `pass`, `pw`, `pin`, `otp`, `sig` or `sid` as
-     a word of its own (`user_pass`, `userPW`, `pin_code`), in any case;
+     a word of its own (`user_pass`, `userPW`, `pin_code`), or a word ending in `pass` or
+     `pw` (`dbpass`, `rootpw`), in any case; names are compared after NFKC, without
+     combining marks (the same test in JSON and in text, Unicode names included);
    - every field named like the last segment of a path the provider schema marks with
      `"x-secret": true` (`secret_paths_from_schema`), wherever it stands;
    - every occurrence of a known secret value of 8 characters or more (surrounding white
      space removed) in any spelling an encoder writes: each character as itself or escaped
-     (percent escapes in either case, `\uXXXX`, `\xNN`, `\/`, `+` for a space ...), the
+     (percent escapes in either case, `\uXXXX`, `\xNN`, `\/`, `+` for a space, HTML/XML
+     references such as `&#43;`, `&#x2F;` and `&amp;` ...), backslash escapes also as
+     `json.dumps` or `repr()` write them a second time, the
      Python `repr` spellings, and base64 or base64url, also inside a longer base64 value and
      wrapped over several lines;
    - the user information in `scheme://user:password@host` up to the last `@` (the whole of
      it when there is no colon), and the credential after `Bearer` or `Basic`.
 
+   Invisible format characters (zero-width space, soft hyphen, ...) are removed first.
    A JSON body is masked on its parsed values (after a byte order mark); an object that
    repeats a name is rewritten with the repeats numbered (`name#2`), so no parser can pick
    another value. Any other text is searched at every position for `"name": value` and
@@ -240,7 +245,9 @@ cut-offs before it removes anything.
 The periods are counted back from the database clock. If the host clock differs from it by
 more than five minutes the run is skipped with a warning (`retention skipped: ...`): a host
 clock far ahead would otherwise delete what is current. A partition whose range holds or
-follows the database's present moment is never dropped.
+follows the database's present moment is never dropped, nor the partition that holds the
+newest rows of a table (a guard for a clock jump that host and database share). From the
+third skipped run in a row on, each skip is logged as an error.
 
 A run deletes the rows older than the period in the month the cut-off falls into and drops
 the monthly partitions that lie entirely before it. Outbox deliveries of events older than

@@ -498,3 +498,41 @@ async def test_record_isolated_still_refuses_wrong_arguments(
     with pytest.raises(ValueError, match="duration_ms"):
         await recorder.record_isolated(sessions, **_arguments(duration_ms=-1))
     assert await _count(sessions) == 0
+
+
+# --- fix round 2 ---------------------------------------------------------------------------
+
+
+async def test_header_names_that_collide_after_shortening_are_numbered(db_session: AsyncSession):
+    long = "X-" + "a" * 300
+    entry = await _record(
+        db_session,
+        request=Message(headers=[(long + "1", "one"), (long + "2", "two"), (long + "3", "three")]),
+    )
+
+    names = list(entry.request_headers)
+    assert len(names) == 3
+    assert all(len(name) <= 200 for name in names)
+    # jsonb orders the keys itself.
+    assert sorted(name[-2:] for name in names if "#" in name) == ["#2", "#3"]
+    assert sorted(entry.request_headers.values()) == ["one", "three", "two"]
+
+
+async def test_record_isolated_masks_off_the_event_loop(
+    sessions: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+):
+    import threading
+
+    threads: list[threading.Thread] = []
+    real = communication.Masker
+
+    def watched(**kwargs: Any) -> communication.Masker:
+        threads.append(threading.current_thread())
+        return real(**kwargs)
+
+    monkeypatch.setattr(communication, "Masker", watched)
+
+    assert await recorder.record_isolated(sessions, **_arguments()) is True
+
+    assert len(threads) == 1
+    assert threads[0] is not threading.main_thread()

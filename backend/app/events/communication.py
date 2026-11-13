@@ -33,6 +33,7 @@ describes.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import Collection, Iterable, Mapping
@@ -144,7 +145,14 @@ class _Exchange:
                 if isinstance(value, list)
                 else self._shorten(value, MAX_HEADER_VALUE_LENGTH)
             )
-            out[self._shorten(name, MAX_HEADER_NAME_LENGTH)] = short
+            short_name = self._shorten(name, MAX_HEADER_NAME_LENGTH)
+            if short_name in out:
+                # Two names that are the same once shortened (or masked): numbered.
+                number = 2
+                while (numbered := _numbered(short_name, number)) in out:
+                    number += 1
+                short_name = numbered
+            out[short_name] = short
         return out
 
     def body(self, body: bytes | str | None) -> str | None:
@@ -166,6 +174,12 @@ class _Exchange:
         stored, cut = truncate_utf8(masked, MAX_BODY_BYTES)
         self.truncated |= cut
         return stored
+
+
+def _numbered(name: str, number: int) -> str:
+    """``name#number``, still within ``MAX_HEADER_NAME_LENGTH``."""
+    suffix = f"#{number}"
+    return name[: MAX_HEADER_NAME_LENGTH - len(suffix)] + suffix
 
 
 def _text(value: object) -> str:
@@ -192,6 +206,63 @@ def _decode(data: bytes, *, complete: bool) -> str | None:
             return None
         # Everything before the first error is valid UTF-8.
         return data[: exc.start].decode("utf-8")
+
+
+def _entry_values(
+    *,
+    instance_id: uuid.UUID,
+    method: str,
+    target: str,
+    status: int | None,
+    duration_ms: int,
+    request: Message | None,
+    response: Message | None,
+    error: str | None,
+    direction: str,
+    secret_paths: Collection[str],
+    known_secrets: Collection[str],
+) -> dict[str, Any]:
+    """The checked, masked and cut column values of one entry (CPU work, no I/O)."""
+    if not isinstance(instance_id, uuid.UUID):
+        raise ValueError("instance_id must be a UUID")
+    if direction not in DIRECTIONS:
+        raise ValueError("direction must be 'outbound' or 'inbound'")
+    if not isinstance(method, str) or not method:
+        raise ValueError("method must be a non-empty string")
+    if not isinstance(target, str):
+        raise ValueError("target must be a string")
+    if status is not None and not _is_int(status, -_MAX_INT, _MAX_INT):
+        raise ValueError("status must be None or an integer that fits the column")
+    if not _is_int(duration_ms, 0, _MAX_INT):
+        raise ValueError("duration_ms must be a non-negative integer that fits the column")
+    if error is not None and not isinstance(error, str):
+        raise ValueError("error must be None or a string")
+    for name, message in (("request", request), ("response", response)):
+        if message is not None and not isinstance(message, Message):
+            raise ValueError(f"{name} must be None or a Message")
+        if message is not None and not isinstance(
+            message.body, bytes | bytearray | memoryview | str | None
+        ):
+            raise ValueError(f"the body of {name} must be bytes, a string or None")
+
+    exchange = _Exchange(Masker(secret_paths=secret_paths, known_secrets=known_secrets))
+    values: dict[str, Any] = {
+        "occurred_at": func.clock_timestamp(),
+        "instance_id": instance_id,
+        "direction": direction,
+        "method": exchange.line(method, MAX_METHOD_LENGTH),
+        "target": exchange.target(target),
+        "status": status,
+        "duration_ms": duration_ms,
+        "request_headers": exchange.headers(request.headers) if request else {},
+        "request_body": exchange.body(request.body) if request else None,
+        "response_headers": exchange.headers(response.headers) if response else {},
+        "response_body": exchange.body(response.body) if response else None,
+        "error": None if error is None else exchange.line(error, MAX_ERROR_LENGTH),
+    }
+    # Last: every part above may have set it.
+    values["truncated"] = exchange.truncated
+    return values
 
 
 class CommunicationRecorder:
@@ -231,45 +302,19 @@ class CommunicationRecorder:
         when the entry has to be atomic with other work, and :meth:`record_isolated`
         otherwise.
         """
-        if not isinstance(instance_id, uuid.UUID):
-            raise ValueError("instance_id must be a UUID")
-        if direction not in DIRECTIONS:
-            raise ValueError("direction must be 'outbound' or 'inbound'")
-        if not isinstance(method, str) or not method:
-            raise ValueError("method must be a non-empty string")
-        if not isinstance(target, str):
-            raise ValueError("target must be a string")
-        if status is not None and not _is_int(status, -_MAX_INT, _MAX_INT):
-            raise ValueError("status must be None or an integer that fits the column")
-        if not _is_int(duration_ms, 0, _MAX_INT):
-            raise ValueError("duration_ms must be a non-negative integer that fits the column")
-        if error is not None and not isinstance(error, str):
-            raise ValueError("error must be None or a string")
-        for name, message in (("request", request), ("response", response)):
-            if message is not None and not isinstance(message, Message):
-                raise ValueError(f"{name} must be None or a Message")
-            if message is not None and not isinstance(
-                message.body, bytes | bytearray | memoryview | str | None
-            ):
-                raise ValueError(f"the body of {name} must be bytes, a string or None")
-
-        exchange = _Exchange(Masker(secret_paths=secret_paths, known_secrets=known_secrets))
-        values: dict[str, Any] = {
-            "occurred_at": func.clock_timestamp(),
-            "instance_id": instance_id,
-            "direction": direction,
-            "method": exchange.line(method, MAX_METHOD_LENGTH),
-            "target": exchange.target(target),
-            "status": status,
-            "duration_ms": duration_ms,
-            "request_headers": exchange.headers(request.headers) if request else {},
-            "request_body": exchange.body(request.body) if request else None,
-            "response_headers": exchange.headers(response.headers) if response else {},
-            "response_body": exchange.body(response.body) if response else None,
-            "error": None if error is None else exchange.line(error, MAX_ERROR_LENGTH),
-        }
-        # Last: every part above may have set it.
-        values["truncated"] = exchange.truncated
+        values = _entry_values(
+            instance_id=instance_id,
+            method=method,
+            target=target,
+            status=status,
+            duration_ms=duration_ms,
+            request=request,
+            response=response,
+            error=error,
+            direction=direction,
+            secret_paths=secret_paths,
+            known_secrets=known_secrets,
+        )
         await session.execute(insert(CommunicationEntry).values(**values))
 
     async def record_isolated(
@@ -297,22 +342,25 @@ class CommunicationRecorder:
         ``ValueError``: that is a bug in the caller, not a state of the database.
         Use :meth:`record` instead when the entry has to be atomic with other work.
         """
+        # Masking is CPU work (up to seconds for large parts and many secrets): it runs in
+        # a worker thread so the event loop stays free.
+        values = await asyncio.to_thread(
+            _entry_values,
+            instance_id=instance_id,
+            method=method,
+            target=target,
+            status=status,
+            duration_ms=duration_ms,
+            request=request,
+            response=response,
+            error=error,
+            direction=direction,
+            secret_paths=secret_paths,
+            known_secrets=known_secrets,
+        )
         try:
             async with sessions() as session, session.begin():
-                await self.record(
-                    session,
-                    instance_id=instance_id,
-                    method=method,
-                    target=target,
-                    status=status,
-                    duration_ms=duration_ms,
-                    request=request,
-                    response=response,
-                    error=error,
-                    direction=direction,
-                    secret_paths=secret_paths,
-                    known_secrets=known_secrets,
-                )
+                await session.execute(insert(CommunicationEntry).values(**values))
         except (SQLAlchemyError, OSError) as exc:
             _log.warning("communication log entry not recorded (%s)", describe_error(exc))
             return False

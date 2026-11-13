@@ -72,6 +72,8 @@ MAX_CLOCK_DIFFERENCE = timedelta(minutes=5)
 # Waits after the first, second and every further run in a row that failed on a lock.
 LOCK_BACKOFF_SECONDS = (60.0, 300.0, 900.0)
 LOCK_NOT_AVAILABLE = "55P03"
+# From this many skipped runs in a row on, each one is logged as an error.
+SKIPPED_RUNS_ERROR = 3
 
 # Children of ``parent`` that are ordinary tables and that the bare name resolves to.
 _CHILDREN = text(
@@ -153,6 +155,30 @@ async def _delete_rows(session: AsyncSession, cutoffs: dict[str, datetime]) -> t
     return deleted, int(counts.finished), int(counts.pending)
 
 
+async def _partition_with_newest_row(
+    session: AsyncSession, table: str, candidates: list[tuple[datetime, str]]
+) -> str | None:
+    """The candidate partition that holds the newest row of ``table``, if any.
+
+    A guard for a clock jump that host and database share (the comparison of the two
+    cannot see it): whatever the cut-off says, the newest data stays. Cheap: ``EXISTS``
+    stops at the first row, and the range condition is pruned to the later partitions.
+    """
+    if not candidates:
+        return None
+    # Names and the table come from the catalog and the fixed mapping (digits only).
+    newer = await session.scalar(
+        text(f'SELECT EXISTS (SELECT 1 FROM "{table}" WHERE occurred_at >= :end)'),  # noqa: S608
+        {"end": candidates[-1][0]},
+    )
+    if newer:
+        return None
+    for _, name in reversed(candidates):
+        if await session.scalar(text(f'SELECT EXISTS (SELECT 1 FROM "{name}")')):  # noqa: S608
+            return name
+    return None
+
+
 async def _drop_partitions(
     session: AsyncSession, cutoffs: dict[str, datetime], database_now: datetime
 ) -> list[str]:
@@ -167,6 +193,7 @@ async def _drop_partitions(
     )
     dropped: list[str] = []
     for table, cutoff in cutoffs.items():
+        candidates: list[tuple[datetime, str]] = []
         pattern = re.compile(rf"{table}_y(\d{{4}})m(\d{{2}})", re.ASCII)
         for name in (await session.scalars(_CHILDREN, {"parent": table})).all():
             match = pattern.fullmatch(name)
@@ -177,7 +204,12 @@ async def _drop_partitions(
                 continue
             next_year, next_month0 = divmod(year * 12 + month, 12)
             end = datetime(next_year, next_month0 + 1, 1, tzinfo=UTC)
-            if not may_drop(end, cutoff=cutoff, database_now=database_now):
+            if may_drop(end, cutoff=cutoff, database_now=database_now):
+                candidates.append((end, name))
+        keep = await _partition_with_newest_row(session, table, sorted(candidates))
+        for _, name in sorted(candidates):
+            if name == keep:
+                _log.warning("kept partition %s: it holds the newest rows of %s", name, table)
                 continue
             # The name matched the pattern above: fixed table name and digits only.
             await session.execute(text(f'DROP TABLE "{name}"'))
@@ -269,10 +301,21 @@ class RetentionMaintenance(DailyJob):
         )
         self._sessions = sessions
         self._settings = settings
+        self._skipped_in_a_row = 0
 
     async def _work(self) -> None:
         async with self._sessions() as session:
             result = await run_retention(session, self._clock(), self._settings)
+        if result.skipped:
+            self._skipped_in_a_row += 1
+            if self._skipped_in_a_row >= SKIPPED_RUNS_ERROR:
+                _log.error(
+                    "retention skipped %d runs in a row: the clocks still differ, "
+                    "nothing is pruned",
+                    self._skipped_in_a_row,
+                )
+            return
+        self._skipped_in_a_row = 0
         if result.dropped_partitions:
             _log.info("dropped partitions: %s", ", ".join(result.dropped_partitions))
         if result.deleted_rows or result.deleted_deliveries:
