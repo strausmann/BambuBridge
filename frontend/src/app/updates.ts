@@ -33,6 +33,8 @@ export interface UpdateEnvironment {
   isBusy: () => boolean;
   /** How long to wait for a new worker that is still installing before reloading without it. */
   waitForWorkerMs: number;
+  /** How long a version signal waits for the worker registration (none comes without support). */
+  waitForRegistrationMs: number;
   /** Resolves once the waiting worker controls the page (or after a while, whichever is first). */
   waitForController: () => Promise<void>;
 }
@@ -83,6 +85,7 @@ const defaults = (): UpdateEnvironment => ({
   reload: () => window.location.reload(),
   isBusy: () => typing() || hasDirtyForms(),
   waitForWorkerMs: 10_000,
+  waitForRegistrationMs: 10_000,
   waitForController: () => controllerChange(),
 });
 
@@ -98,6 +101,9 @@ let env: UpdateEnvironment | null = null;
 let registration: ServiceWorkerRegistration | undefined;
 let updateSW: ((reloadPage?: boolean) => Promise<void>) | null = null;
 let applying = false;
+/** Resolves once `registerSW` reported the registration (or failed): see `whenRegistered`. */
+let registeredSignal: Promise<void> = Promise.resolve();
+let markRegistered: () => void = () => undefined;
 const stateListeners = new Set<() => void>();
 const waitingListeners = new Set<() => void>();
 
@@ -129,17 +135,43 @@ function waitForWaitingWorker(ms: number): Promise<boolean> {
 }
 
 /**
+ * The registration, once `registerSW` has reported it. Right after a deployment the old worker
+ * serves the shell, and the first API answer can name the new version before that callback ran:
+ * without this wait the update check would find no registration and the update would be lost.
+ * Gives up after `waitForRegistrationMs` (a browser without workers never calls back).
+ */
+function whenRegistered(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(resolve, ms);
+    void registeredSignal.then(() => {
+      window.clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+/**
  * Reload into the newest version: through the waiting worker when there is one (it is told to
  * take over, and the page reloads once it controls the page), otherwise a plain reload, which
  * loads the server's files directly. The reload is made here, not left to the plugin: a worker
  * found by `registration.update()` counts as "external" to workbox-window, which then does not
  * reload by itself.
+ *
+ * `automatic`: the reload was not asked for. Fetching and installing the worker takes a moment;
+ * if someone started typing or changed a form meanwhile, the banner asks instead. From the
+ * banner's own button the reload goes ahead regardless: that is the person's choice.
  */
-export async function applyUpdate(): Promise<void> {
+export async function applyUpdate({ automatic = false }: { automatic?: boolean } = {}): Promise<void> {
   if (env === null || applying) return;
   applying = true;
+  await whenRegistered(env.waitForRegistrationMs);
   await checkForUpdate();
   if (registration?.installing) await waitForWaitingWorker(env.waitForWorkerMs);
+  if (automatic && env.isBusy()) {
+    applying = false;
+    setState({ banner: true });
+    return;
+  }
   if (state.waiting && updateSW) {
     const controlled = env.waitForController();
     await updateSW(true);
@@ -159,12 +191,15 @@ async function onServerVersion(version: string): Promise<void> {
     return;
   }
   env.storage.setItem(RELOAD_GUARD_KEY, JSON.stringify([...done, version]));
-  await applyUpdate();
+  await applyUpdate({ automatic: true });
 }
 
 /** Registers the worker and starts watching for new versions. Returns a function that stops. */
 export function startUpdates(register: RegisterSW, overrides: Partial<UpdateEnvironment> = {}): () => void {
   env = { ...defaults(), ...overrides };
+  registeredSignal = new Promise((resolve) => {
+    markRegistered = resolve;
+  });
   updateSW = register({
     immediate: true,
     onNeedRefresh() {
@@ -173,6 +208,10 @@ export function startUpdates(register: RegisterSW, overrides: Partial<UpdateEnvi
     },
     onRegisteredSW(_url, registered) {
       registration = registered;
+      markRegistered();
+    },
+    onRegisterError() {
+      markRegistered();
     },
   });
   const onVisibility = () => {
@@ -208,6 +247,8 @@ export function resetUpdatesForTest(): void {
   registration = undefined;
   updateSW = null;
   applying = false;
+  registeredSignal = Promise.resolve();
+  markRegistered = () => undefined;
   waitingListeners.clear();
   setState({ banner: false, waiting: false });
 }

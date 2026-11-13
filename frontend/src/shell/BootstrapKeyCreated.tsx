@@ -2,6 +2,7 @@ import { Trans, useLingui } from "@lingui/react/macro";
 import { Link, useBlocker } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button, Input, Label, TextField } from "react-aria-components";
+import { useDirtyGuard } from "../app/dirtyGuard";
 import { ApiError } from "../api/client";
 import { AuthScreen, ErrorNote } from "./AuthScreen";
 import { BusyButton } from "./Busy";
@@ -54,6 +55,9 @@ export function BootstrapKeyCreated({ onCreate, onContinue }: Props) {
   const tokenAtStake = () => creating.current || (created !== null && !used.current);
   const blocker = useBlocker({ shouldBlockFn: tokenAtStake, enableBeforeUnload: false, withResolver: true });
   const guarded = busy || created !== null;
+  // A typed key, a request under way or a token on screen: a new version asks instead of
+  // reloading over it (src/app/updates.ts).
+  useDirtyGuard(bootstrapKey !== "" || guarded);
   useEffect(() => {
     if (!guarded) return;
     const ask = (event: BeforeUnloadEvent) => {

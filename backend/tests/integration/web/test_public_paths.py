@@ -105,7 +105,9 @@ async def test_the_list_opens_nothing_else(client: httpx.AsyncClient):
     assert not is_public_file("/sw.js/x")
 
 
-async def _raw_get(app: object, path: str, raw_path: bytes) -> tuple[int, dict[str, str], bytes]:
+async def _raw_get(
+    app: object, path: str, raw_path: bytes, query: bytes = b""
+) -> tuple[int, dict[str, str], bytes]:
     """One GET straight into the ASGI app, with exactly this path and raw path (no client
     normalises dot segments or decodes ``%2f`` on the way)."""
     sent: list[dict[str, object]] = []
@@ -135,7 +137,7 @@ async def _raw_get(app: object, path: str, raw_path: bytes) -> tuple[int, dict[s
         "path": path,
         "raw_path": raw_path,
         "root_path": "",
-        "query_string": b"",
+        "query_string": query,
         "headers": [(b"host", b"test")],
         "client": ("127.0.0.1", 1234),
         "server": ("test", 80),
@@ -175,5 +177,27 @@ async def test_a_public_file_under_another_spelling_is_404(
         status, headers, _body = await _raw_get(application, "/sw.js", b"/sw.js")
         assert status == 200
         assert headers["cache-control"] == "no-store"
+    finally:
+        await application.state.engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("path", "query", "body"),
+    [("/assets/index-abc123.js", b"v=1", "// app"), ("/sw.js", b"v=1", FILES["sw.js"])],
+)
+async def test_a_query_string_keeps_the_canonical_path(
+    settings: Settings, tmp_path: Path, engine: object, path: str, query: bytes, body: str
+):
+    """The canonical-path rule looks at the path only: a cache-busting query still gets the file."""
+    for name, text in FILES.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text)
+    application = create_app(settings, web_dist_dir=tmp_path)
+    try:
+        status, headers, content = await _raw_get(application, path, path.encode(), query)
+        assert status == 200, path
+        assert content.decode() == body
+        if path == "/sw.js":
+            assert headers["cache-control"] == "no-store"
     finally:
         await application.state.engine.dispose()

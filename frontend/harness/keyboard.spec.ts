@@ -42,6 +42,10 @@ for (const kind of ["sheet", "dialog"] as const) {
     if (kind === "sheet" && test.info().project.name === "short-chromium" && process.env.E2E_SCREENSHOT_DIR) {
       await field.click();
       await field.fill("A");
+      await expect(page.getByRole("option").first()).toBeVisible();
+      // The picture shows the list at rest, not on its way in.
+      await expect(page.locator("[data-entering], [data-exiting]")).toHaveCount(0);
+      await page.waitForFunction(() => document.getAnimations().every((animation) => animation.playState !== "running"));
       await page.screenshot({ path: `${process.env.E2E_SCREENSHOT_DIR}/phone-sheet-keyboard.png` });
     }
   });
