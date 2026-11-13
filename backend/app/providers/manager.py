@@ -53,6 +53,8 @@ from app.security.masking import secret_paths_from_schema
 from app.security.secret_box import SecretBox
 
 STEP_TIMEOUT_SECONDS = 10.0
+# Status messages are shown in the API and stored; longer ones are cut (after masking).
+MAX_STATUS_MESSAGE_LENGTH = 500
 
 _log = logging.getLogger(__name__)
 
@@ -140,6 +142,19 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _cap(message: str) -> str:
+    """At most ``MAX_STATUS_MESSAGE_LENGTH`` characters, never ending inside a ``***``."""
+    if len(message) <= MAX_STATUS_MESSAGE_LENGTH:
+        return message
+    cut = MAX_STATUS_MESSAGE_LENGTH - 1  # room for the ellipsis
+    for back in (1, 2):
+        # A mask that starts left of the cut and ends right of it is dropped whole.
+        if message[cut - back : cut - back + 3] == "***":
+            cut -= back
+            break
+    return message[:cut] + "…"
+
+
 class ProviderManager:
     def __init__(
         self,
@@ -194,20 +209,42 @@ class ProviderManager:
         running = self._running.get(instance_id)
         if running is not None:
             try:
-                return running.provider.status()
+                reported = running.provider.status()
             except Exception as exc:
                 return ProviderStatus("error", f"status failed ({type(exc).__name__})", _now())
+            return self._clean(running, reported)
         return self._states.get(instance_id)
+
+    @staticmethod
+    def _clean(running: _Running, reported: ProviderStatus) -> ProviderStatus:
+        """The provider's own message masked with the instance's secrets, then capped.
+
+        Fail closed: a provider may put an error text or a credential into its message,
+        and the message is shown by the API and stored in ``provider_instances``. Anything
+        that is not a string is replaced by its type.
+        """
+        raw: object = reported.message  # provider code: do not trust the annotation
+        if raw is None:
+            return reported
+        message = raw if isinstance(raw, str) else f"<{type(raw).__name__}>"
+        masked = masker_for(running.secret_paths, running.secrets).text(
+            message[: 4 * MAX_STATUS_MESSAGE_LENGTH]
+        )
+        return ProviderStatus(reported.state, _cap(masked), reported.since)
 
     async def _set_state(
         self, instance_id: uuid.UUID, state: ProviderStatusState, message: str | None = None
     ) -> None:
+        message = None if message is None else _cap(message)
         self._states[instance_id] = ProviderStatus(state, message, _now())
         await self._persist(instance_id, state, message)
 
     async def _persist(
         self, instance_id: uuid.UUID, state: ProviderStatusState, message: str | None
     ) -> None:
+        # Messages reach this point masked (``status``) or fixed by the manager; capped
+        # once more so the column never holds more than the API would show.
+        message = None if message is None else _cap(message)
         try:
             async with self._sessions() as session, session.begin():
                 await repo.set_status(session, instance_id, state, message)

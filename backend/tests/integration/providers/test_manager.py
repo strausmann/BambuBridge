@@ -9,6 +9,7 @@ import uuid
 from typing import Any
 
 import httpx
+import pytest
 from fastapi import FastAPI
 from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -304,3 +305,48 @@ async def test_listener_reconnects_and_applies_missed_changes(
 
     final = await eventually(status, lambda s: s is not None and s.state == "stopped", 8)
     assert final is not None and final.state == "stopped"
+
+
+async def test_status_message_is_masked_and_capped(
+    admin_client: httpx.AsyncClient,
+    manager: ProviderManager,
+    engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from datetime import UTC, datetime
+
+    from app.providers.base import ProviderStatus
+    from app.providers.demo.provider import DemoProvider
+
+    # A careless provider that puts its token into the status message, at length.
+    def leaky_status(self: DemoProvider) -> ProviderStatus:
+        token = self._ctx.secrets["token"] if self._ctx else ""
+        return ProviderStatus(
+            "connected", f"connected with {token} " + "x" * 5000, datetime.now(UTC)
+        )
+
+    monkeypatch.setattr(DemoProvider, "status", leaky_status)
+    created = await create(
+        admin_client,
+        kind="integration",
+        type_name="demo",
+        name="leaky status",
+        config={"label": "x", "token": TOKEN},
+    )
+    r = await eventually(
+        lambda: admin_client.get(f"{PROVIDERS_URL}/{created['id']}"),
+        lambda resp: resp.json()["status"]["state"] == "connected",
+        5,
+    )
+    assert TOKEN.encode() not in r.content  # raw bytes
+    message = r.json()["status"]["message"]
+    assert message.startswith("connected with ***")
+    assert len(message) <= manager_module.MAX_STATUS_MESSAGE_LENGTH
+    listed = await admin_client.get(PROVIDERS_URL)
+    assert TOKEN.encode() not in listed.content
+    async with make_session_factory(engine)() as session:
+        row = await session.get(ProviderInstance, uuid.UUID(created["id"]))
+        assert row is not None and row.status_message is not None
+        assert TOKEN not in row.status_message
+        assert row.status_message.startswith("connected with ***")
+        assert len(row.status_message) <= manager_module.MAX_STATUS_MESSAGE_LENGTH
