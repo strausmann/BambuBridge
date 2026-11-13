@@ -912,9 +912,16 @@ def test_equal_counts_in_the_escape_round_lose_no_mask():
     assert "made-up" not in readable, out
 
 
-def test_a_carried_spelling_shorter_than_a_known_secret_is_not_searched():
-    # "%41%42%43%44" decodes to "ABCD": as short as that, a value is not searched (the
-    # same threshold as for known secrets); the spelling given is still masked.
+def test_a_carried_spelling_shorter_than_a_known_secret_is_still_masked():
+    # "%41%42%43%44" was matched as given; once decoded it reads "ABCD". The length
+    # threshold applies to the configured secret, never to the spelling carried along.
     secret = "%41%42" + "%43%44"
     out = Masker(known_secrets=[secret]).text(f"x {secret} q=password%3D{REMOTE}")
     assert REMOTE not in out and secret not in out, out
+    assert "ABCD" not in out, out
+
+
+def test_a_known_value_that_decoding_removes_entirely_leaves_nothing_to_mask():
+    secret = "&#8203;" + "&#8203;"  # nothing but escaped invisible characters
+    out = Masker(known_secrets=[secret]).text(f"x {secret} {SPLIT_TRIGGER}")
+    assert REMOTE not in out and "8203" not in out, out

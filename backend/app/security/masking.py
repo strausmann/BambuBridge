@@ -815,10 +815,15 @@ def _normalized(decode: Callable[[str], str], text: str) -> str:
 
 
 def _literal_spans(text: str, values: Collection[str]) -> set[tuple[int, int]]:
-    """Every occurrence of each value (none shorter than a known secret can be)."""
+    """Every occurrence of each value, whatever its length.
+
+    The values are spellings of known values that were matched (and so long enough) before
+    a decoding round; decoded, one may be shorter (``%41%42%43%44`` reads ``ABCD``) and is
+    masked all the same. An empty one is skipped: decoding left nothing of it to show.
+    """
     spans: set[tuple[int, int]] = set()
     for value in values:
-        if len(value) < MIN_KNOWN_SECRET_LENGTH:
+        if not value:
             continue
         start = text.find(value)
         while start >= 0:
