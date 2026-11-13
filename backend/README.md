@@ -209,8 +209,8 @@ in this order:
      it when there is no colon), and the credential after `Bearer` or `Basic`.
 
    Invisible format characters (zero-width space, soft hyphen, ...) are removed first, also
-   before the first cut and in each decoding round, and also when written as an escape
-   (`&#8203;`, `%E2%80%8B`, `\u200b`) inside a known secret.
+   in each decoding round, and also when written as an escape (`&#8203;`, `%E2%80%8B`,
+   `\u200b`) inside a known secret.
    A JSON body is masked on its parsed values (after a byte order mark); an object that
    repeats a name is rewritten with the repeats numbered (`name#2`), so no parser can pick
    another value. Any other text is searched at every position for `"name": value` and
@@ -220,14 +220,17 @@ in this order:
    (`Content-Disposition: form-data; name="password"`), also inside the quoted value of
    another name; and once more in the percent-decoded text (decoded up to three times), which
    is then the text stored if that finds anything.
-3. **Cut.** Each body is stored up to 8192 bytes of UTF-8 (never cut inside a character),
-   the address up to 2048 characters, the error up to 2000, at most 100 headers with values
-   up to 2048 characters. Any cut sets `truncated`.
+3. **Cut** the masked text. Each body is stored up to 8192 bytes of UTF-8 (never cut inside
+   a character), the address up to 2048 characters, the error up to 2000, at most 100
+   headers with values up to 2048 characters; a cut never ends inside a `***`. Any cut sets
+   `truncated`.
 
-Masking comes before cutting: a secret across the 8192-byte limit would otherwise be stored
-as a fragment that no rule recognises. Only the first 65536 characters of a text are looked
-at, and 65536 characters of the headers of one side in all; that first cut never goes
-through a known secret.
+Every part is masked whole, and only the masked text is cut: a secret the masker finds is
+`***` before any cut, and one it does not find is not affected by where the cut falls. A part
+larger than 65536 bytes of UTF-8 is not masked and not kept in part: it is stored as
+`<omitted: N bytes>` (and `truncated` is set), as binary bodies are stored as
+`<binary N bytes>`. The headers of one side share 65536 bytes; a name or value that does not
+fit what is left is stored as the placeholder too.
 
 The limits of masking: it prefers hiding too much (a field called `monkey` is masked), it
 cannot find a secret that has neither a telling name, nor a schema mark, nor a known value,

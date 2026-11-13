@@ -307,31 +307,6 @@ def test_body_nested_too_deeply_is_not_recorded():
     assert len(masked) < 200
 
 
-def test_safe_prefix_never_cuts_through_a_known_secret():
-    masker = Masker(known_secrets=[SECRET])
-    text = "x" * 95 + SECRET + "y" * 500
-
-    prefix, cut = masker.safe_prefix(text, complete=True, limit=100)
-
-    assert cut is True
-    assert prefix == "x" * 95
-    assert masker.safe_prefix("short", complete=True, limit=100) == ("short", False)
-    assert masker.safe_prefix("x" * 100, complete=True, limit=100) == ("x" * 100, False)
-    assert masker.safe_prefix("x" * 101, complete=True, limit=100) == ("x" * 100, True)
-
-
-def test_safe_prefix_of_an_incomplete_text_stops_before_a_possible_secret_start():
-    masker = Masker(known_secrets=[SECRET])
-    # The text was cut by the caller right inside the secret.
-    text = "x" * 50 + SECRET[:10]
-
-    prefix, cut = masker.safe_prefix(text, complete=False, limit=1000)
-
-    assert cut is True
-    assert SECRET[:5] not in prefix
-    assert prefix == "x" * (len(text) - masker.longest_secret)
-
-
 def test_mask_copies_and_converts_containers():
     source = {"list": [1, (2, 3)], "bytes": b"\x00\x01", "flag": True, "none": None, 5: "five"}
     masked = mask(source)
@@ -453,16 +428,6 @@ def test_secret_paths_from_schema_skips_a_combinator_that_is_not_a_list():
         secret_paths_from_schema({"properties": {"a": {"anyOf": {"x-secret": True}}}})
         == frozenset()
     )
-
-
-def test_safe_prefix_looks_only_at_a_secret_across_the_cut():
-    masker = Masker(known_secrets=[SECRET])
-    before = SECRET + "x" * 200  # ends long before the cut
-    after = "x" * 150 + SECRET  # starts after the cut
-
-    assert masker.safe_prefix(before, complete=True, limit=100) == (before[:100], True)
-    assert masker.safe_prefix(after, complete=True, limit=100) == ("x" * 100, True)
-    assert masker.safe_prefix(SECRET * 3 + "x" * 100, complete=True, limit=50) == (SECRET * 2, True)
 
 
 @pytest.mark.parametrize(

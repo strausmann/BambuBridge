@@ -9,17 +9,18 @@ part of an exchange it works in this order:
    This comes first, so that a removed character cannot join the two halves of a secret
    after the search for it. A body given as bytes that is not UTF-8 text, or holds a NUL
    byte, is binary and stored as ``<binary N bytes>``.
-2. **Mask** (:mod:`app.security.masking`).
-3. **Cut** to the stored size: ``MAX_BODY_BYTES`` of UTF-8 per body, and the limits below
-   for the other parts. A cut sets ``truncated``.
+2. **Mask** (:mod:`app.security.masking`) the whole part. A part larger than
+   ``MAX_MASK_INPUT`` bytes of UTF-8 is not masked and not kept in part: it is stored as
+   ``<omitted: N bytes>`` (and ``truncated`` is set), as binary bodies are. The headers of
+   one side share ``MAX_HEADERS_INPUT`` bytes; a name or value that does not fit what is
+   left becomes the placeholder too.
+3. **Cut** the masked text to the stored size: ``MAX_BODY_BYTES`` of UTF-8 per body (never
+   inside a character), and the limits below for the other parts; never inside a ``***``.
+   A cut sets ``truncated``.
 
-Masking before cutting matters: a secret that straddles the cut would otherwise be stored
-as a fragment that no rule recognises any more.
-
-To bound the work, at most ``MAX_MASK_INPUT`` characters of a text are masked, and at most
-``MAX_HEADERS_INPUT`` characters of the headers of one side (names and values together;
-headers after that are left out). That first cut is made by
-:meth:`app.security.masking.Masker.safe_prefix`, which never cuts through a known secret.
+Only masked text is ever cut. Every secret the masker finds is ``***`` by then, and one it
+does not find is not affected by where the cut falls: no cut can leave half a secret
+behind, because there is no cut before masking.
 
 Arguments the caller controls (ids, numbers, direction, types) are checked instead, with a
 ``ValueError`` that names the argument and never a value, before a statement is sent.
@@ -47,7 +48,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.events.daily import describe_error
 from app.events.validation import make_storable
 from app.models.communication_entry import CommunicationEntry
-from app.security.masking import Masker
+from app.security.masking import MASK, Masker
 
 # Stored sizes. Bodies are measured in bytes of UTF-8, everything else in characters.
 MAX_BODY_BYTES = 8192
@@ -57,7 +58,8 @@ MAX_ERROR_LENGTH = 2000
 MAX_HEADERS = 100
 MAX_HEADER_NAME_LENGTH = 200
 MAX_HEADER_VALUE_LENGTH = 2048
-# How much of one text is looked at (masked) at all, and of all headers of one side.
+# The largest part that is masked (larger ones are omitted), and the bytes all headers of
+# one side share, both in bytes of UTF-8.
 MAX_MASK_INPUT = 65_536
 MAX_HEADERS_INPUT = 65_536
 
@@ -90,51 +92,86 @@ def _is_int(value: object, low: int, high: int) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
 
 
+def omitted(size: int) -> str:
+    """The placeholder for a part too large to be masked (``size``: its UTF-8 bytes)."""
+    return f"<omitted: {size} bytes>"
+
+
+def _utf8_size(text: str) -> int:
+    return len(text.encode("utf-8", "surrogatepass"))
+
+
+def _cut_masked(text: str, cut: int) -> str:
+    """``text[:cut]``, but never ending inside a mask: a ``*`` or ``**`` left of ``***``
+    would read like part of the value."""
+    for back in (1, 2):
+        if text[cut - back : cut - back + len(MASK)] == MASK and cut - back + len(MASK) > cut:
+            return text[: cut - back]
+    return text[:cut]
+
+
 class _Exchange:
-    """Cleans the parts of one exchange with one :class:`Masker`; remembers any cut."""
+    """Cleans the parts of one exchange with one :class:`Masker`; remembers any cut.
+
+    A part is masked whole or not at all: one larger than ``MAX_MASK_INPUT`` bytes of
+    UTF-8 is stored as ``<omitted: N bytes>``. Only the masked text is ever cut, so no cut
+    can leave half a secret behind.
+    """
 
     def __init__(self, masker: Masker) -> None:
         self._masker = masker
         self.truncated = False
 
-    def _visible(self, text: str, *, complete: bool = True, limit: int = MAX_MASK_INPUT) -> str:
-        """The storable beginning of ``text`` that is masked at all (at most ``limit``)."""
-        # More than the limit, so that a secret straddling it is seen whole, also encoded.
-        window = limit + self._masker.cut_margin
-        complete = complete and len(text) <= window
-        prefix, cut = self._masker.safe_prefix(
-            make_storable(text[:window]), complete=complete, limit=limit
-        )
-        self.truncated |= cut
-        return prefix
+    def _bounded(self, text: str, limit: int = MAX_MASK_INPUT) -> str | None:
+        """``text`` made storable, or ``None`` (and ``truncated``) when it is too large."""
+        if len(text) > limit or _utf8_size(text) > limit:
+            self.truncated = True
+            return None
+        return make_storable(text)
 
     def _shorten(self, text: str, max_length: int) -> str:
         if len(text) > max_length:
             self.truncated = True
-            return text[:max_length]
+            return _cut_masked(text, max_length)
         return text
 
     def line(self, text: str, max_length: int) -> str:
-        """Free text (method, error): storable, masked, cut."""
-        return self._shorten(self._masker.text(self._visible(text)), max_length)
+        """Free text (method, error): storable, masked whole, then cut."""
+        bounded = self._bounded(text)
+        if bounded is None:
+            return omitted(_utf8_size(text))
+        return self._shorten(self._masker.text(bounded), max_length)
 
     def target(self, text: str) -> str:
-        return self._shorten(self._masker.target(self._visible(text)), MAX_TARGET_LENGTH)
+        bounded = self._bounded(text)
+        if bounded is None:
+            return omitted(_utf8_size(text))
+        return self._shorten(self._masker.target(bounded), MAX_TARGET_LENGTH)
 
     def headers(self, headers: Headers) -> dict[str, Any]:
-        """Masked headers; a name that occurs more than once gets a list of its values."""
+        """Masked headers; a name that occurs more than once gets a list of its values.
+
+        All headers of one side share ``MAX_HEADERS_INPUT`` bytes; a name or value that
+        does not fit what is left is stored as the placeholder, never cut.
+        """
         pairs = headers.items() if isinstance(headers, Mapping) else headers
         collected: dict[str, list[str]] = {}
         budget = MAX_HEADERS_INPUT
-        for count, (name, value) in enumerate(pairs):
-            if count >= MAX_HEADERS or budget <= 0:
+        for count, (raw_name, raw_value) in enumerate(pairs):
+            if count >= MAX_HEADERS:
                 self.truncated = True
                 break
-            visible_name = self._visible(_text(name), limit=min(MAX_MASK_INPUT, budget))
-            budget -= len(visible_name)
-            visible_value = self._visible(_text(value), limit=max(0, min(MAX_MASK_INPUT, budget)))
-            budget -= len(visible_value)
-            collected.setdefault(visible_name, []).append(visible_value)
+            parts: list[str] = []
+            for raw in (raw_name, raw_value):
+                text = _text(raw)
+                bounded = self._bounded(text, min(MAX_MASK_INPUT, budget))
+                if bounded is None:
+                    parts.append(omitted(_utf8_size(text)))
+                else:
+                    budget -= _utf8_size(bounded)
+                    parts.append(bounded)
+            name, value = parts
+            collected.setdefault(name, []).append(value)
         masked = self._masker.value(
             {name: values[0] if len(values) == 1 else values for name, values in collected.items()}
         )
@@ -158,21 +195,24 @@ class _Exchange:
     def body(self, body: bytes | str | None) -> str | None:
         if body is None:
             return None
-        complete = True
         if isinstance(body, str):
             text = body
         else:
-            # Enough bytes for the window of ``_visible`` whatever the characters are.
-            window = 4 * (MAX_MASK_INPUT + self._masker.cut_margin)
-            head = bytes(body[:window])
-            complete = len(body) <= window
-            decoded = _decode(head, complete=complete)
+            if len(body) > MAX_MASK_INPUT:
+                self.truncated = True
+                return omitted(len(body))
+            decoded = _decode(bytes(body))
             if decoded is None or "\x00" in decoded:
                 return f"<binary {len(body)} bytes>"
             text = decoded
-        masked = self._masker.body(self._visible(text, complete=complete))
+        bounded = self._bounded(text)
+        if bounded is None:
+            return omitted(_utf8_size(text))
+        masked = self._masker.body(bounded)
         stored, cut = truncate_utf8(masked, MAX_BODY_BYTES)
-        self.truncated |= cut
+        if cut:
+            self.truncated = True
+            stored = _cut_masked(masked, len(stored))
         return stored
 
 
@@ -193,19 +233,12 @@ def _text(value: object) -> str:
     return value if isinstance(value, str) else str(value)
 
 
-def _decode(data: bytes, *, complete: bool) -> str | None:
-    """UTF-8 text, or ``None`` for anything else.
-
-    ``data`` that is only the beginning of a body may end inside a character; those last
-    bytes are left out.
-    """
+def _decode(data: bytes) -> str | None:
+    """UTF-8 text, or ``None`` for anything else."""
     try:
         return data.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        if complete or exc.start < len(data) - 3:
-            return None
-        # Everything before the first error is valid UTF-8.
-        return data[: exc.start].decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 def _entry_values(

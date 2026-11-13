@@ -114,14 +114,12 @@ def test_no_known_secret_and_no_secret_value_survives(seed: int):
                 parts.append(spell(rnd.choice(SECRETS)) + spell(rnd.choice(SECRETS)))
             parts.append(soup(8))
         text = "".join(parts)
-        limit = rnd.randrange(1, 60)
         outputs = {
             "text": masker.text(text),
             "body": masker.body(text),
             "body-json": masker.body(json.dumps({"a": [text, {"conn": {"code": marker(i)}}]})),
             "target": masker.target(text),
             "value": json.dumps(masker.value({"k": text, text: 1}), ensure_ascii=False),
-            "prefix": masker.text(masker.safe_prefix(text, complete=True, limit=limit)[0]),
         }
         for kind, out in outputs.items():
             # The input is synthetic, so it may be shown when the assertion fails.

@@ -213,47 +213,78 @@ async def test_characters_postgres_cannot_store_are_taken_out_before_masking(
     assert entry.error == "failed: ***"
 
 
-async def test_a_huge_body_is_masked_up_to_the_input_limit_only(db_session: AsyncSession):
-    # A secret across the input limit, after a field whose masking shrinks the text to
-    # a few bytes: half the secret must not show up behind it.
-    filler = "A" * (MAX_MASK_INPUT - len("password=") - len("&x=") - 5)
-    body = "password=" + filler + "&x=" + SECRET + "&rest=" + "y" * 1000
-    assert body.index(SECRET) == MAX_MASK_INPUT - 5
-
-    entry = await _record(
-        db_session,
-        request=Message(body=body),
-        response=Message(body=body.encode()),
-        known_secrets=[SECRET],
-    )
-
-    # "&x" may start a reference, so the zone before the cut goes as well.
-    assert entry.request_body == "password=***"
-    assert entry.response_body == "password=***"
-    assert entry.truncated is True
-
-
-async def test_a_huge_binary_body_is_recognised_from_its_beginning(db_session: AsyncSession):
-    body = b"\xff" * (5 * MAX_MASK_INPUT)
-
-    entry = await _record(db_session, request=Message(body=body))
-
-    assert entry.request_body == f"<binary {len(body)} bytes>"
-
-
-async def test_a_huge_text_body_given_as_bytes_may_end_inside_a_character(
+async def test_a_text_body_given_as_bytes_that_ends_inside_a_character_is_binary(
     db_session: AsyncSession,
 ):
     body = ("\u00e9" * 10).encode()[:-1]  # ends with half a character
-    window = 4 * MAX_MASK_INPUT
-    odd = b"a" + ("\u00e9" * (3 * MAX_MASK_INPUT)).encode()  # the window ends inside one
-    assert odd[window - 1 : window + 1] == "\u00e9".encode()
 
-    entry = await _record(db_session, request=Message(body=odd), response=Message(body=body))
+    entry = await _record(db_session, response=Message(body=body))
 
-    assert entry.request_body == "a" + "\u00e9" * 4095
-    # All of it was given and the end is broken: not text.
     assert entry.response_body == f"<binary {len(body)} bytes>"
+
+
+@pytest.mark.parametrize("as_bytes", [False, True], ids=["text", "bytes"])
+async def test_an_oversized_body_is_stored_as_a_placeholder(
+    db_session: AsyncSession, as_bytes: bool
+):
+    # No part of it is kept: a raw cut could leave half a secret behind.
+    text = "password=" + "A" * MAX_MASK_INPUT + "&x=" + SECRET
+    body: bytes | str = text.encode() if as_bytes else text
+
+    entry = await _record(db_session, request=Message(body=body), known_secrets=[SECRET])
+
+    assert entry.request_body == f"<omitted: {len(text.encode())} bytes>"
+    assert entry.truncated is True
+
+
+async def test_an_oversized_binary_body_is_omitted_as_well(db_session: AsyncSession):
+    body = b"\xff" * (MAX_MASK_INPUT + 1)
+    entry = await _record(db_session, request=Message(body=body))
+    assert entry.request_body == f"<omitted: {len(body)} bytes>"
+
+
+async def test_an_oversized_error_and_target_are_stored_as_placeholders(
+    db_session: AsyncSession,
+):
+    huge = "x" * MAX_MASK_INPUT + "\u00e9"
+    entry = await _record(db_session, error=huge, target="/" + huge)
+
+    assert entry.error == f"<omitted: {len(huge.encode())} bytes>"
+    assert entry.target == f"<omitted: {len(huge.encode()) + 1} bytes>"
+    assert entry.truncated is True
+
+
+async def test_a_part_at_the_bound_is_masked_whole(db_session: AsyncSession):
+    body = "A" * (MAX_MASK_INPUT - len(SECRET) - 1) + " " + SECRET
+    assert len(body.encode()) == MAX_MASK_INPUT
+
+    entry = await _record(db_session, response=Message(body=body), known_secrets=[SECRET])
+
+    assert entry.response_body == "A" * MAX_BODY_BYTES
+    assert entry.truncated is True
+
+
+async def test_an_encoded_secret_near_the_stored_size_is_masked(db_session: AsyncSession):
+    from urllib.parse import quote, unquote
+
+    spelled = "".join(f"%{ord(c):02X}" for c in SECRET)  # every character escaped
+    body = "n" * (MAX_BODY_BYTES - 20) + " " + spelled + " " + "z" * 500
+    assert quote(SECRET, safe="") != spelled
+
+    entry = await _record(db_session, response=Message(body=body), known_secrets=[SECRET])
+
+    stored = unquote(entry.response_body or "")
+    assert not any(SECRET[i : i + 6] in stored for i in range(len(SECRET) - 5))
+    assert entry.response_body is not None and " *** z" in entry.response_body
+
+
+async def test_a_cut_never_ends_inside_a_mask(db_session: AsyncSession):
+    body = "a" * (MAX_BODY_BYTES - 2) + SECRET  # the mask would start two bytes before the end
+
+    entry = await _record(db_session, response=Message(body=body), known_secrets=[SECRET])
+
+    assert entry.response_body == "a" * (MAX_BODY_BYTES - 2)
+    assert entry.truncated is True
 
 
 async def test_header_limits(db_session: AsyncSession):
@@ -376,25 +407,10 @@ def test_the_stored_sizes():
 # --- fix round 1: header input, header bytes, record_isolated ------------------------------
 
 
-async def test_the_header_input_of_one_side_is_bounded(db_session: AsyncSession):
-    import time
-
-    huge = [(f"X-H{i}", f"v{i}-" + "y" * 60_000) for i in range(100)]
-    started = time.monotonic()
-
-    entry = await _record(db_session, request=Message(headers=huge), known_secrets=[SECRET])
-
-    assert time.monotonic() - started < 10
-    # 65,536 characters in all: the first header whole, the second up to what is left.
-    assert list(entry.request_headers) == ["X-H0", "X-H1"]
-    assert entry.request_headers["X-H1"].startswith("v1-")
-    assert entry.truncated is True
-
-
-async def test_a_header_cut_at_the_bound_never_keeps_part_of_a_known_secret(
+async def test_a_header_past_the_budget_never_keeps_part_of_a_known_secret(
     db_session: AsyncSession,
 ):
-    first = "a" * (MAX_HEADERS_INPUT - 4 - 10)  # "X-A" + value; 10 characters left after it
+    first = "a" * (MAX_HEADERS_INPUT - 4 - 10)  # "X-A" + value; 11 bytes left after it
     entry = await _record(
         db_session,
         request=Message(headers=[("X-A", first), ("X-B", SECRET + " tail")]),
@@ -402,6 +418,7 @@ async def test_a_header_cut_at_the_bound_never_keeps_part_of_a_known_secret(
     )
 
     assert "fake-acc" not in json.dumps(entry.request_headers)
+    assert entry.request_headers["X-B"] == f"<omitted: {len(SECRET) + 5} bytes>"
     assert entry.truncated is True
 
 
@@ -537,3 +554,22 @@ async def test_record_isolated_masks_off_the_event_loop(
 
     assert len(threads) == 1
     assert threads[0] is not threading.main_thread()
+
+
+async def test_headers_beyond_the_budget_become_placeholders(db_session: AsyncSession):
+    import time
+
+    huge = [(f"X-H{i}", f"v{i}-" + "y" * 60_000) for i in range(100)]
+    started = time.monotonic()
+
+    entry = await _record(db_session, request=Message(headers=huge), known_secrets=[SECRET])
+
+    assert time.monotonic() - started < 10
+    headers = entry.request_headers
+    assert len(headers) == 100
+    # The first fits the 65,536 bytes of the side and is masked, then cut to 2048.
+    assert headers["X-H0"].startswith("v0-") and len(headers["X-H0"]) == 2048
+    # Every later value no longer fits what is left: a placeholder, not a cut.
+    assert headers["X-H1"] == "<omitted: 60003 bytes>"
+    assert headers["X-H99"] == "<omitted: 60004 bytes>"
+    assert entry.truncated is True
