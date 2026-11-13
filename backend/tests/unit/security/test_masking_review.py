@@ -764,3 +764,50 @@ def test_a_format_character_inside_a_name_does_not_hide_its_value(
         masker.text(f"{name}={UNKNOWN_VALUE}"),
     ):
         assert UNKNOWN_VALUE not in out, out
+
+
+# --- fix round 4 (Codex threads) -------------------------------------------------------------
+
+REMOTE = "remote-" + "credential"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "https://peer/?tóken=" + REMOTE,
+        "tóken: " + REMOTE,
+        "run --tóken " + REMOTE,
+        "pàssword=" + REMOTE,
+    ],
+)
+def test_a_name_written_with_combining_marks_is_scanned_whole(text: str):
+    masker = Masker()
+    assert REMOTE not in masker.target(text)
+    assert REMOTE not in masker.text(text)
+
+
+def test_a_known_secret_holding_a_format_character_is_masked_without_it():
+    secret = "remote-" + "​" + "credential"
+    masker = Masker(known_secrets=[secret])
+
+    assert masker.body(json.dumps({"result": secret})) == '{"result":"***"}'
+    assert masker.text(f"x {secret} y") == "x *** y"
+    assert masker.text(f"x {secret.replace(chr(0x200B), '')} y") == "x *** y"
+
+
+def test_an_encoded_pair_whose_name_is_a_known_secret_is_masked():
+    masker = Masker(known_secrets=["password"])
+    for text in (
+        "/?q=password%3D" + REMOTE,
+        "/?q=password%253D" + REMOTE,
+        "q=password%3A+" + REMOTE,
+    ):
+        out = masker.target(text)
+        assert REMOTE not in out and "credential" not in out, out
+
+
+def test_a_known_secret_percent_encoded_twice_is_masked():
+    secret = "remote-" + "credential-0042"
+    twice = quote(quote(secret, safe="").replace("-", "%2D"), safe="")
+    out = Masker(known_secrets=[secret]).target("/?q=" + twice)
+    assert "credential" not in out and "%2563" not in out, out

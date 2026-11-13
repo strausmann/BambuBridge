@@ -466,17 +466,31 @@ def test_a_long_chain_of_pairs_is_scanned_without_recursion():
     assert Masker().text(text) == "a=" * 50_000 + "password=***"
 
 
-@pytest.mark.parametrize(
-    "text",
-    ["A" * 262_144, "a=" * 131_072, '"' * 262_144, "a:" * 131_072, "://" + "a:" * 131_000],
-    ids=["one-run", "pairs", "quotes", "colons", "userinfo"],
-)
-def test_the_text_rules_take_linear_time(text: str):
+def _seconds(masker: Masker, text: str) -> float:
+    """The best of three runs: less sensitive to other load than a single one."""
     import time
 
-    started = time.monotonic()
-    Masker(known_secrets=[SECRET]).text(text)
-    assert time.monotonic() - started < 5
+    best = float("inf")
+    for _ in range(3):
+        started = time.perf_counter()
+        masker.text(text)
+        best = min(best, time.perf_counter() - started)
+    return best
+
+
+@pytest.mark.parametrize(
+    ("unit", "count"),
+    [("A", 32_768), ("a=", 16_384), ('"', 32_768), ("a:", 16_384), ("a:", 16_383)],
+    ids=["one-run", "pairs", "quotes", "colons", "userinfo"],
+)
+def test_the_text_rules_take_linear_time(unit: str, count: int):
+    # Relative, not absolute: twice the input may take about twice the time, whatever the
+    # machine and its load. A quadratic scan takes four times as long.
+    masker = Masker(known_secrets=[SECRET])
+    prefix = "://" if count % 2 else ""
+    single = _seconds(masker, prefix + unit * count)
+    double = _seconds(masker, prefix + unit * (2 * count))
+    assert double / max(single, 1e-3) < 3.0, (single, double)
 
 
 @pytest.mark.parametrize(

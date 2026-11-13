@@ -658,3 +658,12 @@ def test_a_known_secret_that_is_not_text_still_raises_through_the_cache():
     communication.masker_for.cache_clear()
     with pytest.raises(ValueError, match="known_secrets"):
         communication.masker_for((), [bytearray(b"made-up-bytes")])  # type: ignore[list-item]
+
+
+def test_codex_example_an_omitted_authorization_name_takes_its_value():
+    # Codex thread 4560753661, exact example: fixed by 7ff9efc.
+    headers = communication._Exchange(communication.Masker()).headers(
+        [("a", "z" * 65527), ("Authorization", "tiny")]
+    )
+    assert "tiny" not in json.dumps(headers)
+    assert headers["<omitted: 13 bytes>"] == "<omitted: 4 bytes>"

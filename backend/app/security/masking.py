@@ -91,6 +91,47 @@ _PERCENT_ESCAPE = re.compile(r"%[0-9A-F]{2}")
 # How often the text is percent-decoded to look for names and known values once more.
 _DECODE_ROUNDS = 3
 
+
+def _class_ranges(codes: list[int]) -> str:
+    """Code points as the inside of a character class, consecutive ones as ``a-b`` ranges
+    (a class of thousands of single characters makes every scan many times slower)."""
+    parts: list[str] = []
+    start = previous = -2
+    for code in [*codes, -2]:
+        if code == previous + 1:
+            previous = code
+            continue
+        if start >= 0:
+            parts.append(
+                re.escape(chr(start)) + ("-" + re.escape(chr(previous)) if previous > start else "")
+            )
+        start = previous = code
+    return "".join(parts)
+
+
+def _category_characters() -> tuple[str, str]:
+    """The characters of Unicode category Cf (zero-width space, soft hyphen, byte order
+    mark, word joiner ...) and of the mark categories (combining accents ...), each as the
+    inside of a regular-expression character class. Cf characters are invisible, so they
+    are taken out of a text before anything is searched: otherwise one of them inside a
+    secret or a name hides it. Marks belong to the name they are written in (``to\u0301ken``)."""
+    formats: list[int] = []
+    marks: list[int] = []
+    for start, end in ((0, 0x30000), (0xE0000, 0xE1000)):
+        for code in range(start, end):
+            category = unicodedata.category(chr(code))
+            if category == "Cf":
+                formats.append(code)
+            elif category[0] == "M":
+                marks.append(code)
+    return _class_ranges(formats), _class_ranges(marks)
+
+
+_FORMAT_CHARS, _MARK_CHARS = _category_characters()
+_FORMAT = re.compile("[" + _FORMAT_CHARS + "]")
+# Characters of a name in text: Unicode word characters with their combining marks.
+_NAME_CHARS = r"\w.%\-\[\]" + _MARK_CHARS
+
 # The text rules below each name the spans of a text that hold a secret; ``Masker.text``
 # replaces the union of all spans. No rule works on the output of another one, so none can
 # take away what another needs to see (a name, a quote, a scheme word).
@@ -120,7 +161,7 @@ _QUOTED_FIELD = re.compile(
 # ``name=`` or ``name:`` (with optional blanks around the sign) as in a query string, a form
 # body, a header line or a message for people. The lookbehind makes a name start only where
 # a run of name characters starts, which keeps the scan linear.
-_PAIR_NAME = re.compile(r"(?<![\w.%\-\[\]])([\w.%\-\[\]]+)[ \t]*([=:])[ \t]*")
+_PAIR_NAME = re.compile(rf"(?<![{_NAME_CHARS}])([{_NAME_CHARS}]+)[ \t]*([=:])[ \t]*")
 # The value after ``name=``: quoted (possibly unterminated), a scheme word with what follows
 # it (``Authorization=Bearer <token>``), or bare up to the next ``&`` or white space.
 _PAIR_VALUE = re.compile(r""""(?:[^"\\]|\\.)*"?|'[^']*'?|(?i:bearer|basic)\s+[^&\s]*|[^&\s]*""")
@@ -131,7 +172,8 @@ _LINE_REST = re.compile(r"[^\r\n]*")
 # ``--name value`` / ``-name value`` on a command line (``--name=value`` is a pair). Tried at
 # every position (lookahead): a flag inside the bare value of another one counts too.
 _FLAG = re.compile(
-    r"""(?=(?<![\w-])--?((?:[^\W\d_]|%)[\w.%-]{0,127})[ \t]+("(?:[^"\\]|\\.)*"?|'[^']*'?|[^\s]+))"""
+    rf"""(?=(?<![\w\-{_MARK_CHARS}])--?((?:[^\W\d_]|%)[\w.%\-{_MARK_CHARS}]{{0,127}})[ \t]+"""
+    r"""("(?:[^"\\]|\\.)*"?|'[^']*'?|[^\s]+))"""
 )
 # A part of a multipart form body: its Content-Disposition line names the field; the value
 # follows the blank line after the part's headers and ends before the next boundary line.
@@ -238,20 +280,6 @@ def _drop_encoded_format(text: str) -> str:
     return _ENCODED_CHARACTER.sub(_encoded_character, text)
 
 
-def _format_characters() -> re.Pattern[str]:
-    """All characters of Unicode category Cf (zero-width space, soft hyphen, byte order
-    mark, word joiner ...). They are invisible, so they are taken out of a text before the
-    search for known values: otherwise one of them inside a secret hides it."""
-    chars = [
-        chr(code)
-        for start, end in ((0, 0x30000), (0xE0000, 0xE1000))
-        for code in range(start, end)
-        if unicodedata.category(chr(code)) == "Cf"
-    ]
-    return re.compile("[" + "".join(re.escape(char) for char in chars) + "]")
-
-
-_FORMAT = _format_characters()
 # Letters that NFKC keeps apart from their Latin twins in names (Turkish dotless i).
 _NAME_LETTERS = str.maketrans({"\u0131": "i"})
 
@@ -489,6 +517,8 @@ class Masker:
                     leaves.add(_fold(parts[-1]))
         self._leaf_names = frozenset(leaves)
         secrets = {_known_secret(entry) for entry in _entries(known_secrets)}
+        # Also as the text is searched: without format characters (the input loses them).
+        secrets |= {_FORMAT.sub("", secret) for secret in secrets}
         # Longest first: at one position the longest secret is the one that is replaced.
         ordered = sorted(
             (s for s in secrets if len(s) >= MIN_KNOWN_SECRET_LENGTH), key=lambda s: (-len(s), s)
@@ -529,6 +559,9 @@ class Masker:
             return text
         out.append(text[position:])
         return "".join(out)
+
+    def _count_known(self, text: str) -> int:
+        return sum(1 for _ in self._known_spans(text))
 
     def _has_known(self, text: str) -> bool:
         return next(self._known_spans(text), None) is not None
@@ -626,32 +659,21 @@ class Masker:
             # Without a colon the user name may be the token itself.
             yield (match.start(1) + colon + 1 if colon >= 0 else match.start(1)), match.end(1)
 
-    def _mask_once(self, value: str) -> str:
-        spans = sorted(
-            {
-                *self._known_spans(value),
-                *self._userinfo_spans(value),
-                *(match.span(1) for match in _AUTH_SCHEME.finditer(value)),
-                *self._quoted_field_spans(value),
-                *self._pair_spans(value),
-                *self._flag_spans(value),
-                *self._multipart_spans(value),
-            }
-        )
-        out: list[str] = []
-        position = 0
-        masked_to = -1
-        for start, end in spans:
-            if start <= masked_to:
-                # Overlaps or touches the span before it: one mask stands for both.
-                position = masked_to = max(masked_to, end)
-                continue
-            out += (value[position:start], MASK)
-            position = masked_to = end
-        if not out:
-            return value
-        out.append(value[position:])
-        return "".join(out)
+    def _rule_spans(self, value: str) -> set[tuple[int, int]]:
+        """The spans the name rules find (rules 1 and 2), without the known values."""
+        return {
+            *self._userinfo_spans(value),
+            *(match.span(1) for match in _AUTH_SCHEME.finditer(value)),
+            *self._quoted_field_spans(value),
+            *self._pair_spans(value),
+            *self._flag_spans(value),
+            *self._multipart_spans(value),
+        }
+
+    def _masked_pair(self, value: str) -> tuple[str, str]:
+        """``value`` masked in full, and with the name rules only (known values in place)."""
+        rules = self._rule_spans(value)
+        return _apply(value, rules | set(self._known_spans(value))), _apply(value, rules)
 
     # -- public -------------------------------------------------------------
 
@@ -661,21 +683,25 @@ class Masker:
         Invisible format characters (Unicode category Cf) are taken out first: they would
         otherwise split a known secret so that its search no longer finds it.
         """
-        out = self._mask_once(_FORMAT.sub("", value))
+        # Decoding runs on the text with the name rules applied but the known values still in
+        # place: a known secret that is also a name (``password%3Dx``) must still be a name
+        # once ``%3D`` is decoded. What decoding brings to light is masked in full.
+        out, names = self._masked_pair(_FORMAT.sub("", value))
         decoders: tuple[Callable[[str], str], ...] = (unquote, unquote_plus, _drop_encoded_format)
         for decode in decoders:
-            probe = out
+            probe = names
             for _ in range(_DECODE_ROUNDS):
-                # Without the NUL an escape can bring in: taken out later, it could join two
-                # halves of a secret.
-                # Format characters, also
-                # written as escapes, go after every decoding.
+                # Without the NUL an escape can bring in (taken out later, it could join two
+                # halves of a secret) and without format characters, also written as escapes.
                 decoded = _drop_encoded_format(_FORMAT.sub("", decode(probe).replace("\x00", "")))
                 if decoded == probe:
                     break
-                masked = self._mask_once(decoded)
-                if masked != decoded:
-                    out = probe = masked
+                decoded_out, decoded_names = self._masked_pair(decoded)
+                if decoded_names != decoded or self._count_known(decoded) > self._count_known(
+                    probe
+                ):
+                    names = probe = decoded_names
+                    out = decoded_out
                 else:
                     probe = decoded
         return out
@@ -768,6 +794,24 @@ class Masker:
             except ValueError:
                 pass  # not JSON after all: the text rules below still apply
         return self.text(text)
+
+
+def _apply(value: str, spans: set[tuple[int, int]]) -> str:
+    """``value`` with every span replaced by one ``***``; overlapping or touching spans
+    share one mask."""
+    out: list[str] = []
+    position = 0
+    masked_to = -1
+    for start, end in sorted(spans):
+        if start <= masked_to:
+            position = masked_to = max(masked_to, end)
+            continue
+        out += (value[position:start], MASK)
+        position = masked_to = end
+    if not out:
+        return value
+    out.append(value[position:])
+    return "".join(out)
 
 
 def _entries(values: Collection[Any]) -> Collection[Any]:
