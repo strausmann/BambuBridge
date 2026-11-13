@@ -1,0 +1,1147 @@
+"""Masking of secrets in text that is stored for people to read (the communication log).
+
+Three rules decide what becomes ``***``:
+
+1. **By name.** The value of a header, JSON field, query or form parameter whose name is
+   one of ``authorization``, ``cookie``, ``set-cookie``, ``x-bambubridge-key``, contains
+   one of the words in ``SENSITIVE_WORDS`` (``token``, ``secret``, ``password``, ``key``,
+   ``access_code`` and more) or has one of ``SENSITIVE_NAME_WORDS`` (``pass``, ``pin``,
+   ``sid`` ...) as a word of its own (``user_pass``, ``userPW``), or a word that ends in
+   ``pass`` or ``pw`` (``dbpass``, ``rootpw``). Names are compared without regard to case,
+   after NFKC, without any mark (category M, also those of combining class 0 such as
+   ``\\u20dd``), without invisible characters and with the dotless i as ``i`` - the same
+   test for parsed JSON and for every text rule, which accept names of Unicode word
+   characters.
+2. **By path.** JSON fields a provider marked with ``"x-secret": true`` in its schema
+   (:func:`secret_paths_from_schema`). The last segment of a path is what counts: every
+   field of that name is masked, wherever it stands, in parsed JSON and in text alike, so
+   that a body is never masked differently depending on what else is in it.
+3. **By value.** Every occurrence of a known secret value of at least
+   ``MIN_KNOWN_SECRET_LENGTH`` characters (surrounding white space removed), in any
+   spelling an encoder writes: each character as itself or escaped (percent escape of its
+   UTF-8 bytes in either case, ``\\uXXXX`` in either case and as a surrogate pair, ``\\xNN``,
+   ``\\UXXXXXXXX``, the short escapes such as ``\\/`` and ``\\"``, ``+`` for a space, a percent
+   escape encoded again up to ``_DECODE_ROUNDS`` times (``%2541``), HTML and
+   XML character references ``&#N;``, ``&#xH;`` and ``&amp; &lt; &gt; &quot; &apos;``), each
+   backslash escape also as ``json.dumps`` or ``repr()`` write it a second time, the
+   Python ``repr`` spellings, the UTF-8 bytes read as ISO 8859-1, and base64 or base64url of
+   its UTF-8 bytes, also as part of a longer base64 value in any of the three alignments and
+   wrapped over several lines.
+
+Invisible characters (Unicode category Cf: zero-width space, soft hyphen, byte order mark,
+word joiner ...; and every Default_Ignorable_Code_Point: variation selectors, the combining
+grapheme joiner, Hangul fillers ...) are removed from a text and from each known secret
+before anything is searched, in every decoding round, and also where they are written as an
+escape (``&#8203;``, ``\\u200b``, ``\\U000e0001``, a surrogate pair, percent or ``\\x`` bytes
+judged one UTF-8 character at a time).
+
+Declared limits: a hostile peer obfuscating a known secret with encoded invisible characters
+beyond these cases is not caught; neither is a run of backslashes in a secret spelled in two
+ways at once (``\\\\`` next to ``\\x5c``), which no encoder writes. A pair whose separator is
+written as an HTML or XML reference (``password&#61;x``, ``token&#x3d;x``) or a ``\\u003d``
+escape is not seen as a pair, and neither is a name or a separator percent-encoded more
+often than ``_DECODE_ROUNDS`` times; a known secret in such a text is still masked. A raw
+backslash of a secret written unescaped right before an escape (``h\\\\xadD`` for ``h\\D``
+with a soft hyphen) reads as that escape written twice; ``repr`` and ``json.dumps`` escape
+the backslash and are masked. Over-masking: in a decoded round every part of a known secret
+at most two characters shorter than it is masked, so a low-entropy secret (all zeros, a run
+of spaces) also masks matching runs elsewhere in that text.
+
+In text that is not parsed JSON (an address, an error message, a body in another format,
+broken JSON) the names are found by patterns: ``"name": value`` and ``'name': value`` (a
+Python dict), ``name=value`` and ``name = value`` with a quoted or bare value (a bare value
+ends at ``&`` or white space only), ``name: value`` (the rest of the line, as in a header
+line ``Authorization: Token x`` or ``Cookie: a=1; sid=x``), ``--name value`` (a command
+line), a multipart form field ``Content-Disposition: form-data; name="password"``, the user
+information in ``scheme://user:password@host`` (up to the last ``@``; without a colon the
+whole of it, a token given as the user name) and the credential after ``Bearer`` or
+``Basic``. Each pattern and the known values are looked for in the same text and the union
+of what they find is masked, so no pattern depends on what another one left. The same is
+then done once more on the decoded text (escaped invisible characters dropped, then percent
+escapes resolved, up to ``_DECODE_ROUNDS`` times each, for an address encoded into another
+one): if that finds anything, the decoded text is what is stored. What a rule or a known
+value found is decoded on its own and masked at its place in the decoded text, so nothing in
+front of it can form an escape with its first characters; in a decoded text every part of
+a known secret at most two characters shorter than it is masked as well.
+
+Masking prefers hiding too much over showing a secret: a field called ``monkey`` is masked
+because its name contains ``key``. What it cannot do: find a secret nobody named or marked,
+find a known secret that was transformed in a way not listed above (hashed, encrypted,
+quoted-printable, ES6 ``\\u{..}`` or octal escapes, a look-alike letter), or keep the
+structure below a masked field.
+
+Nothing here logs, and no error message quotes a value. Nothing here cuts either: the
+caller masks a part whole and cuts only the masked result.
+"""
+
+from __future__ import annotations
+
+import base64
+import bisect
+import json
+import re
+import unicodedata
+from collections.abc import Callable, Collection, Iterator, Mapping
+from typing import Any, cast
+from urllib.parse import quote, quote_plus, unquote, unquote_plus
+
+MASK = "***"
+MIN_KNOWN_SECRET_LENGTH = 8
+
+SENSITIVE_HEADERS = frozenset({"authorization", "cookie", "set-cookie", "x-bambubridge-key"})
+# Searched as substrings of the folded name. ``auth`` (``x-auth``, ``proxy-authorization``)
+# but not the word ``author``.
+SENSITIVE_WORDS = re.compile(
+    r"token|secret|passw|pwd|key|auth(?!ors?(?![a-z]))|cookie|credential|session|sessid"
+    r"|signature|access[_.\-\s]?code|passcode|passphrase|pin[_.\-\s]?code|totp|jwt|ticket"
+    r"|assertion|psk|csrf|xsrf|samlresponse"
+)
+# Short words that count only as a whole word of the name: as substrings they would hide
+# "compass", "spinner" or "inside".
+SENSITIVE_NAME_WORDS = frozenset({"pass", "pw", "pin", "otp", "sig", "sid"})
+
+NESTED_TOO_DEEPLY = "<not recorded: nested too deeply>"
+
+# Words of a name: ``userPW`` -> user, PW; ``X-CSRF-Token`` -> X, CSRF, Token.
+_NAME_WORD = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
+_PERCENT_ESCAPE = re.compile(r"%[0-9A-F]{2}")
+# How often the text is percent-decoded to look for names and known values once more.
+_DECODE_ROUNDS = 3
+
+
+def _class_ranges(codes: list[int]) -> str:
+    """Code points as the inside of a character class, consecutive ones as ``a-b`` ranges
+    (a class of thousands of single characters makes every scan many times slower)."""
+    parts: list[str] = []
+    start = previous = -2
+    for code in [*codes, -2]:
+        if code == previous + 1:
+            previous = code
+            continue
+        if start >= 0:
+            parts.append(
+                re.escape(chr(start)) + ("-" + re.escape(chr(previous)) if previous > start else "")
+            )
+        start = previous = code
+    return "".join(parts)
+
+
+# Default_Ignorable_Code_Point outside category Cf (Unicode DerivedCoreProperties): the
+# combining grapheme joiner, Hangul fillers, Mongolian variation selectors, variation
+# selectors, musical formatting and the tag block. As invisible as the Cf characters.
+_IGNORABLE_RANGES = (
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),
+    (0x061C, 0x061C),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x206F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+
+
+def _category_characters() -> tuple[frozenset[int], str, str]:
+    """The invisible characters (Unicode category Cf: zero-width space, soft hyphen, byte
+    order mark, word joiner ...; and every Default_Ignorable_Code_Point: variation
+    selectors, the combining grapheme joiner ...) as a set and as the inside of a
+    regular-expression character class, and the mark characters (category M) as such a
+    class. Invisible characters are taken out of a text before anything is searched:
+    otherwise one of them inside a secret or a name hides it. Marks belong to the name they
+    are written in (``to\u0301ken``) and are dropped from it before it is judged."""
+    invisible = {code for start, end in _IGNORABLE_RANGES for code in range(start, end + 1)}
+    marks: list[int] = []
+    for start, end in ((0, 0x30000), (0xE0000, 0xE1000)):
+        for code in range(start, end):
+            category = unicodedata.category(chr(code))
+            if category == "Cf":
+                invisible.add(code)
+            elif category[0] == "M":
+                marks.append(code)
+    return frozenset(invisible), _class_ranges(sorted(invisible)), _class_ranges(marks)
+
+
+_INVISIBLE, _FORMAT_CHARS, _MARK_CHARS = _category_characters()
+_FORMAT = re.compile("[" + _FORMAT_CHARS + "]")
+_MARK = re.compile("[" + _MARK_CHARS + "]")
+# Characters of a name in text: Unicode word characters with their combining marks.
+_NAME_CHARS = r"\w.%\-\[\]" + _MARK_CHARS
+
+# The text rules below each name the spans of a text that hold a secret; ``Masker.text``
+# replaces the union of all spans. No rule works on the output of another one, so none can
+# take away what another needs to see (a name, a quote, a scheme word).
+
+# ``scheme://userinfo@host``: greedy up to the last ``@`` before the path.
+_USERINFO = re.compile(r"(?<=://)([^/?#\s]*)@")
+# ``Bearer <token>`` / ``Basic <credentials>``; a following all-lower-case word ("basic
+# authentication failed") is prose, not a credential. Tried at every position (lookahead),
+# so a scheme word inside the token of another one (``basic x=Bearer <token>``) counts too.
+# An explicit header line (``Authorization: Bearer <token>``) is masked by name instead,
+# whatever the token looks like.
+_AUTH_SCHEME = re.compile(
+    r"(?=\b(?i:bearer|basic)\s+((?![a-z]+(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,}))"
+)
+# ``"name": value`` or ``'name': value`` in text that looks like JSON or a Python dict (also
+# when it is cut off or broken), tried at every quote, because in broken text any quote may
+# be the one that opens a name. The value is a string (possibly unterminated at the end of
+# the text, possibly with a Python prefix such as ``b'...'``), the start of an object or
+# array, or a bare literal. The bound on the name keeps the scan linear.
+_QUOTED_FIELD = re.compile(
+    r"""(?=
+        (["'])((?:(?!\1)[^\\]|\\.){0,128})\1\s*:\s*
+        (?: [bBrRuUfF]{0,2}(["'])((?:(?!\3)[^\\]|\\.)*)(\3)? | ([\[{]) | ([^\s,}\]"']+) )
+    )""",
+    re.VERBOSE,
+)
+# ``name=`` or ``name:`` (with optional blanks around the sign) as in a query string, a form
+# body, a header line or a message for people. The lookbehind makes a name start only where
+# a run of name characters starts, which keeps the scan linear.
+_PAIR_NAME = re.compile(rf"(?<![{_NAME_CHARS}])([{_NAME_CHARS}]+)[ \t]*([=:])[ \t]*")
+# The value after ``name=``: quoted (possibly unterminated), a scheme word with what follows
+# it (``Authorization=Bearer <token>``), or bare up to the next ``&`` or white space.
+_PAIR_VALUE = re.compile(r""""(?:[^"\\]|\\.)*"?|'[^']*'?|(?i:bearer|basic)\s+[^&\s]*|[^&\s]*""")
+# A value that is not a plain bare run: it starts with a quote or a scheme word.
+_PAIR_VALUE_START = re.compile(r"""["']|(?i:bearer|basic)\s""")
+# The value after ``name:``: the rest of the line.
+_LINE_REST = re.compile(r"[^\r\n]*")
+# ``--name value`` / ``-name value`` on a command line (``--name=value`` is a pair). Tried at
+# every position (lookahead): a flag inside the bare value of another one counts too.
+_FLAG = re.compile(
+    rf"""(?=(?<![\w\-{_MARK_CHARS}])--?((?:[^\W\d_]|%)[\w.%\-{_MARK_CHARS}]{{0,127}})[ \t]+"""
+    r"""("(?:[^"\\]|\\.)*"?|'[^']*'?|[^\s]+))"""
+)
+# A part of a multipart form body: its Content-Disposition line names the field; the value
+# follows the blank line after the part's headers and ends before the next boundary line.
+_MULTIPART_PART = re.compile(
+    r"""(?im)^content-disposition:[^\r\n]*?\bname\*?=(?:"((?:[^"\\\r\n]|\\.)*)"|([^\s;"]+))
+        [^\r\n]*(?:\r?\n[^\r\n]+){0,32}\r?\n\r?\n""",
+    re.VERBOSE,
+)
+# A multipart delimiter line: ``--`` and the boundary (the closing one ends with ``--``).
+_DELIMITER_LINE = re.compile(r"(?m)^--([^\r\n]*?)[ \t]*\r?$")
+
+
+def _delimiter_lines(text: str) -> tuple[list[int], list[str], dict[str, list[int]]]:
+    """Start and boundary of every delimiter-like line, and the starts by boundary."""
+    starts: list[int] = []
+    values: list[str] = []
+    by_value: dict[str, list[int]] = {}
+    for line in _DELIMITER_LINE.finditer(text):
+        starts.append(line.start())
+        values.append(line.group(1))
+        by_value.setdefault(line.group(1), []).append(line.start())
+    return starts, values, by_value
+
+
+_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+# A character written as an escape or reference: HTML/XML numeric reference, JSON or Python
+# ``\u``/``\U``/``\x`` escape (also escaped twice; a surrogate pair is one character), or a
+# run of percent-encoded bytes. Bounded and anchored at the start of a backslash run, so
+# that the search stays linear.
+_ENCODED_CHARACTER = re.compile(
+    r"(?i:&\#x0{0,8}(?P<hexref>[0-9a-f]{1,6});|&\#0{0,8}(?P<decref>[0-9]{1,7});"
+    r"|(?<!\\)\\{1,16}(?-i:U)(?P<long>[0-9a-f]{8})"
+    r"|(?<!\\)\\{1,16}(?-i:u)(?P<unit>[0-9a-f]{4})(?:\\{1,8}(?-i:u)(?P<low>[0-9a-f]{4}))?"
+    r"|(?P<xrun>(?<!\\)\\{1,16}x[0-9a-f]{2}(?:\\{1,8}x[0-9a-f]{2}){0,63})"
+    r"|(?P<prun>(?:%[0-9a-f]{2}){1,64}))"
+)
+_RUN_BYTE = re.compile(r"\\+[xX]([0-9a-fA-F]{2})|%([0-9a-fA-F]{2})")
+
+
+def _is_format(char: str) -> bool:
+    """Whether ``char`` is invisible: category Cf or a Default_Ignorable_Code_Point."""
+    return ord(char) in _INVISIBLE
+
+
+def _code_point(digits: str) -> str | None:
+    code = int(digits, 16)
+    return chr(code) if code <= 0x10FFFF else None
+
+
+def _drop_format_bytes(run: str) -> str:
+    """An escape run without the format characters in it, judged one UTF-8 character at a
+    time (its length from the lead byte); a byte that starts no valid sequence stands for
+    the ISO 8859-1 character of that value (``\\xad`` in a Python ``repr``)."""
+    pieces = [
+        (match.group(), int(match.group(1) or match.group(2), 16))
+        for match in _RUN_BYTE.finditer(run)
+    ]
+    out: list[str] = []
+    i = 0
+    while i < len(pieces):
+        lead = pieces[i][1]
+        size = (
+            1
+            if lead < 0x80
+            else 2
+            if lead >> 5 == 0b110
+            else 3
+            if lead >> 4 == 0b1110
+            else 4
+            if lead >> 3 == 0b11110
+            else 0
+        )
+        chunk = pieces[i : i + size] if size else []
+        try:
+            char = (
+                bytes(value for _, value in chunk).decode("utf-8")
+                if chunk and len(chunk) == size
+                else None
+            )
+        except UnicodeDecodeError:
+            char = None
+        if char is None:
+            chunk, char = pieces[i : i + 1], chr(lead)
+        if not _is_format(char):
+            out += [written for written, _ in chunk]
+        i += len(chunk)
+    return "".join(out)
+
+
+def _backslash_run(written: str) -> int:
+    return len(written) - len(written.lstrip("\\"))
+
+
+def _escape_prefix(written: str) -> int:
+    """How many of the leading backslashes of ``written`` belong to the escape.
+
+    An encoder that escapes a text ``k`` times writes a backslash of the text as ``2**k``
+    backslashes and the escape itself with ``2**(k-1)``; so the escape takes the lowest set
+    bit of the run's length and the rest are escaped backslashes (``\\\\\\u00ad``: one
+    backslash and the escape)."""
+    run = _backslash_run(written)
+    return run & -run
+
+
+def _encoded_character(match: re.Match[str]) -> str:
+    """``""`` for an escape of a format character, otherwise the escape as it was (runs:
+    without their format characters). Escaped backslashes in front of the escape stay."""
+    if match.group("prun"):
+        return _drop_format_bytes(match.group())
+    written = match.group()
+    if match.group("hexref") or match.group("decref"):
+        digits = match.group("hexref")
+        char = (
+            _code_point(digits)
+            if digits
+            else (
+                chr(int(match.group("decref"))) if int(match.group("decref")) <= 0x10FFFF else None
+            )
+        )
+        return "" if char is not None and _is_format(char) else written
+    prefix = _escape_prefix(written)
+    if prefix > 8:
+        return written  # escaped more often than any decoding round would undo
+    run = _backslash_run(written)
+    kept, escape = written[: run - prefix], written[run - prefix :]
+    if match.group("xrun"):
+        return kept + _drop_format_bytes(escape)
+    if match.group("unit"):
+        high, low = int(match.group("unit"), 16), match.group("low")
+        if low is not None and 0xD800 <= high < 0xDC00 and 0xDC00 <= int(low, 16) < 0xE000:
+            pair = chr(0x10000 + ((high - 0xD800) << 10) + (int(low, 16) - 0xDC00))
+            return kept + ("" if _is_format(pair) else escape)
+        if low is None:
+            return kept + ("" if _is_format(chr(high)) else escape)
+        # Not a pair: two escapes, split where the second one's backslashes start.
+        second = match.start("low") - match.start() - len(kept) - 1
+        while escape[second - 1] == "\\":
+            second -= 1
+        first, rest = escape[:second], escape[second:]
+        kept += "" if _is_format(chr(high)) else first
+        # The second escape keeps the escaped backslashes in front of it, too.
+        literal = _backslash_run(rest) - _escape_prefix(rest)
+        kept += rest[:literal]
+        return kept + ("" if _is_format(chr(int(low, 16))) else rest[literal:])
+    char = _code_point(match.group("long"))
+    return kept + ("" if char is not None and _is_format(char) else escape)
+
+
+def _drop_encoded_format(text: str) -> str:
+    """``text`` without format characters written as escapes (``&#8203;``, ``%E2%80%8B``,
+    ``\\u200b``): decoded, they would split a known secret just as the characters do."""
+    return _ENCODED_CHARACTER.sub(_encoded_character, text)
+
+
+# Letters that NFKC keeps apart from their Latin twins in names (Turkish dotless i).
+_NAME_LETTERS = str.maketrans({"\u0131": "i"})
+
+
+def _normalize_name(name: str) -> str:
+    """NFKC, without invisible characters (``To\u200bken`` -> ``Token``: the written name
+    drops them too, and so do ``\ufe0f`` or ``\u034f``) and without every mark, also
+    those of combining class 0 (``P\u0130N`` -> ``PIN``, ``to\u20ddken`` -> ``token``),
+    the dotless i as ``i``."""
+    name = _FORMAT.sub("", name)
+    decomposed = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", name))
+    bare = _FORMAT.sub("", _MARK.sub("", decomposed))
+    return unicodedata.normalize("NFC", bare).translate(_NAME_LETTERS)
+
+
+def _fold(name: str) -> str:
+    return _normalize_name(name).casefold()
+
+
+def is_sensitive_name(name: str) -> bool:
+    """Whether a header, field or parameter of this name holds a credential (rule 1).
+
+    The same test serves parsed JSON and every text rule."""
+    normalized = _normalize_name(name)
+    folded = normalized.casefold()
+    if folded in SENSITIVE_HEADERS or SENSITIVE_WORDS.search(folded) is not None:
+        return True
+    for word in _NAME_WORD.findall(normalized):
+        word = word.casefold()
+        # ``pass`` and ``pw`` also end a word: ``dbpass``, ``rootpw``, ``MQTTPASS``.
+        if word in SENSITIVE_NAME_WORDS or word.endswith(("pass", "pw")):
+            return True
+    return False
+
+
+# -- rule 3: the spellings of a known secret --------------------------------------------------
+
+_SHORT_ESCAPES = {
+    '"': '\\"',
+    "\\": "\\\\",
+    "/": "\\/",
+    "'": "\\'",
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+    "\b": "\\b",
+    "\f": "\\f",
+}
+
+
+def _char_forms(char: str) -> set[str]:
+    """Every spelling of one character that an encoder or ``repr`` writes."""
+    forms = {char}
+    data = char.encode("utf-8", "surrogatepass")
+    forms.add("".join(f"%{byte:02x}" for byte in data))
+    forms.add("".join(f"\\x{byte:02x}" for byte in data))
+    code = ord(char)
+    if code < 0x100:
+        forms.add(f"\\x{code:02x}")
+    if code > 0xFFFF:
+        forms.add(f"\\U{code:08x}")
+    units = char.encode("utf-16-be", "surrogatepass")
+    forms.add("".join(f"\\u{units[i]:02x}{units[i + 1]:02x}" for i in range(0, len(units), 2)))
+    if char == " ":
+        forms.add("+")
+    if char in _SHORT_ESCAPES:
+        forms.add(_SHORT_ESCAPES[char])
+    return forms
+
+
+# HTML/XML named references, and the numeric reference as a pattern: ``&#N;`` and
+# ``&#xH;`` in either case, with up to eight leading zeros.
+_NAMED_REFERENCES = {
+    "&": ("&amp;",),
+    "<": ("&lt;",),
+    ">": ("&gt;",),
+    '"': ("&quot;",),
+    "'": ("&apos;",),
+}
+_MAX_REFERENCE_ZEROS = 8
+
+
+def _escape_twice(form: str) -> list[str]:
+    """A spelling as written once, and as ``json.dumps`` or ``repr()`` write it again when a
+    caller puts the text into a string a second (and third) time: longest first."""
+    if not any(char in form for char in "\\\"'"):
+        return [form]
+    variants = {form}
+    for _ in range(2):
+        variants |= {
+            again
+            for value in variants
+            for again in (
+                json.dumps(value)[1:-1],
+                json.dumps(value, ensure_ascii=False)[1:-1],
+                repr(value)[1:-1],
+            )
+        }
+    return sorted(variants, key=lambda v: (-len(v), v))
+
+
+def _form_pattern(form: str) -> str:
+    # Only escapes and references are matched without regard to case, never the character.
+    if len(form) > 1 and form[0] in "%&\\":
+        return "(?i:" + "|".join(re.escape(f) for f in _escape_twice(form)) + ")"
+    return re.escape(form)
+
+
+def _reference_patterns(char: str) -> tuple[list[str], int]:
+    code = ord(char)
+    zeros = f"0{{0,{_MAX_REFERENCE_ZEROS}}}"
+    patterns = [f"(?i:&\\#x{zeros}{code:x};)", f"&\\#{zeros}{code};"]
+    return patterns, len(f"&#x{code:x};") + _MAX_REFERENCE_ZEROS
+
+
+def _char_pattern(char: str) -> tuple[str, int]:
+    """The atomic group for one character, and the longest text it matches."""
+    # Atomic, longest form first: no backtracking between overlapping forms (``\\`` and
+    # ``\\\\``, ``%`` and ``%25``, ``&amp;`` and ``&``), which keeps the search linear.
+    forms = sorted(
+        _char_forms(char) | set(_NAMED_REFERENCES.get(char, ())), key=lambda f: (-len(f), f)
+    )
+    references, reference_length = _reference_patterns(char)
+    nested, nested_length = _nested_percent_pattern(char)
+    longest = max(reference_length, nested_length, *(len(_escape_twice(f)[0]) for f in forms))
+    alternatives = [nested, *references, *(_form_pattern(f) for f in forms)]
+    return "(?>" + "|".join(alternatives) + ")", longest
+
+
+def _nested_percent_pattern(char: str) -> tuple[str, int]:
+    """``char`` percent-encoded two to ``_DECODE_ROUNDS + 1`` times (``%2541``, ``%252541``).
+
+    Matched as written, without decoding: a text decoded as a whole lets a ``%`` or ``%2``
+    in front of the value form an escape with its first characters (``%2abc...`` reads
+    ``*bc...``), so a secret encoded twice behind such a prefix would never show decoded.
+    """
+    data = char.encode("utf-8", "surrogatepass")
+    levels = f"(?:25){{1,{_DECODE_ROUNDS}}}"
+    pattern = "".join(f"%{levels}{byte:02x}" for byte in data)
+    return f"(?i:{pattern})", len(data) * (3 + 2 * _DECODE_ROUNDS)
+
+
+def _runs(secret: str) -> list[str]:
+    """``secret`` in runs: a run of backslashes is one unit, every other character one."""
+    return [match.group() for match in re.finditer(r"\\+|.", secret, re.DOTALL)]
+
+
+def _run_pattern(run: str) -> tuple[str, int]:
+    """The atomic group for one unit of :func:`_runs`.
+
+    A backslash run is spelled the same way throughout (``k`` backslashes, ``2k`` when
+    escaped, ``4k`` when escaped twice ...): matched one by one, the escaped form of the
+    first backslash would take the second one and starve the next group.
+    """
+    if len(run) == 1:
+        return _char_pattern(run)
+    forms = sorted(
+        {variant for form in _char_forms("\\") for variant in _escape_twice(form)},
+        key=lambda f: (-len(f), f),
+    )
+    references, reference_length = _reference_patterns("\\")
+    # References (``&#x5c;``) cannot be mistaken for a backslash: one per character.
+    referenced = "(?:" + "|".join(references) + f"){{{len(run)}}}"
+    longest = max(max(len(form) for form in forms), reference_length) * len(run)
+    alternatives = [referenced, *(f"(?i:{re.escape(form * len(run))})" for form in forms)]
+    return "(?>" + "|".join(alternatives) + ")", longest
+
+
+_LINE_BREAK = r"(?:\r?\n)?"
+
+
+def _wrapped(encoded: str) -> str:
+    """``encoded`` with an optional line break between any two characters."""
+    return _LINE_BREAK.join(re.escape(char) for char in encoded)
+
+
+def _base64_patterns(raw: bytes) -> tuple[list[str], int]:
+    """Patterns for base64 and base64url of ``raw``: the whole value, and the part that
+    only ``raw`` decides when it is in a longer value at each of the three alignments."""
+    patterns: list[str] = []
+    longest = 0
+    for encode in (base64.b64encode, base64.urlsafe_b64encode):
+        whole = encode(raw).decode("ascii").rstrip("=")
+        patterns.append(_wrapped(whole) + f"(?:{_LINE_BREAK}=){{0,2}}")
+        longest = max(longest, 3 * len(whole) + 6)
+        cores = set()
+        for offset in (0, 1, 2):
+            # Characters whose six bits all come from ``raw``, behind ``offset`` other bytes.
+            text = encode(b"\0" * offset + raw).decode("ascii")
+            first = -(-8 * offset // 6)
+            last = 8 * (offset + len(raw)) // 6
+            cores.add(text[first:last])
+        patterns += [_wrapped(core) for core in sorted(cores, key=lambda c: (-len(c), c))]
+    return patterns, longest
+
+
+def _literal_spellings(secret: str) -> set[str]:
+    """Whole-value spellings, for what the per-character pattern cannot take apart (a run
+    of backslashes in the secret itself, where the atomic groups take the wrong pair)."""
+    raw = secret.encode("utf-8", "surrogatepass")
+    percent = {quote(secret, safe=""), quote(secret, safe="/"), quote_plus(secret)}
+    percent |= {_PERCENT_ESCAPE.sub(lambda m: m.group().lower(), p) for p in percent}
+    escaped = {json.dumps(secret)[1:-1], json.dumps(secret, ensure_ascii=False)[1:-1]}
+    escaped.add(json.dumps(secret)[1:-1].replace("/", "\\/"))
+    reprs = {repr(secret)[1:-1], repr(raw)[2:-1]}
+    latin_1 = {raw.decode("latin-1")}
+    once = {secret} | percent | escaped | reprs | latin_1
+    # Escaped a second (and third) time by ``repr()`` or ``json.dumps``.
+    return once | {twice for value in once for twice in _escape_twice(value)}
+
+
+def _secret_pattern(secret: str) -> tuple[str, int]:
+    """One alternation for all spellings of ``secret``, and the longest it can match."""
+    groups = [_run_pattern(run) for run in _runs(secret)]
+    per_char = "".join(group for group, _ in groups)
+    longest = sum(length for _, length in groups)
+    b64, b64_longest = _base64_patterns(secret.encode("utf-8", "surrogatepass"))
+    literals = sorted(_literal_spellings(secret), key=lambda v: (-len(v), v))
+    longest = max(longest, b64_longest, len(literals[0]))
+    return "|".join([*b64, per_char, *(re.escape(v) for v in literals)]), longest
+
+
+def _known_secret(entry: object) -> str:
+    if isinstance(entry, bytes):
+        try:
+            return entry.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            raise ValueError("known_secrets must hold strings or UTF-8 bytes") from None
+    if isinstance(entry, str):
+        return entry.strip()
+    raise ValueError("known_secrets must hold strings or UTF-8 bytes")
+
+
+class _Pairs(list[tuple[str, Any]]):
+    """A JSON object as its (name, value) pairs, because a name occurs more than once."""
+
+
+class Masker:
+    """The three rules for one set of secret paths and known secret values.
+
+    Build it once per recorded exchange and use it for every part. ``secret_paths`` are
+    dotted field paths (``connection.access_code``); ``known_secrets`` are plaintext values,
+    strings or UTF-8 bytes; anything else raises ``ValueError``. A single string is taken as
+    one entry. Values shorter than ``MIN_KNOWN_SECRET_LENGTH`` (after removing surrounding
+    white space) and secret paths that are not strings or empty are ignored.
+    """
+
+    def __init__(
+        self, *, secret_paths: Collection[str] = (), known_secrets: Collection[str] = ()
+    ) -> None:
+        leaves: set[str] = set()
+        for path in _entries(secret_paths):
+            if isinstance(path, str):
+                parts = [part for part in path.split(".") if part]
+                if parts:
+                    leaves.add(_fold(parts[-1]))
+        self._leaf_names = frozenset(leaves)
+        secrets = {_known_secret(entry) for entry in _entries(known_secrets)}
+        # Also as the text is searched: without format characters (the input loses them),
+        # and percent-decoded (a secret that holds a literal ``%2D`` or ``+`` reads
+        # differently in a decoded text, and decoding can be what reveals the rest of it).
+        secrets |= {_FORMAT.sub("", secret) for secret in secrets}
+        secrets |= {decode(secret) for secret in secrets for decode in (unquote, unquote_plus)}
+        # Longest first: at one position the longest secret is the one that is replaced.
+        ordered = sorted(
+            (s for s in secrets if len(s) >= MIN_KNOWN_SECRET_LENGTH), key=lambda s: (-len(s), s)
+        )
+        patterns = [_secret_pattern(secret) for secret in ordered]
+        self.longest_secret = max((longest for _, longest in patterns), default=0)
+        # The parts of each known secret at most two characters shorter than it, one
+        # alternation for all: a decoding round masks them wherever they show (fail closed).
+        # Their number follows the distinct known values, not their occurrences.
+        fragments = sorted(
+            {fragment for secret in ordered for fragment in _fragments(secret)},
+            key=lambda f: (-len(f), f),
+        )
+        self._fragment = (
+            re.compile("(?=(" + "|".join(re.escape(f) for f in fragments) + "))")
+            if fragments
+            else None
+        )
+        # A lookahead finds overlapping occurrences too.
+        self._known = (
+            re.compile("(?=(" + "|".join(pattern for pattern, _ in patterns) + "))")
+            if patterns
+            else None
+        )
+
+    # -- rule 3: known values -----------------------------------------------
+
+    def _known_spans(self, text: str) -> Iterator[tuple[int, int]]:
+        """Merged spans of all occurrences of a known secret, in order."""
+        if self._known is None:
+            return
+        start = end = -1
+        for match in self._known.finditer(text):
+            if match.start() < end:
+                end = max(end, match.end(1))
+                continue
+            if end >= 0:
+                yield start, end
+            start, end = match.start(), match.end(1)
+        if end >= 0:
+            yield start, end
+
+    def _fragment_spans(self, text: str) -> set[tuple[int, int]]:
+        """Every occurrence of a part of a known secret two characters shorter than it."""
+        if self._fragment is None:
+            return set()
+        return {(match.start(), match.end(1)) for match in self._fragment.finditer(text)}
+
+    def _replace_known(self, text: str) -> str:
+        out: list[str] = []
+        position = 0
+        for start, end in self._known_spans(text):
+            out += (text[position:start], MASK)
+            position = end
+        if not out:
+            return text
+        out.append(text[position:])
+        return "".join(out)
+
+    def _has_known(self, text: str) -> bool:
+        return next(self._known_spans(text), None) is not None
+
+    # -- rules 1 and 2 on names ---------------------------------------------
+
+    def _is_secret_name(self, name: str) -> bool:
+        return is_sensitive_name(name) or _fold(name) in self._leaf_names
+
+    def _is_secret_written_name(self, name: str) -> bool:
+        """For a name as written: judged as it stands and in every decoded form, up to
+        ``_DECODE_ROUNDS + 1`` rounds (``pass%77ord``, ``%2574oken``), the same reach the
+        text rules have. Any form that is a secret name counts, so ``%bAuthorization``
+        cannot decode its way out."""
+        forms = {name}
+        for _ in range(_DECODE_ROUNDS + 1):
+            if any(self._is_secret_name(form) for form in forms):
+                return True
+            forms = {
+                _normalized(decode, form)
+                for form in forms
+                if "%" in form or "&" in form or "\\" in form or "+" in form
+                for decode in (unquote, unquote_plus, _drop_encoded_format)
+            } - forms
+        return any(self._is_secret_name(form) for form in forms)
+
+    def _is_secret_quoted_name(self, raw: str, quote_char: str) -> bool:
+        """``raw`` is the name as written between the quotes, escapes included."""
+        name: object = raw
+        if quote_char == '"':
+            try:
+                name = json.loads(f'"{raw}"')
+            except ValueError:
+                name = raw
+        return self._is_secret_written_name(str(name)) or self._is_secret_written_name(raw)
+
+    def _quoted_field_spans(self, text: str) -> Iterator[tuple[int, int]]:
+        """Values of secret-named ``"name": value`` / ``'name': value`` fields."""
+        for match in _QUOTED_FIELD.finditer(text):
+            if not self._is_secret_quoted_name(match.group(2), match.group(1)):
+                continue
+            if match.start(6) >= 0:
+                # An object or array: a pattern cannot tell where it ends, the rest goes.
+                yield match.start(6), len(text)
+            elif match.start(7) >= 0:
+                if match.group(7) not in ("null", "None"):
+                    yield match.span(7)
+            elif match.group(5) is not None:
+                yield match.span(4)
+            else:
+                # A string that is never closed: it runs to the end of the text.
+                yield match.start(4), len(text)
+
+    def _pair_spans(self, text: str) -> Iterator[tuple[int, int]]:
+        """Values of secret-named ``name=value`` and ``name: value`` pairs.
+
+        Every name is looked at, also one inside the value of another: a pair inside the
+        value of a plain name (``a="x password=y"``, ``a=1;password=y``) is found, and so is
+        a pair inside a value that is masked already (quotes in broken text do not always
+        pair up the way the first match took them).
+        """
+        # End of the bare run looked at last: no separator lies between its start and there.
+        bare_end = -1
+        # End of the line looked at last for a ``name:`` value.
+        line_end = -1
+        for match in _PAIR_NAME.finditer(text):
+            start = match.end()
+            if match.group(2) == ":" and text.startswith("//", match.end(2)):
+                continue  # ``scheme://``
+            # A name inside the bare value of a secret name was swallowed by that value;
+            # what follows it (a quoted string) is part of the secret.
+            swallowed = start <= bare_end
+            if not swallowed and not self._is_secret_written_name(match.group(1)):
+                continue
+            if match.group(2) == ":" and start < line_end:
+                # A value that is the rest of a line scanned before (``token:" token:"``
+                # ...): it ends where that line ends. Not scanning again keeps it linear.
+                yield start, line_end
+                continue
+            if start < bare_end and _PAIR_VALUE_START.match(text, start) is None:
+                # Inside a bare run that was scanned before: the value ends where that
+                # run ends. Not scanning again keeps a long chain of pairs linear.
+                yield start, bare_end
+                continue
+            pattern = _LINE_REST if match.group(2) == ":" else _PAIR_VALUE
+            # Matches at every position, if only the empty string.
+            value = cast("re.Match[str]", pattern.match(text, start))
+            if pattern is _LINE_REST:
+                line_end = value.end()
+            if text[start : start + 1] not in ('"', "'") or pattern is _LINE_REST:
+                bare_end = max(bare_end, value.end())
+            yield value.span()
+
+    def _flag_spans(self, text: str) -> Iterator[tuple[int, int]]:
+        for match in _FLAG.finditer(text):
+            if self._is_secret_written_name(match.group(1)):
+                yield match.span(2)
+
+    def _multipart_spans(self, text: str) -> Iterator[tuple[int, int]]:
+        """Values of secret-named multipart form fields: from the blank line after the
+        part's headers to the next delimiter line of the same boundary (the ``--boundary``
+        line in front of the part). A line that merely starts with ``--`` (a PEM armour
+        line) does not end it; without a known boundary the value runs to the end."""
+        delimiters: tuple[list[int], list[str], dict[str, list[int]]] | None = None
+        closings: dict[str, list[int]] = {}
+        for match in _MULTIPART_PART.finditer(text):
+            name = match.group(1) if match.group(1) is not None else match.group(2)
+            if not self._is_secret_written_name(name):
+                continue
+            if delimiters is None:
+                delimiters = _delimiter_lines(text)
+            starts, values, by_value = delimiters
+            index = bisect.bisect_left(starts, match.start()) - 1
+            end = len(text)
+            if index >= 0:
+                boundary = values[index].removesuffix("--")
+                if boundary not in closings:
+                    closings[boundary] = sorted(
+                        by_value.get(boundary, []) + by_value.get(boundary + "--", [])
+                    )
+                closing = closings[boundary]
+                after = bisect.bisect_left(closing, match.end())
+                if after < len(closing):
+                    line = closing[after]
+                    end = line - 2 if text.startswith("\r\n", line - 2) else line - 1
+            yield match.end(), max(end, match.end())
+
+    def _userinfo_spans(self, text: str) -> Iterator[tuple[int, int]]:
+        for match in _USERINFO.finditer(text):
+            userinfo = match.group(1)
+            if not userinfo:
+                continue
+            colon = userinfo.find(":")
+            # Without a colon the user name may be the token itself.
+            yield (match.start(1) + colon + 1 if colon >= 0 else match.start(1)), match.end(1)
+
+    def _rule_spans(self, value: str) -> set[tuple[int, int]]:
+        """The spans the name rules find (rules 1 and 2), without the known values."""
+        return {
+            *self._userinfo_spans(value),
+            *(match.span(1) for match in _AUTH_SCHEME.finditer(value)),
+            *self._quoted_field_spans(value),
+            *self._pair_spans(value),
+            *self._flag_spans(value),
+            *self._multipart_spans(value),
+        }
+
+    # -- public -------------------------------------------------------------
+
+    def text(self, value: str) -> str:
+        """Mask free text: a body that is not JSON, an address, an error message.
+
+        Invisible characters (Unicode category Cf and every Default_Ignorable_Code_Point)
+        are taken out first: they would otherwise split a known secret so that its search
+        no longer finds it.
+        """
+        # The text is decoded as segments: plain text, the regions a name rule found and
+        # the known values, each kept as written. Every segment is decoded on its own, so a
+        # ``%`` in front of a known value can never form an escape with its first
+        # characters; a held region stays at a recorded position and is masked there,
+        # without a search that decoding could defeat. Held regions stay in the probe as
+        # text, so a known secret or masked word that is also a name (``password%3Dx``,
+        # ``basic password+%3D+x``) is still a name once ``%3D`` is decoded. A decoded round
+        # is kept when it shows anything new (a name rule or a known value outside the
+        # recorded positions), masked in full; any part of a known secret at most two
+        # characters shorter than it is masked there as well (fail closed: whatever
+        # decoding did to a value, the round never shows most of it, and it is never
+        # rejected, which would leave what it revealed unmasked).
+        base = _FORMAT.sub("", value)
+        rules = self._rule_spans(base)
+        known = set(self._known_spans(base))
+        out = _apply(base, rules | known)
+        adopted = _segments(base, _regions(rules, known))
+        # Escaped format characters first: that leaves percent escapes alone, so a secret
+        # that holds a literal ``%2D`` is still itself (the percent rounds drop them as well).
+        decoders: tuple[Callable[[str], str], ...] = (_drop_encoded_format, unquote, unquote_plus)
+        for decode in decoders:
+            probe = adopted
+            for _ in range(_DECODE_ROUNDS):
+                decoded, regions, carried = _decode_segments(decode, probe)
+                if decoded == "".join(piece for piece, _ in probe):
+                    break
+                at = {(start, end) for start, end, _ in regions}
+                rules = self._rule_spans(decoded)
+                known = set(self._known_spans(decoded))
+                literal = _literal_spans(decoded, set(carried))
+                shows_more = _apply(decoded, rules | known | at) != _apply(decoded, at)
+                if shows_more:
+                    # Fail closed: a fragment of a known secret the decoded text shows
+                    # anyway (a value its neighbours changed in decoding) is masked as well.
+                    out = _apply(
+                        decoded, rules | known | at | literal | self._fragment_spans(decoded)
+                    )
+                    regions += _regions(rules, known | literal)
+                    adopted = _segments(decoded, regions)
+                probe = _segments(decoded, regions)
+        return out
+
+    def value(self, value: Any) -> Any:
+        """A masked copy of a JSON-like value (dict, list, string, number ...).
+
+        Dict keys become strings, tuples become lists and bytes become ``<binary N bytes>``.
+        ``None`` under a secret name stays ``None``. A value of any other type is masked as
+        its ``str()``. Raises ``RecursionError`` for a value nested deeper than the
+        interpreter allows.
+        """
+        return self._value(value)
+
+    def _items(self, items: Iterator[tuple[Any, Any]]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        # The next number to try for each repeated name: the search goes on from there
+        # instead of starting at 2 again, which keeps many repeats linear.
+        next_number: dict[str, int] = {}
+        for key, item in items:
+            name = key if isinstance(key, str) else str(key)
+            if self._is_secret_written_name(name):
+                masked = None if item is None else MASK
+            else:
+                masked = self._value(item)
+            written = self.text(name)
+            if written in out:
+                # A repeated name (or two that mask the same): numbered, so no value is lost.
+                number = next_number.get(written, 2)
+                while f"{written}#{number}" in out:
+                    number += 1
+                next_number[written] = number + 1
+                written = f"{written}#{number}"
+            out[written] = masked
+        return out
+
+    def _value(self, value: Any) -> Any:
+        if isinstance(value, str):
+            return self.text(value)
+        if isinstance(value, _Pairs):
+            return self._items(iter(value))
+        if isinstance(value, Mapping):
+            return self._items(iter(value.items()))
+        if isinstance(value, list | tuple):
+            return [self._value(item) for item in value]
+        if isinstance(value, bytes | bytearray | memoryview):
+            return f"<binary {len(value)} bytes>"
+        if value is None or isinstance(value, bool):
+            return value
+        if isinstance(value, int | float):
+            return MASK if self._has_known(str(value)) else value
+        # Fail closed: an unknown type is stored as its masked text, never as it is.
+        return self.text(str(value))
+
+    def target(self, target: str) -> str:
+        """Mask a request address (URL, path with query string, topic).
+
+        The same as :meth:`text`, which also looks at the percent-decoded address: a known
+        secret or a secret-named parameter that only shows after decoding (any spelling,
+        for example every character escaped) makes the decoded address the one stored.
+        """
+        return self.text(target)
+
+    def body(self, text: str) -> str:
+        """Mask a message body given as text.
+
+        A JSON object or array (after a byte order mark and white space) is masked field by
+        field (rules 1 to 3 on the parsed values, so an escape sequence cannot hide a
+        secret) and written back as compact JSON if masking changed something or a name
+        occurs more than once in an object (the repeats are numbered, ``name#2``, so that
+        no value is lost and no parser can pick a different one). Otherwise the text is
+        kept as it came and the text rules of :meth:`text` run over it, as they do for any
+        other body. A document nested too deeply to walk is replaced by a fixed note.
+        """
+        stripped = text.lstrip("\ufeff \t\r\n")
+        if stripped[:1] in ("{", "["):
+
+            def pairs(items: list[tuple[str, Any]]) -> dict[str, Any] | _Pairs:
+                found = dict(items)
+                return found if len(found) == len(items) else _Pairs(items)
+
+            try:
+                parsed = json.loads(stripped, object_pairs_hook=pairs)
+                masked = self.value(parsed)
+                # A ``_Pairs`` (a repeated name) is a list and never equals its masked dict:
+                # such a document always counts as changed.
+                if masked != parsed:
+                    # Every string in it went through the text rules already. A surrogate
+                    # that came in as an escape sequence cannot be stored as a character.
+                    written = json.dumps(masked, ensure_ascii=False, separators=(",", ":"))
+                    # Not the text rules over the whole document: a value ending in
+                    # ``token=`` would eat the fields after it. Every key and every string
+                    # went through them already, keys judged as the text rules judge names
+                    # (``_is_secret_written_name``, every decoded form).
+                    return self._replace_known(_SURROGATE.sub("\ufffd", written))
+            except RecursionError:
+                return NESTED_TOO_DEEPLY
+            except ValueError:
+                pass  # not JSON after all: the text rules below still apply
+        return self.text(text)
+
+
+def _normalized(decode: Callable[[str], str], text: str) -> str:
+    """One decoding round: without the NUL an escape can bring in (taken out later, it could
+    join two halves of a secret) and without format characters, also written as escapes."""
+    return _drop_encoded_format(_FORMAT.sub("", decode(text).replace("\x00", "")))
+
+
+_PLAIN, _HELD, _KNOWN = 0, 1, 2  # kinds of a segment, see _segments
+
+
+def _segments(text: str, regions: Collection[tuple[int, int, int]]) -> list[tuple[str, int]]:
+    """``text`` as segments for the next decoding round, split at ``regions`` (start, end,
+    kind): ``_KNOWN`` for a region that holds a known value, ``_HELD`` for one only a name
+    rule found, everything else ``_PLAIN``. Every region keeps its text, so a name a rule
+    covered (``basic password+%3D+x``) is still a name once decoded; it is masked by
+    position. Overlapping regions are one, of the stronger kind; neighbouring plain pieces
+    are joined, so they are decoded together."""
+    merged: list[list[int]] = []
+    for start, end, kind in sorted(r for r in regions if r[1] > r[0]):
+        if merged and start < merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+            merged[-1][2] = max(merged[-1][2], kind)
+        else:
+            merged.append([start, end, kind])
+    segments: list[tuple[str, int]] = []
+    position = 0
+    for start, end, kind in merged:
+        if start > position:
+            segments.append((text[position:start], _PLAIN))
+        segments.append((text[start:end], kind))
+        position = end
+    if position < len(text):
+        segments.append((text[position:], _PLAIN))
+    return segments
+
+
+def _decode_segments(
+    decode: Callable[[str], str], segments: list[tuple[str, int]]
+) -> tuple[str, list[tuple[int, int, int]], list[str]]:
+    """One decoding round over ``segments``, each decoded on its own: the decoded text, the
+    regions of the held segments in it (start, end, kind) and the decoded spellings of the
+    known values. A segment that decoding leaves empty has nothing left to show."""
+    pieces: list[str] = []
+    regions: list[tuple[int, int, int]] = []
+    carried: list[str] = []
+    length = 0
+    for piece, kind in segments:
+        decoded = _normalized(decode, piece)
+        if kind != _PLAIN and decoded:
+            regions.append((length, length + len(decoded), kind))
+            if kind == _KNOWN:
+                carried.append(decoded)
+        pieces.append(decoded)
+        length += len(decoded)
+    return "".join(pieces), regions, carried
+
+
+def _regions(
+    rules: Collection[tuple[int, int]], known: Collection[tuple[int, int]]
+) -> list[tuple[int, int, int]]:
+    return [(s, e, _HELD) for s, e in rules] + [(s, e, _KNOWN) for s, e in known]
+
+
+def _fragments(spelling: str) -> set[str]:
+    """The parts of a spelling at most two characters shorter than it."""
+    size = len(spelling) - 2
+    return {spelling[i : i + size] for i in range(len(spelling) - size + 1)}
+
+
+def _literal_spans(text: str, values: Collection[str]) -> set[tuple[int, int]]:
+    """Every occurrence of each value, whatever its length.
+
+    The values are spellings of known values that were matched (and so long enough) before
+    a decoding round; decoded, one may be shorter (``%41%42%43%44`` reads ``ABCD``) and is
+    masked all the same. None is empty (:func:`_decode_segments` carries no empty one).
+    """
+    spans: set[tuple[int, int]] = set()
+    for value in values:
+        start = text.find(value)
+        while start >= 0:
+            spans.add((start, start + len(value)))
+            start = text.find(value, start + 1)
+    return spans
+
+
+def _apply(value: str, spans: set[tuple[int, int]]) -> str:
+    """``value`` with every span replaced by one ``***``; overlapping or touching spans
+    share one mask."""
+    out: list[str] = []
+    position = 0
+    masked_to = -1
+    for start, end in sorted(spans):
+        if start <= masked_to:
+            position = masked_to = max(masked_to, end)
+            continue
+        out += (value[position:start], MASK)
+        position = masked_to = end
+    if not out:
+        return value
+    out.append(value[position:])
+    return "".join(out)
+
+
+def _entries(values: Collection[Any]) -> Collection[Any]:
+    """A single string (or bytes) is one entry, not a collection of its characters."""
+    return (values,) if isinstance(values, str | bytes) else values
+
+
+def mask(
+    value: Any, *, secret_paths: Collection[str] = (), known_secrets: Collection[str] = ()
+) -> Any:
+    """A masked copy of ``value``: headers, a JSON body, an address or any text.
+
+    See the module text for the rules and :class:`Masker` for the parts. A value of a type
+    that is not JSON-like is masked as its ``str()``.
+    """
+    return Masker(secret_paths=secret_paths, known_secrets=known_secrets).value(value)
+
+
+def secret_paths_from_schema(schema: Mapping[str, Any]) -> frozenset[str]:
+    """Dotted paths of the properties marked ``"x-secret": true`` in a JSON schema.
+
+    Follows ``properties``, ``items``, ``allOf``/``anyOf``/``oneOf`` and local references
+    (``#/$defs/Name``); array items do not add a path segment. Anything it does not
+    understand is skipped.
+    """
+    found: set[str] = set()
+    defs = schema.get("$defs") if isinstance(schema, Mapping) else None
+
+    def walk(node: Any, path: tuple[str, ...], open_refs: frozenset[str]) -> None:
+        if not isinstance(node, Mapping):
+            return
+        if node.get("x-secret") is True and path:
+            found.add(".".join(path))
+        ref = node.get("$ref")
+        if (
+            isinstance(ref, str)
+            and ref.startswith("#/$defs/")
+            and ref not in open_refs
+            and isinstance(defs, Mapping)
+        ):
+            walk(defs.get(ref.removeprefix("#/$defs/")), path, open_refs | {ref})
+        properties = node.get("properties")
+        if isinstance(properties, Mapping):
+            for name, child in properties.items():
+                walk(child, (*path, str(name)), open_refs)
+        walk(node.get("items"), path, open_refs)
+        for combinator in ("allOf", "anyOf", "oneOf"):
+            branches = node.get(combinator)
+            if isinstance(branches, list):
+                for branch in branches:
+                    walk(branch, path, open_refs)
+
+    walk(schema, (), frozenset())
+    return frozenset(found)

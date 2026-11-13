@@ -94,6 +94,7 @@ asyncio_default_fixture_loop_scope = "function"
 addopts = ["--strict-markers", "--strict-config", "-ra"]
 markers = [
     "production_bcrypt_cost: run with the shipped bcrypt cost instead of the cheap test cost",
+    "timing: a relative timing guard; skipped under pytest -n (workers compete for the CPU)",
 ]
 
 [tool.coverage.run]

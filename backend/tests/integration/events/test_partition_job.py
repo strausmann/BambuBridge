@@ -44,7 +44,9 @@ async def _exists(sessions: async_sessionmaker[AsyncSession], name: str) -> bool
 async def _drop(sessions: async_sessionmaker[AsyncSession], *names: str) -> None:
     async with sessions() as session:
         for name in names:
+            twin = name.replace("events_", "communication_log_", 1)
             await session.execute(text(f'DROP TABLE IF EXISTS "{name}"'))
+            await session.execute(text(f'DROP TABLE IF EXISTS "{twin}"'))
         await session.commit()
 
 
