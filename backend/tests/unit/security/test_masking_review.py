@@ -1077,3 +1077,72 @@ def test_a_prefix_before_a_secret_encoded_twice_in_plain_text_is_masked():
         out = masker.text(text)
         assert not _shows_a_fragment(out, secret), out
         assert REMOTE not in out, out
+
+
+UMLAUT_SECRET = "knöwn-välue-3"
+ESCAPED_INVISIBLE = ["​", "­", "͏", "️", "⁠"]
+
+
+def _readable(out: str) -> str:
+    """What a reader decoding JSON escapes (up to twice) sees, invisible characters gone."""
+    for _ in range(2):
+        try:
+            out = json.loads(f'"{out}"')
+        except ValueError:
+            break
+    return "".join(c for c in out if c not in ESCAPED_INVISIBLE)
+
+
+@pytest.mark.parametrize("hider", ESCAPED_INVISIBLE, ids=["zwsp", "shy", "cgj", "fe0f", "wj"])
+@pytest.mark.parametrize("at", [3, 7], ids=["after-escaped-letter", "before-escaped-letter"])
+def test_an_escaped_invisible_character_next_to_an_escaped_letter_is_dropped(hider: str, at: int):
+    secret = UMLAUT_SECRET
+    split = secret[:at] + hider + secret[at:]
+    masker = Masker(known_secrets=[secret])
+    exchange = _exchange(masker)
+    once = json.dumps(split)[1:-1]
+    outputs = {
+        "text": masker.text(once),
+        "twice": masker.text(json.dumps(once)[1:-1]),
+        "target": exchange.target("/api?state=" + json.dumps(split)),
+        "header": json.dumps(exchange.headers([("X-Note", once)])),
+        "nested-json": exchange.body(json.dumps({"payload": json.dumps({"note": split})})),
+    }
+    for part, out in outputs.items():
+        assert not _shows_a_fragment(_readable(out), secret), (part, out)
+        assert not _shows_a_fragment(out, secret), (part, out)
+
+
+def test_an_unpaired_pair_of_unicode_escapes_is_split_at_the_second_backslash():
+    from app.security.masking import _drop_encoded_format
+
+    assert _drop_encoded_format("\\u00f6\\u200b\\u00e4 \\u200b\\u00e4") == "\\u00f6\\u00e4 \\u00e4"
+    assert _drop_encoded_format("\\\\u00f6\\\\u200b") == "\\\\u00f6"
+
+
+BACKSLASH_SECRET = "e1b03C h" + "\\" + "Dzg7"
+
+
+@pytest.mark.parametrize("hider", ["­", "​"], ids=["shy", "zwsp"])
+@pytest.mark.parametrize("encode", ["json", "repr"])
+def test_an_escaped_backslash_before_an_escaped_invisible_character_stays(hider: str, encode: str):
+    split = BACKSLASH_SECRET.replace("\\", "\\" + hider)
+    spelled = json.dumps(split)[1:-1] if encode == "json" else repr(split)[1:-1]
+    out = Masker(known_secrets=[BACKSLASH_SECRET]).text(f"x {spelled} y")
+    assert out == "x *** y", out
+
+
+def test_an_even_run_of_backslashes_before_an_escape_keeps_its_pairs():
+    from app.security.masking import _drop_encoded_format
+
+    # Three backslashes: an escaped backslash, then the escape of a soft hyphen.
+    assert _drop_encoded_format("h\\\\\\u00adD") == "h\\\\D"
+    assert _drop_encoded_format("h\\\\\\xadD") == "h\\\\D"
+    # Two: the escape written twice (a JSON text inside a JSON string).
+    assert _drop_encoded_format("h\\\\u00adD") == "hD"
+    # Five: two escaped backslashes and the escape.
+    assert _drop_encoded_format("h\\\\\\\\\\u200bD") == "h\\\\\\\\D"
+    # Sixteen: an escape written more often than any decoding round undoes stays as written.
+    assert _drop_encoded_format("h" + "\\" * 16 + "u200bD") == "h" + "\\" * 16 + "u200bD"
+    # After a first escape, the second keeps the escaped backslash in front of it.
+    assert _drop_encoded_format("h\\u2060\\\\\\u2060D") == "h\\\\D"

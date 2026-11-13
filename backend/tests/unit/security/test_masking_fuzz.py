@@ -189,3 +189,58 @@ def test_a_prefix_before_a_known_secret_reveals_no_fragment_of_it(seed: int):
             assert marker(i) not in out, (kind, text, out)
             for fragment in fragments(secret):
                 assert fragment not in out, (kind, text, out)
+
+
+# Escaped invisible characters inside a known secret, next to an escaped letter or after an
+# escaped backslash of the secret, as json.dumps (once and twice) and repr write them.
+ESCAPE_SECRETS = ["knöwn-välue-3", "e1b03C h" + "\\" + "Dzg7", "äöü-made-up-07"]
+INVISIBLE = ["​", "­", "͏", "️", "⁠"]
+
+
+def escape_spell(value: str) -> str:
+    kind = rnd.randrange(4)
+    if kind == 0:
+        return json.dumps(value)[1:-1]
+    if kind == 1:
+        return json.dumps(json.dumps(value)[1:-1])[1:-1]
+    if kind == 2:
+        return repr(value)[1:-1]
+    return json.dumps(value, ensure_ascii=False)[1:-1]
+
+
+def readable(out: str) -> list[str]:
+    """The output as stored and as a reader decoding JSON escapes once and twice sees it."""
+    views = [out]
+    for _ in range(2):
+        try:
+            views.append(json.loads(f'"{views[-1]}"'))
+        except ValueError:
+            break
+    return ["".join(c for c in view if c not in INVISIBLE) for view in views]
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_an_escaped_invisible_character_inside_a_known_secret_reveals_no_fragment(seed: int):
+    global rnd
+    rnd = random.Random(seed)  # noqa: S311
+    maskers = {secret: Masker(known_secrets=[secret]) for secret in ESCAPE_SECRETS}
+    for i in range(500):
+        secret = rnd.choice(ESCAPE_SECRETS)
+        split = list(secret)
+        for _ in range(rnd.randrange(1, 3)):
+            split.insert(rnd.randrange(1, len(split)), rnd.choice(INVISIBLE))
+        spelled = escape_spell("".join(split))
+        text = soup(3) + spelled + soup(3) + rnd.choice(["", f" token%3D{marker(i)}"])
+        masker = maskers[secret]
+        outputs = {
+            "text": masker.text(text),
+            "target": masker.target("/p?q=" + text),
+            "body-nested": masker.body(
+                json.dumps({"payload": json.dumps({"note": "".join(split)})})
+            ),
+        }
+        for kind, out in outputs.items():
+            assert marker(i) not in out, (kind, text, out)
+            for view in readable(out):
+                for fragment in fragments(secret):
+                    assert fragment not in view, (kind, text, out)

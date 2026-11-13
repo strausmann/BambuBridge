@@ -40,7 +40,12 @@ beyond these cases is not caught; neither is a run of backslashes in a secret sp
 ways at once (``\\\\`` next to ``\\x5c``), which no encoder writes. A pair whose separator is
 written as an HTML or XML reference (``password&#61;x``, ``token&#x3d;x``) or a ``\\u003d``
 escape is not seen as a pair, and neither is a name or a separator percent-encoded more
-often than ``_DECODE_ROUNDS`` times; a known secret in such a text is still masked.
+often than ``_DECODE_ROUNDS`` times; a known secret in such a text is still masked. A raw
+backslash of a secret written unescaped right before an escape (``h\\\\xadD`` for ``h\\D``
+with a soft hyphen) reads as that escape written twice; ``repr`` and ``json.dumps`` escape
+the backslash and are masked. Over-masking: in a decoded round every part of a known secret
+at most two characters shorter than it is masked, so a low-entropy secret (all zeros, a run
+of spaces) also masks matching runs elsewhere in that text.
 
 In text that is not parsed JSON (an address, an error message, a body in another format,
 broken JSON) the names are found by patterns: ``"name": value`` and ``'name': value`` (a
@@ -231,9 +236,9 @@ _SURROGATE = re.compile("[\ud800-\udfff]")
 # that the search stays linear.
 _ENCODED_CHARACTER = re.compile(
     r"(?i:&\#x0{0,8}(?P<hexref>[0-9a-f]{1,6});|&\#0{0,8}(?P<decref>[0-9]{1,7});"
-    r"|(?<!\\)\\{1,8}(?-i:U)(?P<long>[0-9a-f]{8})"
-    r"|(?<!\\)\\{1,8}(?-i:u)(?P<unit>[0-9a-f]{4})(?:\\{1,8}(?-i:u)(?P<low>[0-9a-f]{4}))?"
-    r"|(?P<xrun>(?<!\\)(?:\\{1,8}x[0-9a-f]{2}){1,64})"
+    r"|(?<!\\)\\{1,16}(?-i:U)(?P<long>[0-9a-f]{8})"
+    r"|(?<!\\)\\{1,16}(?-i:u)(?P<unit>[0-9a-f]{4})(?:\\{1,8}(?-i:u)(?P<low>[0-9a-f]{4}))?"
+    r"|(?P<xrun>(?<!\\)\\{1,16}x[0-9a-f]{2}(?:\\{1,8}x[0-9a-f]{2}){0,63})"
     r"|(?P<prun>(?:%[0-9a-f]{2}){1,64}))"
 )
 _RUN_BYTE = re.compile(r"\\+[xX]([0-9a-fA-F]{2})|%([0-9a-fA-F]{2})")
@@ -289,29 +294,63 @@ def _drop_format_bytes(run: str) -> str:
     return "".join(out)
 
 
+def _backslash_run(written: str) -> int:
+    return len(written) - len(written.lstrip("\\"))
+
+
+def _escape_prefix(written: str) -> int:
+    """How many of the leading backslashes of ``written`` belong to the escape.
+
+    An encoder that escapes a text ``k`` times writes a backslash of the text as ``2**k``
+    backslashes and the escape itself with ``2**(k-1)``; so the escape takes the lowest set
+    bit of the run's length and the rest are escaped backslashes (``\\\\\\u00ad``: one
+    backslash and the escape)."""
+    run = _backslash_run(written)
+    return run & -run
+
+
 def _encoded_character(match: re.Match[str]) -> str:
     """``""`` for an escape of a format character, otherwise the escape as it was (runs:
-    without their format characters)."""
-    if match.group("xrun") or match.group("prun"):
+    without their format characters). Escaped backslashes in front of the escape stay."""
+    if match.group("prun"):
         return _drop_format_bytes(match.group())
+    written = match.group()
+    if match.group("hexref") or match.group("decref"):
+        digits = match.group("hexref")
+        char = (
+            _code_point(digits)
+            if digits
+            else (
+                chr(int(match.group("decref"))) if int(match.group("decref")) <= 0x10FFFF else None
+            )
+        )
+        return "" if char is not None and _is_format(char) else written
+    prefix = _escape_prefix(written)
+    if prefix > 8:
+        return written  # escaped more often than any decoding round would undo
+    run = _backslash_run(written)
+    kept, escape = written[: run - prefix], written[run - prefix :]
+    if match.group("xrun"):
+        return kept + _drop_format_bytes(escape)
     if match.group("unit"):
         high, low = int(match.group("unit"), 16), match.group("low")
         if low is not None and 0xD800 <= high < 0xDC00 and 0xDC00 <= int(low, 16) < 0xE000:
             pair = chr(0x10000 + ((high - 0xD800) << 10) + (int(low, 16) - 0xDC00))
-            return "" if _is_format(pair) else match.group()
-        first = match.group()[: match.start("low") - match.start()] if low else match.group()
-        rest = match.group()[len(first) :]
-        kept = "" if _is_format(chr(high)) else first
-        if rest:
-            kept += "" if _is_format(chr(int(low, 16))) else rest
-        return kept
-    digits = match.group("long") or match.group("hexref")
-    char = (
-        _code_point(digits)
-        if digits
-        else (chr(int(match.group("decref"))) if int(match.group("decref")) <= 0x10FFFF else None)
-    )
-    return "" if char is not None and _is_format(char) else match.group()
+            return kept + ("" if _is_format(pair) else escape)
+        if low is None:
+            return kept + ("" if _is_format(chr(high)) else escape)
+        # Not a pair: two escapes, split where the second one's backslashes start.
+        second = match.start("low") - match.start() - len(kept) - 1
+        while escape[second - 1] == "\\":
+            second -= 1
+        first, rest = escape[:second], escape[second:]
+        kept += "" if _is_format(chr(high)) else first
+        # The second escape keeps the escaped backslashes in front of it, too.
+        literal = _backslash_run(rest) - _escape_prefix(rest)
+        kept += rest[:literal]
+        return kept + ("" if _is_format(chr(int(low, 16))) else rest[literal:])
+    char = _code_point(match.group("long"))
+    return kept + ("" if char is not None and _is_format(char) else escape)
 
 
 def _drop_encoded_format(text: str) -> str:
