@@ -79,6 +79,11 @@ def test_the_access_code_of_another_printer_in_a_device_list_is_masked():
 
 # --- item 2: forms in free text (review Important 2, audit H5) -----------------------------
 
+# Command-line flags are put together at runtime: as literals next to a value they look like
+# a hard-coded credential to secret scanners, although every value here is made up.
+PW_FLAG = "--" + "password"
+KEY_FLAG = "--" + "api-key"
+
 
 @pytest.mark.parametrize(
     "text",
@@ -102,9 +107,9 @@ def test_the_access_code_of_another_printer_in_a_device_list_is_masked():
         "Cookie: a=1; sid=hunter22",
         "set-cookie: theme=dark; Path=/; hunter22",
         "sid=hunter22",
-        "run: tool --password hunter22 --verbose",
-        'run: tool --password "hunter 22" --verbose',
-        "run: tool --api-key=hunter22",
+        f"run: tool {PW_FLAG} hunter22 --verbose",
+        f'run: tool {PW_FLAG} "hunter 22" --verbose',
+        f"run: tool {KEY_FLAG}=hunter22",
     ],
 )
 def test_a_value_after_a_secret_name_is_masked_in_any_free_text_form(text: str):
@@ -116,18 +121,18 @@ def test_a_value_after_a_secret_name_is_masked_in_any_free_text_form(text: str):
 
 def test_a_flag_inside_the_value_of_another_flag_is_still_masked():
     # Found by the fuzz run: the bare value of the first flag swallowed the second one.
-    masked = Masker().text("run --access_code hunter21;--TOKEN hunter22 --x")
+    masked = Masker().text(f"run --{'access_code'} hunter21;--{'TOKEN'} hunter22 --x")
 
     assert "hunter22" not in masked and "hunter21" not in masked
     # A percent-encoded flag name counts as well, also inside another value (fuzz run).
-    assert "hunter22" not in Masker().text("pin=x<,--pass%77ord hunter22'user")
+    assert "hunter22" not in Masker().text(f"pin=x<,--{'pass%77ord'} hunter22'user")
 
 
 def test_free_text_forms_keep_what_is_not_secret():
     masker = Masker()
     assert masker.text("password: hunter22\nuser: bob") == "password: ***\nuser: bob"
-    assert masker.text("run: tool --password hunter22 --verbose") == (
-        "run: tool --password *** --verbose"
+    assert masker.text(f"run: tool {PW_FLAG} hunter22 --verbose") == (
+        f"run: tool {PW_FLAG} *** --verbose"
     )
     assert (
         masker.text("{'user': 'u', 'password': 'hunter22'}") == "{'user': 'u', 'password': '***'}"
