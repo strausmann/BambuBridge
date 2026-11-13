@@ -13,6 +13,7 @@ from app.security.masking import (
     mask,
     secret_paths_from_schema,
 )
+from tests.timing_support import assert_linear
 
 # Obviously fake values, readable text only.
 SECRET = "fake-secret-value-0001"
@@ -466,54 +467,29 @@ def test_a_long_chain_of_pairs_is_scanned_without_recursion():
     assert Masker().text(text) == "a=" * 50_000 + "password=***"
 
 
-def _seconds(masker: Masker, text: str) -> float:
-    """The best of three runs: less sensitive to other load than a single one."""
-    import time
-
-    best = float("inf")
-    for _ in range(3):
-        started = time.perf_counter()
-        masker.text(text)
-        best = min(best, time.perf_counter() - started)
-    return best
-
-
+@pytest.mark.timing
 @pytest.mark.parametrize(
     ("unit", "count"),
     [("A", 32_768), ("a=", 16_384), ('"', 32_768), ("a:", 16_384), ("a:", 16_383)],
     ids=["one-run", "pairs", "quotes", "colons", "userinfo"],
 )
 def test_the_text_rules_take_linear_time(unit: str, count: int):
-    # Relative, not absolute: twice the input may take about twice the time, whatever the
-    # machine and its load. A quadratic scan takes four times as long.
+    # Relative, not absolute, at n and 4n (see tests/timing_support.py): about 4 for linear
+    # work, about 16 for a quadratic scan.
     masker = Masker(known_secrets=[SECRET])
     prefix = "://" if count % 2 else ""
-    single = _seconds(masker, prefix + unit * count)
-    double = _seconds(masker, prefix + unit * (2 * count))
-    assert double / max(single, 1e-3) < 3.0, (single, double)
+    small, large = count // 2, 2 * count
+    assert_linear(masker.text, prefix + unit * small, prefix + unit * large)
 
 
-def _pair_scan_seconds(masker: Masker, text: str) -> float:
-    import time
-
-    best = float("inf")
-    for _ in range(3):
-        started = time.perf_counter()
-        list(masker._pair_spans(text))
-        best = min(best, time.perf_counter() - started)
-    return best
-
-
+@pytest.mark.timing
 def test_the_pair_scan_alone_takes_linear_time():
     # A direct guard for the pair scan, with sizes at which a cheap per-name pass over the
     # text before it (a ``str.count`` over the prefix runs at C speed) still dominates:
-    # many names, far apart, so the scan's own work per name is small. Twice the input
-    # takes about twice the time (1.8 measured); such a quadratic pass makes it four.
+    # many names, far apart, so the scan's own work per name is small.
     masker = Masker()
     unit = "n=" + "v" * 125 + "&"
-    single = _pair_scan_seconds(masker, unit * 8_192)
-    double = _pair_scan_seconds(masker, unit * 16_384)
-    assert double / max(single, 1e-3) < 3.0, (single, double)
+    assert_linear(lambda text: list(masker._pair_spans(text)), unit * 4_096, unit * 16_384)
 
 
 @pytest.mark.parametrize(

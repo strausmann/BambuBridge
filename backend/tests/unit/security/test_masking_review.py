@@ -16,6 +16,7 @@ from urllib.parse import quote, unquote, unquote_plus
 import pytest
 
 from app.security.masking import MASK, Masker, is_sensitive_name, mask
+from tests.timing_support import assert_linear
 
 # --- item 1: names (review Important 1, audit H2) ------------------------------------------
 
@@ -1004,25 +1005,18 @@ def test_a_decoding_round_that_would_reveal_a_fragment_masks_it(monkeypatch):
     assert out == "code=*** token=***"
 
 
+@pytest.mark.timing
 def test_many_occurrences_of_one_secret_take_linear_time():
     # The fragment check costs the number of distinct known values, not of occurrences.
     masker = Masker(known_secrets=[HEX_SECRET])
     unit = "%" + HEX_SECRET + " "
     trigger = " token%3D" + REMOTE
     count = (65_536 - len(trigger)) // len(unit)
-
-    def seconds(text: str) -> float:
-        best = float("inf")
-        for _ in range(3):
-            started = time.perf_counter()
-            out = masker.text(text)
-            best = min(best, time.perf_counter() - started)
+    small, large = unit * (count // 4) + trigger, unit * count + trigger
+    for text in (small, large):
+        out = masker.text(text)
         assert REMOTE not in out and not _shows_a_fragment(out, HEX_SECRET)
-        return best
-
-    single = seconds(unit * (count // 2) + trigger)
-    double = seconds(unit * count + trigger)
-    assert double / max(single, 1e-3) < 3.0, (single, double)
+    assert_linear(masker.text, small, large)
 
 
 # F2: every mark (category M, also those of combining class 0) and every

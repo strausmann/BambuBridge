@@ -59,6 +59,17 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         pytest.exit(MISSING_URL_MESSAGE, returncode=4)
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip the relative timing guards in a parallel run (``pytest -n``): the workers compete
+    for the CPU, so a ratio there says nothing about the code. ``make ci`` runs them."""
+    if not os.environ.get("PYTEST_XDIST_WORKER"):
+        return
+    skip = pytest.mark.skip(reason="timing guard: runs only without pytest -n")
+    for item in items:
+        if item.get_closest_marker("timing") is not None:
+            item.add_marker(skip)
+
+
 @pytest.fixture(autouse=True)
 def cheap_bcrypt(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Hash tokens with ``TEST_BCRYPT_ROUNDS`` unless the test asks for the production cost.
