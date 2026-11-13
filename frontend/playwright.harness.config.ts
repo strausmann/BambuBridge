@@ -12,8 +12,13 @@ export default defineConfig({
   reporter: "list",
   use: { baseURL: HARNESS_URL, locale: "de-DE" },
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
+    { name: "chromium", testIgnore: /keyboard\.spec\.ts$/, use: { ...devices["Desktop Chrome"] } },
+    { name: "webkit", testIgnore: /keyboard\.spec\.ts$/, use: { ...devices["Desktop Safari"] } },
+    // A phone with the on-screen keyboard open (the layout viewport shrinks with it), and a laptop
+    // with little height: the same short projects as playwright.config.ts.
+    { name: "short-chromium", testMatch: /keyboard\.spec\.ts$/, use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 400 }, hasTouch: true, isMobile: true } },
+    { name: "short-webkit", testMatch: /keyboard\.spec\.ts$/, use: { ...devices["Desktop Safari"], viewport: { width: 390, height: 400 }, hasTouch: true, isMobile: true } },
+    { name: "short-wide-chromium", testMatch: /keyboard\.spec\.ts$/, use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 500 } } },
   ],
   webServer: {
     command: "pnpm exec vite --host 127.0.0.1 --port 5199 --strictPort",

@@ -1,0 +1,191 @@
+import { useSyncExternalStore } from "react";
+import { subscribeVersionMismatch } from "../api/client";
+import { hasDirtyForms } from "./dirtyGuard";
+
+/**
+ * Keeping an open page on the build the server runs.
+ *
+ * Every API answer carries `X-BambuBridge-Version`. When it differs from this page's build, the
+ * service worker is asked for the new version and the page reloads into it, once per server
+ * version: `sessionStorage["bb.reloadedFor"]` remembers the version a reload was made for, so a
+ * page that still comes up on the old build (a cache in between) does not reload in a loop; it
+ * shows the banner instead. Someone typing (a focused field) or a form with unsaved changes also
+ * gets the banner ("Neue Version – jetzt neu laden") rather than a reload under their hands.
+ *
+ * A new worker waits (`registerType: "prompt"`): an open tab would otherwise lose the old hashed
+ * files it still loads lazily. It takes over only on this reload, never by itself.
+ */
+
+/** What `registerSW` from `virtual:pwa-register` looks like to us, so tests can stand in for it. */
+export type RegisterSW = (options: {
+  immediate?: boolean;
+  onNeedRefresh?: () => void;
+  onRegisteredSW?: (swUrl: string, registration: ServiceWorkerRegistration | undefined) => void;
+  onRegisterError?: (error: unknown) => void;
+}) => (reloadPage?: boolean) => Promise<void>;
+
+export interface UpdateEnvironment {
+  storage: Pick<Storage, "getItem" | "setItem">;
+  reload: () => void;
+  /** Someone is typing or a form holds unsaved changes. */
+  isBusy: () => boolean;
+  /** How long to wait for a new worker that is still installing before reloading without it. */
+  waitForWorkerMs: number;
+  /** Resolves once the waiting worker controls the page (or after a while, whichever is first). */
+  waitForController: () => Promise<void>;
+}
+
+export const RELOAD_GUARD_KEY = "bb.reloadedFor";
+export const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+
+function typing(): boolean {
+  const element = document.activeElement;
+  if (!(element instanceof HTMLElement)) return false;
+  return element.isContentEditable || element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement;
+}
+
+/** The new worker announces itself with `controllerchange`; a reload before that would get the old one. */
+function controllerChange(ms = 3000): Promise<void> {
+  return new Promise((resolve) => {
+    const container = navigator.serviceWorker as ServiceWorkerContainer | undefined;
+    const done = () => {
+      container?.removeEventListener("controllerchange", done);
+      window.clearTimeout(timer);
+      resolve();
+    };
+    const timer = window.setTimeout(done, ms);
+    container?.addEventListener("controllerchange", done);
+  });
+}
+
+const defaults = (): UpdateEnvironment => ({
+  storage: window.sessionStorage,
+  reload: () => window.location.reload(),
+  isBusy: () => typing() || hasDirtyForms(),
+  waitForWorkerMs: 10_000,
+  waitForController: () => controllerChange(),
+});
+
+interface UpdateState {
+  /** A newer version is there but was not applied (someone is typing, or a reload did not help). */
+  banner: boolean;
+  /** A new worker is installed and waits for the page to reload. */
+  waiting: boolean;
+}
+
+let state: UpdateState = { banner: false, waiting: false };
+let env: UpdateEnvironment | null = null;
+let registration: ServiceWorkerRegistration | undefined;
+let updateSW: ((reloadPage?: boolean) => Promise<void>) | null = null;
+let applying = false;
+const stateListeners = new Set<() => void>();
+const waitingListeners = new Set<() => void>();
+
+function setState(patch: Partial<UpdateState>): void {
+  state = { ...state, ...patch };
+  stateListeners.forEach((listener) => listener());
+}
+
+/** Ask the server for a new worker; a failure (offline, server gone) is not an error here. */
+function checkForUpdate(): Promise<void> {
+  return registration?.update().then(
+    () => undefined,
+    () => undefined,
+  ) ?? Promise.resolve();
+}
+
+function waitForWaitingWorker(ms: number): Promise<boolean> {
+  if (state.waiting) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const done = (found: boolean) => {
+      waitingListeners.delete(onWaiting);
+      window.clearTimeout(timer);
+      resolve(found);
+    };
+    const onWaiting = () => done(true);
+    const timer = window.setTimeout(() => done(false), ms);
+    waitingListeners.add(onWaiting);
+  });
+}
+
+/**
+ * Reload into the newest version: through the waiting worker when there is one (it is told to
+ * take over, and the page reloads once it controls the page), otherwise a plain reload, which
+ * loads the server's files directly. The reload is made here, not left to the plugin: a worker
+ * found by `registration.update()` counts as "external" to workbox-window, which then does not
+ * reload by itself.
+ */
+export async function applyUpdate(): Promise<void> {
+  if (env === null || applying) return;
+  applying = true;
+  await checkForUpdate();
+  if (registration?.installing) await waitForWaitingWorker(env.waitForWorkerMs);
+  if (state.waiting && updateSW) {
+    const controlled = env.waitForController();
+    await updateSW(true);
+    await controlled;
+  }
+  env.reload();
+}
+
+async function onServerVersion(version: string): Promise<void> {
+  if (env === null) return;
+  if (env.storage.getItem(RELOAD_GUARD_KEY) === version || env.isBusy()) {
+    // The reload for this version was made already, or would interrupt someone: ask instead.
+    void checkForUpdate();
+    setState({ banner: true });
+    return;
+  }
+  env.storage.setItem(RELOAD_GUARD_KEY, version);
+  await applyUpdate();
+}
+
+/** Registers the worker and starts watching for new versions. Returns a function that stops. */
+export function startUpdates(register: RegisterSW, overrides: Partial<UpdateEnvironment> = {}): () => void {
+  env = { ...defaults(), ...overrides };
+  updateSW = register({
+    immediate: true,
+    onNeedRefresh() {
+      setState({ waiting: true });
+      [...waitingListeners].forEach((listener) => listener());
+    },
+    onRegisteredSW(_url, registered) {
+      registration = registered;
+    },
+  });
+  const onVisibility = () => {
+    if (document.visibilityState === "visible") void checkForUpdate();
+  };
+  document.addEventListener("visibilitychange", onVisibility);
+  const timer = window.setInterval(() => void checkForUpdate(), UPDATE_CHECK_INTERVAL_MS);
+  const unsubscribe = subscribeVersionMismatch((signal) => void onServerVersion(signal.actual));
+  return () => {
+    document.removeEventListener("visibilitychange", onVisibility);
+    window.clearInterval(timer);
+    unsubscribe();
+  };
+}
+
+export function useUpdateState(): UpdateState {
+  return useSyncExternalStore(
+    (listener) => {
+      stateListeners.add(listener);
+      return () => void stateListeners.delete(listener);
+    },
+    () => state,
+  );
+}
+
+/** The worker registration, for the device page. */
+export function currentRegistration(): ServiceWorkerRegistration | undefined {
+  return registration;
+}
+
+export function resetUpdatesForTest(): void {
+  env = null;
+  registration = undefined;
+  updateSW = null;
+  applying = false;
+  waitingListeners.clear();
+  setState({ banner: false, waiting: false });
+}

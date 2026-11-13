@@ -17,8 +17,16 @@ Environment:
   random one per run and hands the same value to the tests. Without it the server makes its
   own, which nobody else knows.
 
-One control path exists only here: ``POST /__e2e/reset`` empties every table and forgets
-the rate-limit counters, so each browser test starts from a fresh install (bootstrap open).
+- ``E2E_WEB_DIST_NEXT_DIR``: optional, a second build of the web UI with another build id
+  (``E2E_NEXT_BUILD_ID``, default ``e2e-next``). With it the server serves a working copy of
+  ``E2E_WEB_DIST_DIR``, and ``POST /__e2e/next-build`` turns the running server into the next
+  release: the next build is copied over the working copy and ``X-BambuBridge-Version`` reports
+  the next build id, as after a deployment. The update test (``frontend/e2e/update.spec.ts``)
+  uses it.
+
+Two control paths exist only here: ``POST /__e2e/reset`` empties every table, forgets the
+rate-limit counters and goes back to the first build, so each browser test starts from a fresh
+install (bootstrap open); ``POST /__e2e/next-build`` is described above.
 
 The server is a tool on a developer's machine, and it is built so that a web page open in a
 browser on that machine cannot use it:
@@ -27,7 +35,8 @@ browser on that machine cannot use it:
   and it refuses every request that did not arrive on a loopback address.
 - It answers only for the ``Host`` ``127.0.0.1:<port>`` or ``localhost:<port>``. A page that
   points its own host name at 127.0.0.1 (DNS rebinding) sends its own name and is refused.
-- The reset path needs the header ``X-BambuBridge-E2E: reset``. A page of another origin
+- The reset path needs the header ``X-BambuBridge-E2E: reset`` (the next-build path
+  ``X-BambuBridge-E2E: next-build``). A page of another origin
   cannot send a custom header without a preflight, which the server does not grant.
 """
 
@@ -38,7 +47,9 @@ import base64
 import ipaddress
 import os
 import secrets
+import shutil
 import sys
+import tempfile
 import threading
 from collections.abc import Sequence
 from functools import lru_cache
@@ -51,9 +62,10 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.auth.rate_limit import SlidingWindowRateLimiter
+from app.build_info import VERSION
 from app.config import Settings
 from app.main import create_app
 from app.migrations import make_alembic_config
@@ -62,6 +74,10 @@ from tests.db_support import admin_url, truncate_all, url_for_database
 RESET_PATH = "/__e2e/reset"
 RESET_HEADER = "X-BambuBridge-E2E"
 RESET_HEADER_VALUE = "reset"
+NEXT_BUILD_PATH = "/__e2e/next-build"
+NEXT_BUILD_HEADER_VALUE = "next-build"
+DEFAULT_NEXT_BUILD_ID = "e2e-next"
+_VERSION_HEADER = b"x-bambubridge-version"
 DEFAULT_PORT = 8765
 LOOPBACK_NAMES = ("127.0.0.1", "localhost")
 _LIMITERS = (
@@ -134,29 +150,116 @@ class LoopbackOnly:
         await self.app(scope, receive, send)
 
 
+class Builds:
+    """The two builds of the update test and the working copy the server serves.
+
+    ``serving`` is what ``mount_spa`` got: a copy of ``first``. ``to_next`` copies ``next`` over
+    it (new hashed files next to the old ones, as on a real server between two releases) and
+    makes the version header report ``version``; ``to_first`` restores the copy.
+    """
+
+    def __init__(self, first: Path, next_dir: Path, next_build_id: str) -> None:
+        self.first = first
+        self.next = next_dir
+        self.version = f"{VERSION}+{next_build_id}"
+        self.serving = Path(tempfile.mkdtemp(prefix="bb-e2e-dist-"))
+        self.override: bytes | None = None
+        self.to_first()
+
+    def to_first(self) -> None:
+        for child in self.serving.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        shutil.copytree(self.first, self.serving, dirs_exist_ok=True)
+        self.override = None
+
+    def to_next(self) -> None:
+        shutil.copytree(self.next, self.serving, dirs_exist_ok=True)
+        self.override = self.version.encode("latin-1")
+
+
+class VersionOverride:
+    """Reports the next build in ``X-BambuBridge-Version`` once the server was switched to it."""
+
+    def __init__(self, app: ASGIApp, builds: Builds) -> None:
+        self.app = app
+        self.builds = builds
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        override = self.builds.override
+        if scope["type"] != "http" or override is None:
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_version(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = message.get("headers", [])
+                if any(key.lower() == _VERSION_HEADER for key, _ in headers):
+                    headers = [(k, v) for k, v in headers if k.lower() != _VERSION_HEADER]
+                    headers.append((_VERSION_HEADER, override))
+                    message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_version)
+
+
 async def _reset(request: Request) -> Response:
-    """Back to a fresh install: empty tables, no rate-limit history."""
+    """Back to a fresh install: empty tables, no rate-limit history, the first build."""
     if request.headers.get(RESET_HEADER) != RESET_HEADER_VALUE:
         return Response(status_code=403)
     app: FastAPI = request.app
     await truncate_all(app.state.engine)
     for name in _LIMITERS:
         setattr(app.state, name, SlidingWindowRateLimiter())
+    builds: Builds | None = app.state.e2e_builds
+    if builds is not None:
+        builds.to_first()
+    return Response(status_code=204)
+
+
+async def _next_build(request: Request) -> Response:
+    """The running server becomes the next release (only with ``E2E_WEB_DIST_NEXT_DIR``)."""
+    if request.headers.get(RESET_HEADER) != NEXT_BUILD_HEADER_VALUE:
+        return Response(status_code=403)
+    builds: Builds | None = request.app.state.e2e_builds
+    if builds is None:
+        return Response(status_code=404)
+    builds.to_next()
     return Response(status_code=204)
 
 
 def build_app(
-    database_url: str, port: int, web_dist_dir: Path | None, bootstrap_key: str | None = None
+    database_url: str,
+    port: int,
+    web_dist_dir: Path | None,
+    bootstrap_key: str | None = None,
+    *,
+    next_dist_dir: Path | None = None,
+    next_build_id: str = DEFAULT_NEXT_BUILD_ID,
 ) -> FastAPI:
-    """The production app on ``database_url`` plus the reset path and the loopback guard.
+    """The production app on ``database_url`` plus the control paths and the loopback guard.
 
     Without ``bootstrap_key`` a random one is made; it is kept on ``app.state.e2e_bootstrap_key``.
+    With ``next_dist_dir`` (and ``web_dist_dir``) the web UI is served from a working copy that
+    ``POST /__e2e/next-build`` switches to the next build.
     """
     key = bootstrap_key or secrets.token_urlsafe(32)
-    app = create_app(e2e_settings(database_url, port, key), web_dist_dir=web_dist_dir)
+    builds = (
+        Builds(web_dist_dir, next_dist_dir, next_build_id)
+        if web_dist_dir is not None and next_dist_dir is not None
+        else None
+    )
+    served = builds.serving if builds is not None else web_dist_dir
+    app = create_app(e2e_settings(database_url, port, key), web_dist_dir=served)
     app.state.e2e_bootstrap_key = key
-    # First in the table: the web UI's catch-all route would answer the path otherwise.
+    app.state.e2e_builds = builds
+    # First in the table: the web UI's catch-all route would answer the paths otherwise.
     app.router.routes.insert(0, Route(RESET_PATH, _reset, methods=["POST"]))
+    app.router.routes.insert(0, Route(NEXT_BUILD_PATH, _next_build, methods=["POST"]))
+    if builds is not None:
+        app.add_middleware(VersionOverride, builds=builds)
     app.add_middleware(LoopbackOnly, port=port)
     return app
 
@@ -203,7 +306,15 @@ def _default_app() -> FastAPI:
     port = int(os.environ.get("E2E_PORT", str(DEFAULT_PORT)))
     dist = Path(os.environ.get("E2E_WEB_DIST_DIR", "../frontend/dist"))
     key = os.environ.get("E2E_BOOTSTRAP_KEY") or None
-    return build_app(prepare_database(f"bb_e2e_{port}"), port, dist, key)
+    next_dist = os.environ.get("E2E_WEB_DIST_NEXT_DIR")
+    return build_app(
+        prepare_database(f"bb_e2e_{port}"),
+        port,
+        dist,
+        key,
+        next_dist_dir=Path(next_dist) if next_dist else None,
+        next_build_id=os.environ.get("E2E_NEXT_BUILD_ID", DEFAULT_NEXT_BUILD_ID),
+    )
 
 
 def __getattr__(name: str) -> FastAPI:

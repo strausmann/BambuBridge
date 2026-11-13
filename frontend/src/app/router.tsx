@@ -3,17 +3,22 @@ import { createRootRoute, createRoute, createRouter, getRouteApi, Outlet, useLoc
 import { useEffect } from "react";
 import { Button } from "react-aria-components";
 import { ApiError, apiFetch } from "../api/client";
-import { DevicePage, NotFoundPage, OverviewPage, ProtocolPage, ProvidersPage, SettingsLayout, SettingsPage } from "../pages/placeholders";
+import { DevicePage } from "../features/device/DevicePage";
+import { NotFoundPage, OverviewPage, ProtocolPage, ProvidersPage, SettingsLayout, SettingsPage } from "../pages/placeholders";
+import { ConnectionBanner } from "../shell/ConnectionBanner";
+import { NoticeArea } from "../shell/Notice";
+import { UpdateBanner } from "../shell/UpdateBanner";
 import { AppShell } from "../shell/AppShell";
 import { BootstrapKeyCreated } from "../shell/BootstrapKeyCreated";
 import { SignIn } from "../shell/SignIn";
 import { PRIMARY_BUTTON } from "../shell/ui";
-import { useSession, type ApiKeyCreated } from "./session";
+import { PUBLIC_PAGES } from "./routes";
+import { useLeaving, useSession, type ApiKeyCreated } from "./session";
 
 export const BOOTSTRAP_HEADER = "X-BambuBridge-Bootstrap";
 
 /** Paths shown without a sign-in. */
-const PUBLIC_PATHS = ["/sign-in", "/bootstrap"];
+const PUBLIC_PATHS: readonly string[] = PUBLIC_PAGES;
 
 /** Paths the server answers itself; the app never sends a visitor there after a sign-in. */
 const SERVER_PATHS = ["/api", "/auth", "/docs", "/openapi.json"];
@@ -96,12 +101,27 @@ function Unreachable({ onRetry }: { onRetry: () => void }) {
 function RootLayout() {
   const session = useSession();
   const location = useLocation();
+  const leaving = useLeaving();
   const onPublicPage = PUBLIC_PATHS.includes(location.pathname);
-  if (session.isPending) return <Splash />;
+  const inShell = session.signedIn && !onPublicPage && !leaving;
+  return (
+    <>
+      <RootContent session={session} href={location.href} onPublicPage={onPublicPage} leaving={leaving} />
+      <NoticeArea aboveTabBar={inShell}>
+        <ConnectionBanner />
+        <UpdateBanner />
+      </NoticeArea>
+    </>
+  );
+}
+
+function RootContent({ session, href, onPublicPage, leaving }: { session: ReturnType<typeof useSession>; href: string; onPublicPage: boolean; leaving: boolean }) {
+  // On the way to the sign-in hop (src/app/session.ts): no shell with emptied data meanwhile.
+  if (session.isPending || leaving) return <Splash />;
   if (session.isError) return <Unreachable onRetry={() => void session.refetch()} />;
   if (!session.signedIn) {
     if (onPublicPage) return <Outlet />;
-    return <RedirectTo href={`/sign-in?redirect=${encodeURIComponent(location.href)}`} />;
+    return <RedirectTo href={`/sign-in?redirect=${encodeURIComponent(href)}`} />;
   }
   if (onPublicPage) return <Outlet />;
   return (
@@ -165,7 +185,7 @@ const routeTree = rootRoute.addChildren([
   page("/providers", ProvidersPage),
   page("/protocol", ProtocolPage),
   settingsRoute.addChildren([settingsChild("/", SettingsPage), settingsChild("/$section", SettingsPage)]),
-  page("/device", DevicePage),
+  page("/device", () => <DevicePage />),
   page("/bootstrap", BootstrapRoute),
   signInRoute,
 ]);

@@ -17,7 +17,7 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "build-test": "REQUIRE_DIST=1 vitest run src/build.test.ts",
+    "build-test": "REQUIRE_DIST=1 vitest run src/build.test.ts src/pwa.test.ts src/manifest.test.ts",
     "e2e": "playwright test",
     "e2e:harness": "playwright test -c playwright.harness.config.ts",
     "gen:api": "node scripts/gen-api.ts",
@@ -34,7 +34,8 @@
     "@tanstack/react-router": "1.170.46",
     "react": "19.3.1",
     "react-aria-components": "1.22.1",
-    "react-dom": "19.3.1"
+    "react-dom": "19.3.1",
+    "workbox-window": "7.4.1"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",
@@ -63,6 +64,7 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.2",
     "vite": "8.3.8",
+    "vite-plugin-pwa": "2.0.0",
     "vitest": "5.1.0"
   }
 }

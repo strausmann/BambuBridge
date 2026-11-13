@@ -5,16 +5,23 @@ it). With a valid session the browser is sent on to ``next``; otherwise the acti
 providers are asked, and a recognised identity opens a session (cookies set) before the
 redirect. Without either the answer is 401. ``next`` is followed only when it is a plain
 relative path on this host (see :func:`safe_next`); anything else redirects to ``/``.
+
+The 401 is a problem document, except for a browser navigation (``Accept`` names
+``text/html``): the web UI sends the browser here when a session ended, and a JSON page would
+leave the person on a dead end. That 401 is a small page that moves on to the sign-in of the
+web UI (``/sign-in?redirect=<next>``) by a meta refresh, with a link for browsers that do not
+follow one. No script: the Content-Security-Policy allows none inline.
 """
 
 from __future__ import annotations
 
+import html
 import re
 from typing import Annotated
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from fastapi import APIRouter, Depends, Query, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.errors import ApiError
@@ -99,6 +106,25 @@ def safe_next(value: str | None) -> str:
     return "/"  # still changing after several rounds: not a plain path
 
 
+def wants_html(request: Request) -> bool:
+    """The request is a browser navigation: its ``Accept`` header names ``text/html``."""
+    return "text/html" in request.headers.get("accept", "").lower()
+
+
+def sign_in_page(target: str) -> HTMLResponse:
+    """401 for a browser: a page that moves on to the web UI's sign-in, remembering ``target``."""
+    location = html.escape("/sign-in?redirect=" + quote(target, safe=""), quote=True)
+    body = (
+        "<!doctype html>\n"
+        '<html lang="en"><head><meta charset="utf-8">'
+        f'<meta http-equiv="refresh" content="0; url={location}">'
+        "<title>Sign-in required</title></head>"
+        f'<body><p>Sign-in required. <a href="{location}">Continue to the sign-in</a>.</p>'
+        "</body></html>\n"
+    )
+    return HTMLResponse(body, status_code=status.HTTP_401_UNAUTHORIZED)
+
+
 @router.get(
     "/auth/continue",
     status_code=status.HTTP_303_SEE_OTHER,
@@ -106,7 +132,11 @@ def safe_next(value: str | None) -> str:
     response_class=RedirectResponse,
     responses={
         303: {"description": "Signed in; redirect to ``next``"},
-        401: {"model": ProblemDetail},
+        401: {
+            "model": ProblemDetail,
+            "description": "Not signed in; a browser navigation gets a page that moves on "
+            "to the sign-in (text/html)",
+        },
         503: {"model": ProblemDetail},
     },
 )
@@ -114,7 +144,7 @@ async def auth_continue(
     request: Request,
     db: SessionDep,
     next_path: Annotated[str | None, Query(alias="next")] = None,
-) -> RedirectResponse:
+) -> Response:
     target = safe_next(next_path)
     token = session_cookie(request)
     if token is not None and await ui_sessions.load_valid(
@@ -125,6 +155,8 @@ async def auth_continue(
     check_sign_in_limit(request)
     opened = await open_identity_session(request, db)
     if opened is None:
+        if wants_html(request):
+            return sign_in_page(target)
         raise ApiError(401, "not_authenticated", "Authentication required")
     new_token = opened.token
     response = RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)

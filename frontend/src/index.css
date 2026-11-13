@@ -3,7 +3,7 @@
 @import "./design/tokens.css";
 
 /* Short viewports (a phone in landscape, or any phone with the on-screen keyboard open). */
-/* `[data-short]` is the same state measured by shell/useShortViewport.ts, for browsers whose
+/* `[data-short]` is the same state measured by shell/overlays/useVisualViewport.tsx, for browsers whose
    layout viewport does not shrink with the keyboard (iOS Safari). Keep 560 px equal there. */
 @custom-variant short {
   @media (max-height: 560px) {
@@ -88,6 +88,83 @@
   }
   .press:active {
     transform: scale(0.97);
+  }
+
+  /* Page-wide notes (shell/Notice.tsx) rise into place; occasional, so a short enter is allowed. */
+  .notice {
+    transition-property: opacity, translate;
+    transition-duration: 200ms;
+    transition-timing-function: var(--ease-out);
+    @starting-style {
+      opacity: 0;
+      translate: 0 8px;
+    }
+  }
+
+  /*
+   * Dialogs and sheets (shell/overlays). The backdrop covers the visible part of the page: from
+   * --vv-top, --vvh high (useVisualViewport.tsx), so with the on-screen keyboard open nothing
+   * ends up under it. The panel is never taller than that part and scrolls inside.
+   */
+  .overlay-backdrop {
+    position: fixed;
+    inset-inline: 0;
+    top: var(--vv-top, 0px);
+    height: var(--vvh, 100dvh);
+    z-index: 40;
+    /* clip, not hidden: nothing may scroll the backdrop itself, only the panel's content scrolls */
+    overflow: clip;
+    background: color-mix(in srgb, var(--ink) 40%, transparent);
+    transition: opacity 200ms var(--ease-out);
+  }
+  .overlay-backdrop[data-entering],
+  .overlay-backdrop[data-exiting] {
+    opacity: 0;
+  }
+  /* --overlay-pad: the backdrop's padding around a centred panel (0 for a sheet at the edge). */
+  .overlay-panel {
+    max-height: calc(var(--vvh, 100dvh) - 2 * var(--overlay-pad, 0px));
+  }
+  /* The sheet slides from the edge it belongs to; it leaves faster than it came. */
+  .sheet-panel {
+    transition: translate 280ms var(--ease-drawer);
+  }
+  .sheet-panel[data-entering] {
+    translate: 0 100%;
+  }
+  .sheet-panel[data-exiting] {
+    translate: 0 100%;
+    transition-duration: 200ms;
+  }
+  .dialog-panel,
+  .popover-panel {
+    transition-property: opacity, scale;
+    transition-duration: 200ms;
+    transition-timing-function: var(--ease-out);
+  }
+  .popover-panel {
+    transition-duration: 150ms;
+    transform-origin: var(--trigger-anchor-point, top);
+  }
+  .dialog-panel[data-entering],
+  .dialog-panel[data-exiting],
+  .popover-panel[data-entering],
+  .popover-panel[data-exiting] {
+    opacity: 0;
+    scale: 0.96;
+  }
+  @media (min-width: 640px) {
+    .sheet-panel {
+      transition-property: opacity, scale;
+      transition-duration: 200ms;
+      transition-timing-function: var(--ease-out);
+    }
+    .sheet-panel[data-entering],
+    .sheet-panel[data-exiting] {
+      translate: none;
+      opacity: 0;
+      scale: 0.96;
+    }
   }
 
   /* Busy mark in a button (shell/Busy.tsx). Constant motion: linear. With reduced motion the

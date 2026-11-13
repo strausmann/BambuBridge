@@ -93,3 +93,46 @@ export const CloseIcon = (props: IconProps) => (
     <path d="M6 6l12 12M18 6 6 18" />
   </Icon>
 );
+
+export const OfflineIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M2.5 9a15 15 0 0 1 19 0" />
+    <path d="M5.5 12.5a10.5 10.5 0 0 1 13 0" />
+    <path d="M9 16a5 5 0 0 1 6 0" />
+    <path d="M12 19.5h.01" />
+    <path d="M3.5 3.5l17 17" />
+  </Icon>
+);
+
+export const RefreshIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+    <path d="M20 4v4.5h-4.5" />
+  </Icon>
+);
+
+export const DeviceIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="6.5" y="2.5" width="11" height="19" rx="2" />
+    <path d="M10.5 18.5h3" />
+  </Icon>
+);
+
+export const ChevronDownIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M6 9.5l6 6 6-6" />
+  </Icon>
+);
+
+export const ChevronRightIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M9.5 6l6 6-6 6" />
+  </Icon>
+);
+
+export const SearchIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="M16 16l4.5 4.5" />
+  </Icon>
+);

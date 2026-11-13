@@ -33,6 +33,7 @@ const NOT_LOADED: { url: string; match: "prefix" | "exact"; why: string }[] = [
   { url: "http://www.w3.org/", match: "prefix", why: "XML namespaces (SVG, MathML, XLink, XHTML) that React and the SVG files name" },
   { url: "https://react.dev/errors/", match: "prefix", why: "link in React's production error messages" },
   { url: "http://localhost", match: "exact", why: "base for parsing relative URLs in TanStack Router, never requested" },
+  { url: "https://bit.ly/wb-precache", match: "exact", why: "link in a console warning of workbox's precache code (sw.js), never requested" },
 ];
 
 /** The entry that covers `url`, if any. */
@@ -45,12 +46,8 @@ function notLoaded(url: string): (typeof NOT_LOADED)[number] | undefined {
  * other hash of the list must be produced by the bundle; an entry here that the bundle does
  * produce is stale and fails the test.
  */
-const NOT_IN_THIS_BUNDLE: { hash: string; why: string }[] = [
-  {
-    hash: "gYiS/BvZvRcK27JIXTuwhZ3hs2+VJ1X+2gUlE+farlg=",
-    why: "react-aria's iOS scroll lock (overscroll-behavior), injected while a modal is open; the shell has no modal yet, so the code is not in the bundle",
-  },
-];
+// Empty since the overlays (shell/overlays) brought react-aria's iOS scroll lock into the bundle.
+const NOT_IN_THIS_BUNDLE: { hash: string; why: string }[] = [];
 
 describe("the URL allow-list", () => {
   it("has no prefix that could be continued into another host", () => {

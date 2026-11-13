@@ -3,7 +3,9 @@ import { lingui } from "@lingui/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import type { Plugin } from "vite";
+import { VitePWA } from "vite-plugin-pwa";
 import { defineConfig } from "vitest/config";
+import { pwaOptions } from "./pwa.config.ts";
 
 // Licence texts that must travel with the files they cover (OFL-1.1 for the fonts). They are
 // copied into `dist/licenses/` and so into the image.
@@ -30,7 +32,7 @@ const appVersion = `${process.env.BAMBUBRIDGE_BUILD_VERSION ?? "0.0.0-dev"}+${pr
 
 // The backend serves `dist/` (same origin), so the dev server proxies the API and the sign-in redirect.
 export default defineConfig({
-  plugins: [react(), lingui({ macroTransform: true }), tailwindcss(), licenseNotices()],
+  plugins: [react(), lingui({ macroTransform: true }), tailwindcss(), licenseNotices(), VitePWA(pwaOptions)],
   define: { __APP_VERSION__: JSON.stringify(appVersion) },
   server: {
     // The logo files are read from docs/brand, one level above this project.

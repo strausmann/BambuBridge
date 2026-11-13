@@ -1503,7 +1503,7 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Not signed in; a browser navigation gets a page that moves on to the sign-in (text/html)"
           },
           "422": {
             "content": {

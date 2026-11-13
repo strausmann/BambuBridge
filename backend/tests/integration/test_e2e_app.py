@@ -237,3 +237,67 @@ def test_a_loopback_bind_is_accepted(argv: list[str]):
 def test_any_other_bind_stops_the_server_before_it_starts(argv: list[str]):
     with pytest.raises(RuntimeError, match="loopback"):
         e2e_app.refuse_non_loopback_bind(argv)
+
+
+# --- the second build (update test) ------------------------------------------------------
+
+NEXT = {e2e_app.RESET_HEADER: e2e_app.NEXT_BUILD_HEADER_VALUE}
+
+
+@pytest_asyncio.fixture
+async def two_builds(
+    test_database_url: str, engine: AsyncEngine, tmp_path: Path
+) -> AsyncIterator[httpx.AsyncClient]:
+    first = tmp_path / "first"
+    (first / "assets").mkdir(parents=True)
+    (first / "index.html").write_text("first shell")
+    (first / "sw.js").write_text("// worker 1")
+    (first / "assets" / "a-1.js").write_text("// a1")
+    second = tmp_path / "next"
+    (second / "assets").mkdir(parents=True)
+    (second / "index.html").write_text("next shell")
+    (second / "sw.js").write_text("// worker 2")
+    (second / "assets" / "a-2.js").write_text("// a2")
+    app = e2e_app.build_app(test_database_url, PORT, first, next_dist_dir=second)
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url=ORIGIN) as client:
+            yield client
+    finally:
+        await app.state.engine.dispose()
+    # The originals are never written to.
+    assert (first / "index.html").read_text() == "first shell"
+    assert not (first / "assets" / "a-2.js").exists()
+
+
+async def test_next_build_switches_files_and_version(two_builds: httpx.AsyncClient):
+    version = (await two_builds.get("/api/v1/info")).headers["x-bambubridge-version"]
+    assert (await two_builds.get("/")).text == "first shell"
+
+    assert (await two_builds.post(e2e_app.NEXT_BUILD_PATH, headers=NEXT)).status_code == 204
+    assert (await two_builds.get("/")).text == "next shell"
+    assert (await two_builds.get("/sw.js")).text == "// worker 2"
+    # The old hashed file stays, as on a server between two releases.
+    assert (await two_builds.get("/assets/a-1.js")).status_code == 200
+    assert (await two_builds.get("/assets/a-2.js")).status_code == 200
+    switched = (await two_builds.get("/api/v1/info")).headers["x-bambubridge-version"]
+    assert switched == f"{e2e_app.VERSION}+{e2e_app.DEFAULT_NEXT_BUILD_ID}"
+    assert switched != version
+    # Only API answers carry the header, as without the switch.
+    assert "x-bambubridge-version" not in (await two_builds.get("/")).headers
+
+    assert (await two_builds.post(e2e_app.RESET_PATH, headers=RESET)).status_code == 204
+    assert (await two_builds.get("/")).text == "first shell"
+    assert (await two_builds.get("/assets/a-2.js")).status_code == 404
+    back = (await two_builds.get("/api/v1/info")).headers["x-bambubridge-version"]
+    assert back == version
+
+
+async def test_next_build_needs_its_header(two_builds: httpx.AsyncClient):
+    assert (await two_builds.post(e2e_app.NEXT_BUILD_PATH)).status_code == 403
+    assert (await two_builds.post(e2e_app.NEXT_BUILD_PATH, headers=RESET)).status_code == 403
+    assert (await two_builds.get("/")).text == "first shell"
+
+
+async def test_next_build_without_a_second_build_is_404(browser: httpx.AsyncClient):
+    assert (await browser.post(e2e_app.NEXT_BUILD_PATH, headers=NEXT)).status_code == 404

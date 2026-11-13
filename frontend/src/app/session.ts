@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { ApiError, apiFetch, AuthRequiredError, setCsrfToken, setOnAuthRequired } from "../api/client";
 import type { components } from "../api/schema.gen";
 
@@ -11,6 +11,9 @@ export const INFO_KEY = ["info"] as const;
 export const SESSION_KEY = ["session"] as const;
 
 const SESSION_PATH = "/api/v1/auth/session";
+
+/** The server's sign-in hop; outside `/api` and `/auth` is never answered by the service worker. */
+export const CONTINUE_PATH = "/auth/continue";
 
 /** Public name, version and build of the server; available before anyone is signed in. */
 export function useInfo(): UseQueryResult<InfoData> {
@@ -102,6 +105,9 @@ async function fetchSession(queryClient: QueryClient): Promise<SessionData | nul
   } catch (error) {
     if (!(error instanceof AuthRequiredError)) throw error;
     if (outdated()) return stored();
+    // An open session that is gone now ended under the user's hands (expired, revoked, the
+    // proxy's own sign-in ran out): the same way out as any other request that finds it gone.
+    if (stored() !== null) sessionEndedHandler?.();
     setCsrfToken(null);
     resetUserData(queryClient);
     return null;
@@ -177,11 +183,51 @@ export function useSession(): Session {
   };
 }
 
+let sessionEndedHandler: (() => void) | null = null;
+
+/** True from the moment the page leaves for the sign-in hop until it is gone. */
+let leaving = false;
+const leavingListeners = new Set<() => void>();
+function setLeaving(value: boolean): void {
+  leaving = value;
+  leavingListeners.forEach((listener) => listener());
+}
+
+export function useLeaving(): boolean {
+  return useSyncExternalStore(
+    (listener) => {
+      leavingListeners.add(listener);
+      return () => void leavingListeners.delete(listener);
+    },
+    () => leaving,
+  );
+}
+
+/** Where the sign-in hop sends the browser back to: the page it is on now. */
+export function continueUrl(): string {
+  return `${CONTINUE_PATH}?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+}
+
 /**
  * Any request that finds the sign-in gone ends the session in the shell: the cached data of the
- * previous user is dropped and the root layout shows the sign-in, remembering where the user was.
+ * previous user is dropped, and the browser goes to `/auth/continue` with a full page load. An
+ * SSO proxy in front signs in again on that way and the server opens a new session; without one
+ * the server sends the browser on to the sign-in page, remembering where it was. Never `/`: the
+ * service worker would answer that from its cache with the same empty shell.
  */
-export function installAuthGuard(queryClient: QueryClient): () => void {
-  setOnAuthRequired(() => endSession(queryClient));
-  return () => setOnAuthRequired(null);
+export function installAuthGuard(queryClient: QueryClient, navigate: (url: string) => void = (url) => window.location.assign(url)): () => void {
+  const ended = () => {
+    if (leaving) return;
+    const target = continueUrl();
+    setLeaving(true);
+    endSession(queryClient);
+    navigate(target);
+  };
+  setOnAuthRequired(ended);
+  sessionEndedHandler = ended;
+  return () => {
+    setOnAuthRequired(null);
+    sessionEndedHandler = null;
+    setLeaving(false);
+  };
 }

@@ -1094,7 +1094,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Unauthorized */
+            /** @description Not signed in; a browser navigation gets a page that moves on to the sign-in (text/html) */
             401: {
                 headers: {
                     [name: string]: unknown;

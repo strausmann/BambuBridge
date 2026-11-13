@@ -9,6 +9,11 @@ method so that an unknown path answers 404 for any method; a wrong method (GET a
 included) on a path another route knows still answers 405 with an ``Allow`` header, as
 without the web UI.
 
+The files of the public path list (``PUBLIC_PATHS``, the same list as
+``frontend/pwa-public-paths.json``) are files of the build and nothing else: a missing one is
+a 404 as well. The service worker in particular must never be answered with the app shell:
+a browser would refuse the HTML as a script and keep the old worker.
+
 Without ``index.html`` in the build directory the server runs API-only: one warning, no
 route.
 """
@@ -34,6 +39,33 @@ _ALL_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 
 # Paths owned by the server; never answered with the app shell.
 _RESERVED = ("api", "auth", "docs", "openapi.json")
+
+# Files a browser loads without a sign-in (an auth proxy lets exactly these through): the
+# service worker, the manifest and the shell. An entry is a path or ``<dir>/*`` (one file
+# directly in it). Kept equal to ``frontend/pwa-public-paths.json`` by a test.
+PUBLIC_PATHS: tuple[str, ...] = (
+    "/sw.js",
+    "/manifest.webmanifest",
+    "/index.html",
+    "/theme-init.js",
+    "/favicon.svg",
+    "/favicon.ico",
+    "/icons/*",
+    "/assets/*",
+)
+
+
+def is_public_file(path: str) -> bool:
+    """``path`` (with the leading slash) is covered by an entry of ``PUBLIC_PATHS``."""
+    for pattern in PUBLIC_PATHS:
+        if pattern.endswith("/*"):
+            directory = pattern[:-1]
+            rest = path[len(directory) :]
+            if path.startswith(directory) and rest and "/" not in rest:
+                return True
+        elif path == pattern:
+            return True
+    return False
 
 
 def is_reserved(path: str) -> bool:
@@ -99,7 +131,7 @@ def mount_spa(app: FastAPI, dist_dir: Path) -> bool:
                 return FileResponse(
                     candidate, headers={"Cache-Control": IMMUTABLE if is_asset else NO_CACHE}
                 )
-            if full_path.startswith("assets/"):
+            if full_path.startswith("assets/") or is_public_file("/" + full_path):
                 raise HTTPException(status_code=404)
         return FileResponse(index, media_type="text/html", headers={"Cache-Control": NO_CACHE})
 
