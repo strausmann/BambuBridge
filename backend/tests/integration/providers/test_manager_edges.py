@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.db.session import make_session_factory
-from app.providers.base import ProbeResult, ProviderContext
+from app.providers.base import EventTypeDef, ProbeResult, ProviderContext
 from app.providers.demo.provider import DemoProvider
 from app.providers.manager import (
     ActionFailedError,
@@ -245,37 +245,112 @@ async def test_masked_status_is_computed_once_per_status(
         await mgr.stop()
 
 
-async def test_event_payloads_are_masked_with_the_instance_secrets(
+class _Payloads(fakes.RecordingProvider):
+    """Declares an event whose field names the masker's name rules would hide."""
+
+    type_name: ClassVar[str] = "payloads"
+    event_types: ClassVar[list[Any]] = [
+        EventTypeDef(
+            "integration.payloads.seen",
+            1,
+            {
+                "type": "object",
+                "properties": {
+                    "session": {"type": "string"},
+                    "keyframe": {"type": "integer"},
+                    "print_ticket": {"type": "string"},
+                },
+                "additionalProperties": False,
+            },
+        )
+    ]
+
+
+async def _payloads_instance(
     mgr: ProviderManager, engine: AsyncEngine, app: FastAPI
-):
+) -> tuple[uuid.UUID, ProviderContext]:
+    app.state.provider_registry.register(_Payloads)
+    iid = await _instance(engine, app, "payloads")
+    await mgr.apply(iid)
+    return iid, fakes.RecordingProvider.starts[-1]
+
+
+async def _stored_payloads(engine: AsyncEngine, iid: uuid.UUID) -> list[dict[str, Any]]:
     from sqlalchemy import select
 
     from app.models.event import Event
 
-    token = "payload-token-123456"
     async with make_session_factory(engine)() as session:
-        row = await repo.create(
-            session,
-            app.state.secret_box,
-            kind="integration",
-            type_name="demo",
-            name="payload",
-            enabled=True,
-            config={"interval_seconds": 3600},
-            secrets={"token": token},
-            user_id=None,
+        return list(
+            await session.scalars(select(Event.payload).where(Event.source_instance_id == iid))
         )
-        await session.commit()
-    await mgr.apply(row.id)
+
+
+async def test_event_payload_fields_with_secret_like_names_are_stored_unchanged(
+    mgr: ProviderManager, engine: AsyncEngine, app: FastAPI
+):
+    iid, ctx = await _payloads_instance(mgr, engine, app)
+    payload = {"session": "s-1", "keyframe": 42, "print_ticket": "t-7"}
     try:
-        await mgr.run_action(row.id, "emit_now", {"label": f"carries {token}"})
+        assert await ctx.emit(type="integration.payloads.seen", payload=payload, schema_version=1)
     finally:
         await mgr.stop()
-    async with make_session_factory(engine)() as session:
-        payloads = (
-            await session.scalars(select(Event.payload).where(Event.source_instance_id == row.id))
-        ).all()
-    assert [p["label"] for p in payloads] == ["carries ***"]
+    assert await _stored_payloads(engine, iid) == [payload]
+
+
+@pytest.mark.parametrize(
+    ("payload", "dedup_key"),
+    [
+        ({"session": f"has {SECRET} in it"}, None),
+        ({"print_ticket": SECRET.replace("-", "%2D")}, None),  # encoded
+        ({"session": "fine"}, f"key-{SECRET}"),
+        # Not a known secret, but credentials by their form (a provider bug): the value
+        # masking still applies to payload values.
+        ({"session": "Bearer abcdefgh123"}, None),
+        ({"print_ticket": "token=xyz12345"}, None),
+        ({"session": "https://user:pw-1234@printer.example/x"}, None),
+        ({"session": "fine"}, "token=xyz12345"),
+    ],
+)
+async def test_event_carrying_a_secret_is_rejected_and_not_stored(
+    mgr: ProviderManager,
+    engine: AsyncEngine,
+    app: FastAPI,
+    caplog: pytest.LogCaptureFixture,
+    payload: dict[str, Any],
+    dedup_key: str | None,
+):
+    from app.providers.manager import EventRejectedError
+
+    iid, ctx = await _payloads_instance(mgr, engine, app)
+    try:
+        with pytest.raises(EventRejectedError):
+            await ctx.emit(
+                type="integration.payloads.seen",
+                payload=payload,
+                schema_version=1,
+                dedup_key=dedup_key,
+            )
+        status = mgr.status(iid)
+        assert status is not None
+        assert status.message == "event rejected: contains a secret"
+    finally:
+        await mgr.stop()
+    assert await _stored_payloads(engine, iid) == []
+    assert SECRET not in caplog.text
+
+
+async def test_event_payload_is_still_checked_against_its_schema(
+    mgr: ProviderManager, engine: AsyncEngine, app: FastAPI
+):
+    _iid, ctx = await _payloads_instance(mgr, engine, app)
+    try:
+        with pytest.raises(ValueError, match="payload"):
+            await ctx.emit(
+                type="integration.payloads.seen", payload={"keyframe": "x"}, schema_version=1
+            )
+    finally:
+        await mgr.stop()
 
 
 async def test_delete_forgets_per_instance_state(
@@ -380,3 +455,59 @@ async def test_concurrent_start_timeouts_each_stop_their_own_provider_once(
     for events in per_object.values():
         # Stopped exactly once, and only after its own start ended.
         assert events == ["started", "stopped"], _SlowLateStart.log
+
+
+class _WeirdMessage:
+    """A status message whose comparison raises (provider code is not trusted)."""
+
+    def __eq__(self, other: object) -> bool:
+        raise RuntimeError("no comparing")
+
+    __hash__ = object.__hash__
+
+
+async def test_a_status_that_cannot_be_compared_gives_a_stable_error(
+    mgr: ProviderManager, engine: AsyncEngine, app: FastAPI
+):
+    iid = await _instance(engine, app, "recording")
+    await mgr.apply(iid)
+    try:
+        running = mgr._running[iid].provider
+        running._message = _WeirdMessage()  # type: ignore[attr-defined]
+        for _ in range(3):  # from the second call on, the cache is compared
+            status = mgr.status(iid)
+            assert status is not None
+            assert (status.state, status.message) == ("error", "status failed (RuntimeError)")
+    finally:
+        await mgr.stop()
+
+
+async def test_delete_during_a_stop_timeout_still_forgets_the_instance(
+    mgr: ProviderManager, engine: AsyncEngine, app: FastAPI
+):
+    iid = await _instance(engine, app, "hang_stop")
+    await mgr.apply(iid)
+    async with make_session_factory(engine)() as session:
+        assert await repo.delete(session, iid)
+        await session.commit()
+    await mgr.apply(iid)  # the stop times out after step_timeout
+    assert mgr.status(iid) is None
+    assert iid not in mgr._locks
+    assert iid not in mgr._applied
+    assert iid not in mgr._status_cache
+
+
+async def test_the_status_cache_key_holds_the_masking_inputs(mgr: ProviderManager):
+    """No stop or start in between: only the key keeps an old mask from being reused."""
+    from datetime import UTC, datetime
+
+    from app.providers.base import ProviderStatus
+    from app.providers.manager import _Running
+
+    reported = ProviderStatus("connected", f"using {SECRET}", datetime.now(UTC))
+    provider = fakes.RecordingProvider()
+    before = _Running(provider, ("another-secret-0000",), frozenset())
+    after = _Running(provider, (SECRET,), frozenset())
+    iid = uuid.uuid4()
+    assert mgr._clean(iid, before, reported).message == f"using {SECRET}"
+    assert mgr._clean(iid, after, reported).message == "using ***"

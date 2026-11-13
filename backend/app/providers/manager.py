@@ -27,10 +27,20 @@ stays there until its configuration changes. ``start_all`` (at startup and after
 listener reconnects) applies only instances whose stored version differs from the one
 applied last, so it does not retry them: a change, or a restart of the server, does.
 
-Everything provider code hands back is treated as untrusted and masked with the instance's
-secrets before it is shown or stored: status messages, probe messages, action results and
-event payloads. A message too large to mask (``MAX_MASK_INPUT`` bytes) is replaced by a
-placeholder; a masked message is capped at ``MAX_STATUS_MESSAGE_LENGTH`` characters.
+Everything provider code hands back is treated as untrusted. Status messages, probe
+messages and action results are masked with the instance's secrets before they are shown or
+stored. Event payloads are not masked, because masking a field by its name would break the
+payload schema (a field ``session`` or ``keyframe`` would become ``***``). Instead every
+value of the payload (never a field name) and the ``dedup_key`` is run through the masker
+as text: if masking would change any of them - a known secret of the instance in any
+spelling, or a credential by its form (``Bearer ...``, ``token=...``, user information in
+an address) - the event is refused (:class:`EventRejectedError`), not stored, and the
+instance shows ``event rejected: contains a secret``. Fail closed: a value with an
+invisible character is refused as well (masking removes it). Declared limit: a secret
+split across several values is not detected.
+
+A message too large to mask (``MAX_MASK_INPUT`` bytes) is replaced by a placeholder; a
+masked message is capped at ``MAX_STATUS_MESSAGE_LENGTH`` characters.
 """
 
 from __future__ import annotations
@@ -76,6 +86,30 @@ STEP_TIMEOUT_SECONDS = 10.0
 MAX_STATUS_MESSAGE_LENGTH = 500
 
 _log = logging.getLogger(__name__)
+
+
+EVENT_REJECTED_MESSAGE = "event rejected: contains a secret"
+
+
+class EventRejectedError(ValueError):
+    """An event held a secret of its instance and was not stored."""
+
+
+def _values(value: object) -> list[str]:
+    """Every value of a JSON value as text (strings, numbers) - never its field names."""
+    found: list[str] = []
+    pending: list[object] = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            found.append(item)
+        elif isinstance(item, dict):
+            pending.extend(item.values())
+        elif isinstance(item, list | tuple):
+            pending.extend(item)
+        elif isinstance(item, int | float) and not isinstance(item, bool):
+            found.append(str(item))
+    return found
 
 
 class ProviderNotRunningError(RuntimeError):
@@ -209,6 +243,9 @@ class ProviderManager:
         # The configuration version (``updated_at``) each instance was last applied with.
         self._applied: dict[uuid.UUID, datetime] = {}
         self._locks: dict[uuid.UUID, asyncio.Lock] = {}
+        # Per instance: a fixed message the manager shows over the provider's own (a rejected
+        # event), and since when. Dropped on every stop and start.
+        self._notices: dict[uuid.UUID, tuple[str, datetime]] = {}
         # Per instance: ((reported status, secrets, secret paths), cleaned status).
         self._status_cache: dict[
             uuid.UUID,
@@ -248,11 +285,16 @@ class ProviderManager:
         """The live state in this process, or ``None`` if the manager does not know it."""
         running = self._running.get(instance_id)
         if running is not None:
+            notice = self._notices.get(instance_id)
             try:
-                reported = running.provider.status()
+                # The cache comparison runs provider code (``__eq__`` of what it reported):
+                # inside the try as well.
+                cleaned = self._clean(instance_id, running, running.provider.status())
             except Exception as exc:
                 return ProviderStatus("error", f"status failed ({type(exc).__name__})", _now())
-            return self._clean(instance_id, running, reported)
+            if notice is not None:
+                return ProviderStatus(cleaned.state, notice[0], notice[1])
+            return cleaned
         return self._states.get(instance_id)
 
     def _clean(
@@ -332,6 +374,7 @@ class ProviderManager:
         if running is None:
             return True
         self._status_cache.pop(instance_id, None)
+        self._notices.pop(instance_id, None)
         finished, outcome, _ = await self._step(running.provider.stop())
         if not finished:
             await self._set_state(instance_id, "error", "timeout during stop")
@@ -350,6 +393,7 @@ class ProviderManager:
         self._states.pop(instance_id, None)
         self._applied.pop(instance_id, None)
         self._status_cache.pop(instance_id, None)
+        self._notices.pop(instance_id, None)
         # Held by the caller; a later apply makes a new one.
         self._locks.pop(instance_id, None)
         for cls in self._registry.all():
@@ -370,12 +414,14 @@ class ProviderManager:
         async with self._lock(instance_id):
             async with self._sessions() as session:
                 row = await repo.get(session, instance_id)
-            if not await self._stop_running(instance_id):
-                if row is not None:
-                    self._applied[instance_id] = row.updated_at
-                return
+            stopped = await self._stop_running(instance_id)
             if row is None:
+                # Deleted: forgotten even when its stop timed out (the hung call is
+                # abandoned either way, and nothing would ever clear the entries).
                 self._forget_instance(instance_id)
+                return
+            if not stopped:
+                self._applied[instance_id] = row.updated_at
                 return
             self._applied[instance_id] = row.updated_at
             await self._start(row)
@@ -383,6 +429,7 @@ class ProviderManager:
     async def _start(self, row: ProviderInstance) -> None:
         iid = row.id
         self._status_cache.pop(iid, None)
+        self._notices.pop(iid, None)
         if not row.enabled:
             await self._set_state(iid, "stopped")
             return
@@ -485,11 +532,24 @@ class ProviderManager:
                 validate(event_type.payload_schema, payload)
             except ValidationError as exc:
                 raise ValueError(f"payload does not match the event type ({exc})") from None
-            # Events are shown in the web UI and passed on to subscribers: a provider's
-            # payload is masked with the instance's secrets like everything else it returns.
-            payload = await asyncio.to_thread(
-                lambda: masker_for(secret_paths, secrets).value(payload)
-            )
+            # Not masked (that would break the payload schema): an event with a value that
+            # masking would change is refused as a whole. Values only, never field names.
+            texts = _values(payload) + ([dedup_key] if isinstance(dedup_key, str) else [])
+
+            def holds_secret() -> bool:
+                masker = masker_for(secret_paths, secrets)
+                return any(masker.text(text) != text for text in texts)
+
+            if await asyncio.to_thread(holds_secret):
+                _log.warning(
+                    "provider %s: event %s rejected (it holds a secret)", instance_id, type
+                )
+                self._notices[instance_id] = (EVENT_REJECTED_MESSAGE, _now())
+                state = self.status(instance_id)
+                await self._persist(
+                    instance_id, state.state if state else "error", EVENT_REJECTED_MESSAGE
+                )
+                raise EventRejectedError(EVENT_REJECTED_MESSAGE)
             async with self._sessions() as session:
                 try:
                     event_id = await self._events.emit(

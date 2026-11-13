@@ -86,7 +86,11 @@ class ProviderContext:
     ``emit(type=..., payload=..., schema_version=..., dedup_key=None, correlation_id=None)``
     writes an event of this instance (its own transaction, committed) and returns the event
     id, or ``None`` for a duplicate. Only the event types the class declares are accepted,
-    and the payload is checked against their schema.
+    and the payload is checked against their schema. An event with a payload value or
+    ``dedup_key`` that masking would change (a secret of the instance, ``Bearer ...``,
+    ``token=...``, user information in an address) is refused with ``EventRejectedError``
+    and not stored. Declared limit: a secret split across several values is not detected;
+    a payload never carries a secret, in parts or whole.
 
     ``record`` writes communication log entries for this instance; the instance id, the
     secret paths of the schema and every secret of the instance are already bound, so a
