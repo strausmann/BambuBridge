@@ -358,6 +358,49 @@ async def test_auth_continue_without_session_or_sso_401(browser: httpx.AsyncClie
     _problem(await browser.get("/auth/continue?next=/x"), 401, "not_authenticated")
 
 
+async def test_auth_continue_sends_a_browser_on_to_the_sign_in(browser: httpx.AsyncClient):
+    r = await browser.get(
+        "/auth/continue",
+        params={"next": "/protocol?tab=2"},
+        headers={"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"},
+    )
+    assert r.status_code == 401
+    assert r.headers["content-type"].startswith("text/html")
+    assert r.headers["cache-control"] == "no-store"
+    target = "/sign-in?redirect=%2Fprotocol%3Ftab%3D2"
+    assert f'<meta http-equiv="refresh" content="0; url={target}">' in r.text
+    assert f'<a href="{target}">' in r.text
+    assert "<script" not in r.text
+    assert "set-cookie" not in r.headers
+
+
+async def test_auth_continue_401_varies_on_accept(browser: httpx.AsyncClient):
+    """The answer depends on Accept (page or problem JSON): a cache must keep them apart."""
+    page = await browser.get("/auth/continue?next=/x", headers={"Accept": "text/html"})
+    problem = await browser.get("/auth/continue?next=/x", headers={"Accept": "application/json"})
+    for r in (page, problem):
+        assert r.status_code == 401
+        assert "accept" in [v.strip().lower() for v in r.headers.get("vary", "").split(",")]
+
+
+async def test_auth_continue_page_carries_no_markup_from_next(browser: httpx.AsyncClient):
+    # safe_next lets quotes and angle brackets through in a path; the page must not.
+    r = await browser.get(
+        "/auth/continue", params={"next": '/x"><img/src=x>'}, headers={"Accept": "text/html"}
+    )
+    assert r.status_code == 401
+    assert "<img" not in r.text
+    assert "/sign-in?redirect=%2Fx%22%3E%3Cimg%2Fsrc%3Dx%3E" in r.text
+
+
+async def test_auth_continue_page_goes_to_root_for_a_refused_next(browser: httpx.AsyncClient):
+    r = await browser.get(
+        "/auth/continue", params={"next": "//evil.example"}, headers={"Accept": "text/html"}
+    )
+    assert "/sign-in?redirect=%2F" in r.text
+    assert "evil.example" not in r.text
+
+
 def test_session_keys_hide_their_value_in_repr(app: FastAPI):
     assert repr(app.state.session_keys) == "SessionKeys(<hidden>)"
 
@@ -371,6 +414,29 @@ async def test_auth_continue_rate_limited_per_client(
     r = await browser.get("/auth/continue?next=/x")
     _problem(r, 429, "rate_limited")
     assert int(r.headers["Retry-After"]) >= 1
+    assert "accept" in r.headers.get("vary", "").lower()
+
+
+async def test_auth_continue_rate_limited_browser_gets_a_page(
+    browser: httpx.AsyncClient, admin_client: httpx.AsyncClient
+):
+    """A browser that runs into the limit gets a readable page, not problem JSON."""
+    await put_settings(admin_client, {"auth.sign_in_limit_per_minute": 1})
+    await browser.get("/auth/continue?next=/x", headers={"Accept": "text/html"})
+    r = await browser.get(
+        "/auth/continue", params={"next": "/protocol"}, headers={"Accept": "text/html"}
+    )
+    assert r.status_code == 429
+    assert r.headers["content-type"].startswith("text/html")
+    assert r.headers["cache-control"] == "no-store"
+    assert "accept" in r.headers.get("vary", "").lower()
+    retry = int(r.headers["Retry-After"])
+    assert retry >= 1
+    target = "/sign-in?redirect=%2Fprotocol"
+    assert f'<meta http-equiv="refresh" content="{retry}; url={target}">' in r.text
+    assert f'<a href="{target}">' in r.text
+    assert "Too many sign-in attempts" in r.text
+    assert "<script" not in r.text
 
 
 async def test_auth_continue_limits_new_sso_sessions_not_existing_ones(

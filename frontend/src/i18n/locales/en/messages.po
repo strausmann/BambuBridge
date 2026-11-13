@@ -7,6 +7,14 @@ msgstr ""
 "X-Generator: @lingui/cli\n"
 "Language: en\n"
 
+#: src/features/device/DevicePage.tsx
+msgid "„App installieren“ oder „Zum Startbildschirm hinzufügen“ wählen."
+msgstr "Choose “Install app” or “Add to Home screen”."
+
+#: src/features/device/DevicePage.tsx
+msgid "„Zum Home-Bildschirm“ wählen und „Hinzufügen“ tippen."
+msgstr "Choose “Add to Home Screen”, then tap “Add”."
+
 #: src/shell/TopBar.tsx
 msgid "Abmelden"
 msgstr "Sign out"
@@ -23,6 +31,22 @@ msgstr "Admin token"
 msgid "Admin-Token anlegen"
 msgstr "Create admin token"
 
+#: src/features/device/DevicePage.tsx
+msgid "Aktiv ab dem nächsten Laden"
+msgstr "Active from the next load"
+
+#: src/features/device/DevicePage.tsx
+msgid "Aktiv, diese Seite kommt aus dem Worker"
+msgstr "Active, this page comes from the worker"
+
+#: src/features/device/DevicePage.tsx
+msgid "Aktiv, eine neue Version wartet"
+msgstr "Active, a new version is waiting"
+
+#: src/features/device/DevicePage.tsx
+msgid "Als App installieren"
+msgstr "Install as an app"
+
 #: src/pages/placeholders.tsx
 #: src/shell/nav.tsx
 msgid "Anbieter"
@@ -37,6 +61,10 @@ msgstr "Signed in as {0}"
 msgid "Anmelden"
 msgstr "Sign in"
 
+#: src/features/device/DevicePage.tsx
+msgid "API"
+msgstr "API"
+
 #: src/shell/SignIn.tsx
 msgid "API-Token"
 msgstr "API token"
@@ -50,9 +78,37 @@ msgstr "BambuBridge, go to the overview"
 msgid "Bootstrap-Schlüssel"
 msgstr "Bootstrap key"
 
+#: src/features/device/DevicePage.tsx
+msgid "Browser (minimale Leiste)"
+msgstr "Browser (minimal bar)"
+
+#: src/features/device/DevicePage.tsx
+msgid "Browser-Tab"
+msgstr "Browser tab"
+
+#: src/features/device/DevicePage.tsx
+msgid "Build des Servers"
+msgstr "Server build"
+
+#: src/features/device/DevicePage.tsx
+msgid "Build dieser App"
+msgstr "Build of this app"
+
+#: src/features/device/DevicePage.tsx
+msgid "Darstellung"
+msgstr "Display"
+
+#: src/features/device/DevicePage.tsx
+msgid "Das Browsermenü öffnen (die drei Punkte)."
+msgstr "Open the browser menu (the three dots)."
+
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Das Token konnte nicht angelegt werden."
 msgstr "The token could not be created."
+
+#: src/shell/ConnectionBanner.tsx
+msgid "Daten werden erst wieder angezeigt, wenn die Verbindung zurück ist."
+msgstr "Data shows again once the connection is back."
 
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Dein Admin-Token"
@@ -68,6 +124,10 @@ msgstr "The bootstrap key was not accepted."
 msgid "Der Server ist nicht erreichbar."
 msgstr "The server cannot be reached."
 
+#: src/features/device/DevicePage.tsx
+msgid "Der Server läuft auf einem anderen Build als diese App."
+msgstr "The server runs a different build than this app."
+
 #: src/shell/ThemeSwitch.tsx
 msgid "Design"
 msgstr "Theme"
@@ -80,9 +140,17 @@ msgstr "Signing in with the new token failed."
 msgid "Die einmalige Anmeldung hat dich nicht erkannt. Öffne die BambuBridge über deinen Anmeldedienst oder melde dich mit einem Token an."
 msgstr "Single sign-on did not recognise you. Open BambuBridge through your sign-in service, or sign in with a token."
 
+#: src/features/device/DevicePage.tsx
+msgid "Die installierte App öffnet sich ohne Browserleiste. Daten zeigt sie nur mit Verbindung zum Server."
+msgstr "The installed app opens without the browser bar. It shows data only while it can reach the server."
+
 #: src/pages/placeholders.tsx
 msgid "Diese Adresse gibt es in der BambuBridge nicht."
 msgstr "This address does not exist in BambuBridge."
+
+#: src/features/device/DevicePage.tsx
+msgid "Diese Seite in Safari öffnen."
+msgstr "Open this page in Safari."
 
 #: src/pages/placeholders.tsx
 msgid "Diese Seite ist noch leer. Ihr Inhalt folgt in einer der nächsten Versionen."
@@ -92,6 +160,7 @@ msgstr "This page is still empty. Its content follows in one of the next version
 msgid "Dieser Benutzer ist deaktiviert."
 msgstr "This user is disabled."
 
+#: src/features/device/DevicePage.tsx
 #: src/pages/placeholders.tsx
 msgid "Dieses Gerät"
 msgstr "This device"
@@ -108,18 +177,38 @@ msgstr "That token was not accepted."
 msgid "Dunkles Design"
 msgstr "Dark theme"
 
+#: src/features/device/DevicePage.tsx
+msgid "Ein Proxy antwortet mit einer Anmeldeseite"
+msgstr "A proxy answers with a sign-in page"
+
 #: src/pages/placeholders.tsx
 #: src/shell/nav.tsx
 msgid "Einstellungen"
 msgstr "Settings"
 
+#: src/pages/placeholders.tsx
+msgid "Einstellungsseiten"
+msgstr "Settings pages"
+
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Entferne <0>BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY</0> aus dem Container; der Schlüssel wirkt nicht mehr, sobald dieses Token existiert."
 msgstr "Remove <0>BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY</0> from the container; the key no longer works once this token exists."
 
+#: src/features/device/DevicePage.tsx
+msgid "Erneut prüfen"
+msgstr "Check again"
+
 #: src/app/router.tsx
 msgid "Erneut versuchen"
 msgstr "Try again"
+
+#: src/features/device/DevicePage.tsx
+msgid "Erreichbar, angemeldet"
+msgstr "Reachable, signed in"
+
+#: src/features/device/DevicePage.tsx
+msgid "Erreichbar, nicht angemeldet (401)"
+msgstr "Reachable, not signed in (401)"
 
 #: src/shell/SignIn.tsx
 msgid "Erster Start?"
@@ -138,6 +227,14 @@ msgstr "An admin token already exists. Sign in with it."
 msgid "Etwas ist schiefgegangen."
 msgstr "Something went wrong."
 
+#: src/features/device/DevicePage.tsx
+msgid "Fehler {status}"
+msgstr "Error {status}"
+
+#: src/features/device/DevicePage.tsx
+msgid "Fertig"
+msgstr "Done"
+
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Gib den Bootstrap-Schlüssel ein, den du dem Container als <0>BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY</0> mitgegeben hast. Er kann genau eines: das erste Admin-Token anlegen."
 msgstr "Enter the bootstrap key you gave the container as <0>BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY</0>. It can do exactly one thing: create the first admin token."
@@ -154,6 +251,22 @@ msgstr "Light theme"
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Hier bleiben"
 msgstr "Stay here"
+
+#: src/features/device/DevicePage.tsx
+msgid "HTTPS"
+msgstr "HTTPS"
+
+#: src/features/device/DevicePage.tsx
+msgid "Installierte App"
+msgstr "Installed app"
+
+#: src/features/device/DevicePage.tsx
+msgid "Ja"
+msgstr "Yes"
+
+#: src/shell/ConnectionBanner.tsx
+msgid "Keine Verbindung"
+msgstr "No connection"
 
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Kopieren fehlgeschlagen. Markiere das Token und kopiere es von Hand."
@@ -179,6 +292,34 @@ msgstr "Dismiss message"
 msgid "Mit einmaliger Anmeldung (SSO) fortfahren"
 msgstr "Continue with single sign-on (SSO)"
 
+#: src/features/device/DevicePage.tsx
+msgid "Nein"
+msgstr "No"
+
+#: src/shell/UpdateBanner.tsx
+msgid "Neu laden"
+msgstr "Reload"
+
+#: src/shell/UpdateBanner.tsx
+msgid "Neue Version – jetzt neu laden"
+msgstr "New version – reload now"
+
+#: src/features/device/DevicePage.tsx
+msgid "Nicht erreichbar"
+msgstr "Not reachable"
+
+#: src/features/device/DevicePage.tsx
+msgid "Nicht registriert"
+msgstr "Not registered"
+
+#: src/features/device/DevicePage.tsx
+msgid "Nicht unterstützt"
+msgstr "Not supported"
+
+#: src/features/device/DevicePage.tsx
+msgid "Nicht verfügbar (braucht HTTPS)"
+msgstr "Not available (needs HTTPS)"
+
 #: src/pages/placeholders.tsx
 #: src/shell/nav.tsx
 msgid "Protokoll"
@@ -187,6 +328,10 @@ msgstr "Log"
 #: src/app/router.tsx
 msgid "Prüfe die Verbindung und versuche es erneut."
 msgstr "Check the connection and try again."
+
+#: src/shell/overlays/OverlayHeader.tsx
+msgid "Schließen"
+msgstr "Close"
 
 #: src/pages/placeholders.tsx
 msgid "Seite nicht gefunden"
@@ -199,6 +344,14 @@ msgstr "Leave this page? The token will not be shown again."
 #: src/shell/Sidebar.tsx
 msgid "Server nicht erreichbar"
 msgstr "Server unreachable"
+
+#: src/features/device/DevicePage.tsx
+msgid "Service Worker"
+msgstr "Service worker"
+
+#: src/shell/overlays/AppSearchField.tsx
+msgid "Suche leeren"
+msgstr "Clear search"
 
 #: src/shell/ThemeSwitch.tsx
 msgid "Systemdesign"
@@ -221,17 +374,41 @@ msgstr "Leave anyway"
 msgid "Übersicht"
 msgstr "Overview"
 
+#: src/features/device/DevicePage.tsx
+msgid "Unbekannt (Server nicht erreichbar)"
+msgstr "Unknown (server not reachable)"
+
+#: src/features/device/DevicePage.tsx
+msgid "Unten auf „Teilen“ tippen (das Quadrat mit dem Pfeil)."
+msgstr "Tap “Share” at the bottom (the square with the arrow)."
+
 #: src/shell/Sidebar.tsx
 msgid "Verbinde …"
 msgstr "Connecting …"
+
+#: src/pages/placeholders.tsx
+msgid "Verbindung, App-Installation und Versionen"
+msgstr "Connection, app installation and versions"
 
 #: src/shell/Sidebar.tsx
 msgid "Version {version}"
 msgstr "Version {version}"
 
+#: src/features/device/DevicePage.tsx
+msgid "Vollbild"
+msgstr "Full screen"
+
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Weiter zur Oberfläche"
 msgstr "Continue to the app"
+
+#: src/features/device/DevicePage.tsx
+msgid "Wie dieser Browser die BambuBridge sieht. Hilfreich für eine Fehlermeldung oder vor der Installation als App."
+msgstr "How this browser sees BambuBridge. Useful for a bug report or before installing it as an app."
+
+#: src/features/device/DevicePage.tsx
+msgid "Wird geprüft …"
+msgstr "Checking …"
 
 #: src/shell/BootstrapKeyCreated.tsx
 #: src/shell/SignIn.tsx

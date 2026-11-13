@@ -1,55 +1,9 @@
-import { expect, test as base, type Page } from "@playwright/test";
-import { BASE_URL, BOOTSTRAP_HEADER, BOOTSTRAP_KEY, RESET_HEADERS, RESET_PATH } from "./env";
+import { BOOTSTRAP_KEY, RESET_PATH } from "./env";
+import { bootstrapToken, expect, shot, signIn, test } from "./fixtures";
 
-/**
- * Every test starts from a fresh install (empty database, bootstrap open) and fails on any
- * Content-Security-Policy violation and on any request that leaves this origin.
- */
-const test = base.extend<{ guard: void }>({
-  guard: [
-    async ({ page, request }, use) => {
-      expect(BOOTSTRAP_KEY.length, "E2E_BOOTSTRAP_KEY is set by playwright.config.ts").toBeGreaterThanOrEqual(32);
-      expect((await request.post(RESET_PATH, { headers: RESET_HEADERS })).status()).toBe(204);
-      const violations: string[] = [];
-      const foreign: string[] = [];
-      page.on("console", (message) => {
-        if (/content security policy/i.test(message.text())) violations.push(message.text());
-      });
-      page.on("request", (sent) => {
-        const url = sent.url();
-        if (!url.startsWith(`${BASE_URL}/`) && !url.startsWith("data:") && !url.startsWith("blob:")) foreign.push(url);
-      });
-      await use();
-      expect(violations, "Content-Security-Policy violations").toEqual([]);
-      expect(foreign, "requests to another origin").toEqual([]);
-    },
-    { auto: true },
-  ],
-});
-
-/**
- * Screenshots for review are written only when a directory is named; they are artefacts, never a
- * gate. Chromium only: in WebKit Playwright hides the caret with an inline style, which this
- * page's Content-Security-Policy refuses (and the guard above would rightly report).
- */
-async function shot(page: Page, name: string): Promise<void> {
-  const dir = process.env.E2E_SCREENSHOT_DIR;
-  if (dir && test.info().project.name === "chromium") await page.screenshot({ path: `${dir}/${name}.png`, fullPage: true });
-}
-
-async function bootstrapToken(page: Page): Promise<string> {
-  const created = await page.request.post("/api/v1/admin/api-keys", {
-    headers: { [BOOTSTRAP_HEADER]: BOOTSTRAP_KEY },
-    data: { name: "First admin token", scope: "admin" },
-  });
-  expect(created.status()).toBe(201);
-  return ((await created.json()) as { token: string }).token;
-}
-
-async function signIn(page: Page, token: string): Promise<void> {
-  await page.getByLabel("API-Token").fill(token);
-  await page.getByRole("button", { name: "Anmelden", exact: true }).click();
-}
+// These tests are about the shell; the service worker has its own (offline, update,
+// session-expired). Kept out here, so request routing (page.route) sees every request.
+test.use({ serviceWorkers: "block" });
 
 test("first start: the bootstrap key creates an admin token, shown exactly once, and it signs in", async ({ page }) => {
   await page.goto("/");

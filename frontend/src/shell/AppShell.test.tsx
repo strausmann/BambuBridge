@@ -29,6 +29,20 @@ describe("app shell", () => {
     }
   });
 
+  it("the device page, reached from the settings, keeps 'Einstellungen' marked in the sidebar and the tab bar", async () => {
+    signedIn();
+    renderApp("/device");
+    await screen.findByRole("heading", { name: "Dieses Gerät" });
+    const navigations = screen.getAllByRole("navigation", { name: "Hauptnavigation" });
+    expect(navigations).toHaveLength(2);
+    for (const navigation of navigations) {
+      const settings = within(navigation).getByRole("link", { name: "Einstellungen" });
+      expect(settings).toHaveAttribute("aria-current", "page");
+      expect(settings).toHaveAttribute("data-status", "active");
+      expect(within(navigation).getByRole("link", { name: "Übersicht" })).not.toHaveAttribute("aria-current");
+    }
+  });
+
   it("marks the current page for assistive technology and moves with navigation", async () => {
     signedIn();
     const user = userEvent.setup();

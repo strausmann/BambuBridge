@@ -1,6 +1,6 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiFetch, setCsrfToken } from "../api/client";
 import { INFO, jsonResponse, problemResponse, renderApp, SESSION, stubFetch, testQueryClient } from "../test-utils";
 import { createQueryClient, shouldRetry } from "./queryClient";
@@ -59,24 +59,96 @@ describe("root layout", () => {
     expect(router.state.location.pathname).toBe("/");
   });
 
-  it("a request that finds the sign-in gone ends the session and drops the previous user's data", async () => {
+  it("a request that finds the sign-in gone drops the previous user's data and continues at /auth/continue", async () => {
     stubFetch({
       "GET /api/v1/auth/session": () => jsonResponse(SESSION),
       "GET /api/v1/info": () => jsonResponse(INFO),
       "GET /api/v1/settings": signedOut,
     });
+    window.history.replaceState(null, "", "/protocol?tab=2");
     const queryClient = testQueryClient();
-    const uninstall = installAuthGuard(queryClient);
-    const { router } = renderApp("/protocol", queryClient);
+    const navigate = vi.fn();
+    const uninstall = installAuthGuard(queryClient, navigate);
+    renderApp("/protocol", queryClient);
     expect(await screen.findByRole("heading", { name: "Protokoll" })).toBeInTheDocument();
     queryClient.setQueryData(["events"], ["private"]);
 
     await expect(apiFetch("/api/v1/settings")).rejects.toMatchObject({ status: 401 });
 
-    expect(await screen.findByLabelText("API-Token")).toBeInTheDocument();
-    expect(router.state.location.search).toEqual({ redirect: "/protocol" });
+    // A full page load to the server's sign-in hop (an SSO proxy may sign in again on the way),
+    // never to "/": the service worker would answer that from its cache.
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledWith("/auth/continue?next=%2Fprotocol%3Ftab%3D2");
+    // Until the browser has left, a neutral splash: no shell with emptied data, no sign-in form.
+    expect(await screen.findByRole("status")).toHaveTextContent("Lädt …");
+    expect(screen.queryByLabelText("API-Token")).not.toBeInTheDocument();
     expect(queryClient.getQueryData(["events"])).toBeUndefined();
     expect(queryClient.getQueryData(SESSION_KEY)).toBeNull();
+
+    // A second refused request while leaving does not start a second navigation.
+    await expect(apiFetch("/api/v1/settings")).rejects.toMatchObject({ status: 401 });
+    expect(navigate).toHaveBeenCalledTimes(1);
+    uninstall();
+    window.history.replaceState(null, "", "/");
+  });
+
+  it.each([
+    ["the page comes back from the back-forward cache (pageshow)", "pageshow"],
+    ["the browser never leaves (cancelled, offline) and the wait runs out", "timeout"],
+  ])("the hop did not happen: %s; the splash goes and a later refusal tries again", async (_name, how) => {
+    stubFetch({
+      "GET /api/v1/auth/session": () => jsonResponse(SESSION),
+      "GET /api/v1/info": () => jsonResponse(INFO),
+      "GET /api/v1/settings": signedOut,
+    });
+    window.history.replaceState(null, "", "/protocol");
+    const queryClient = testQueryClient();
+    const navigate = vi.fn();
+    const uninstall = installAuthGuard(queryClient, navigate, { leavingTimeoutMs: how === "timeout" ? 400 : 60_000 });
+    renderApp("/protocol", queryClient);
+    expect(await screen.findByRole("heading", { name: "Protokoll" })).toBeInTheDocument();
+
+    await expect(apiFetch("/api/v1/settings")).rejects.toMatchObject({ status: 401 });
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("status")).toHaveTextContent("Lädt …");
+
+    if (how === "pageshow") act(() => void window.dispatchEvent(new Event("pageshow")));
+    // The splash is gone: the page shows what it has (here the sign-in, the session was ended).
+    await waitFor(() => expect(screen.queryByText("Lädt …")).not.toBeInTheDocument(), { timeout: 2000 });
+    await expect(apiFetch("/api/v1/settings")).rejects.toMatchObject({ status: 401 });
+    expect(navigate).toHaveBeenCalledTimes(2);
+    uninstall();
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("a session read that finds an open session gone continues at /auth/continue as well", async () => {
+    let signedIn = true;
+    stubFetch({
+      "GET /api/v1/auth/session": () => (signedIn ? jsonResponse(SESSION) : signedOut()),
+      "GET /api/v1/info": () => jsonResponse(INFO),
+    });
+    window.history.replaceState(null, "", "/providers");
+    const queryClient = testQueryClient();
+    const navigate = vi.fn();
+    const uninstall = installAuthGuard(queryClient, navigate);
+    renderApp("/providers", queryClient);
+    expect(await screen.findByRole("heading", { name: "Anbieter" })).toBeInTheDocument();
+    signedIn = false;
+    await queryClient.refetchQueries({ queryKey: SESSION_KEY });
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("/auth/continue?next=%2Fproviders"));
+    uninstall();
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("a visitor who was never signed in gets the sign-in page directly, without the hop", async () => {
+    stubFetch({ "GET /api/v1/auth/session": signedOut, "GET /api/v1/info": () => jsonResponse(INFO) });
+    const queryClient = testQueryClient();
+    const navigate = vi.fn();
+    const uninstall = installAuthGuard(queryClient, navigate);
+    const { router } = renderApp("/protocol", queryClient);
+    expect(await screen.findByLabelText("API-Token")).toBeInTheDocument();
+    expect(router.state.location.search).toEqual({ redirect: "/protocol" });
+    expect(navigate).not.toHaveBeenCalled();
     uninstall();
   });
 

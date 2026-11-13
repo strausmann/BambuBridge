@@ -2,6 +2,7 @@ import { useLingui } from "@lingui/react/macro";
 import { Link } from "@tanstack/react-router";
 import { useRef, useState, type FormEvent } from "react";
 import { Input, Label, TextField } from "react-aria-components";
+import { useDirtyGuard } from "../app/dirtyGuard";
 import { ApiError } from "../api/client";
 import { AuthScreen, ErrorNote } from "./AuthScreen";
 import { BusyButton } from "./Busy";
@@ -36,6 +37,8 @@ export function SignIn({ onSignIn, onSso }: Props) {
   const { t } = useLingui();
   const messageFor = useSignInMessage();
   const [token, setToken] = useState("");
+  // A typed token is input a new version must not reload away (src/app/updates.ts).
+  useDirtyGuard(token !== "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"token" | "sso" | null>(null);
   const field = useRef<HTMLInputElement>(null);

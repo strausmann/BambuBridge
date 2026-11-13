@@ -1503,7 +1503,7 @@
                 }
               }
             },
-            "description": "Unauthorized"
+            "description": "Not signed in; a browser navigation gets a page that moves on to the sign-in (text/html)"
           },
           "422": {
             "content": {
@@ -1514,6 +1514,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail"
+                }
+              }
+            },
+            "description": "Too many sign-in attempts; a browser navigation gets a page that moves on to the sign-in once Retry-After has passed (text/html)"
           },
           "503": {
             "content": {

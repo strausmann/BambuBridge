@@ -2,7 +2,7 @@ import { useLingui } from "@lingui/react/macro";
 import { Link } from "@tanstack/react-router";
 import { useInfo } from "../app/session";
 import { Logo } from "./Logo";
-import { useNavEntries } from "./nav";
+import { useNavEntries, useOwnedPageProps, type NavEntry } from "./nav";
 
 /** Desktop navigation (from 1024 px): logo, the main destinations, server version at the foot. */
 export function Sidebar() {
@@ -22,16 +22,7 @@ export function Sidebar() {
         <ul className="flex flex-col gap-1">
           {entries.map((entry) => (
             <li key={entry.to}>
-              <Link
-                to={entry.to}
-                activeOptions={{ exact: entry.exact }}
-                className="press relative flex h-11 items-center gap-3 rounded-r2 px-3 text-ink-2 hover:bg-sunken hover:text-ink data-[status=active]:bg-primary-soft data-[status=active]:font-semibold data-[status=active]:text-ink"
-              >
-                {/* A bar marks the current page without relying on colour alone. */}
-                <span aria-hidden="true" className="absolute top-2.5 bottom-2.5 left-0 w-1 rounded-full bg-transparent in-data-[status=active]:bg-primary" />
-                {entry.icon}
-                <span>{entry.label}</span>
-              </Link>
+              <SideLink entry={entry} />
             </li>
           ))}
         </ul>
@@ -40,5 +31,22 @@ export function Sidebar() {
         {version ? t`Version ${version}` : info.isError ? t`Server nicht erreichbar` : t`Verbinde …`}
       </p>
     </aside>
+  );
+}
+
+function SideLink({ entry }: { entry: NavEntry }) {
+  const owned = useOwnedPageProps(entry);
+  return (
+    <Link
+      to={entry.to}
+      activeOptions={{ exact: entry.exact }}
+      {...owned}
+      className="press relative flex h-11 items-center gap-3 rounded-r2 px-3 text-ink-2 hover:bg-sunken hover:text-ink data-[status=active]:bg-primary-soft data-[status=active]:font-semibold data-[status=active]:text-ink"
+    >
+      {/* A bar marks the current page without relying on colour alone. */}
+      <span aria-hidden="true" className="absolute top-2.5 bottom-2.5 left-0 w-1 rounded-full bg-transparent in-data-[status=active]:bg-primary" />
+      {entry.icon}
+      <span>{entry.label}</span>
+    </Link>
   );
 }

@@ -8,4 +8,4 @@ afterEach(() => {
 });
 
 // jsdom does not implement scrolling and logs "Not implemented" for every call.
-window.scrollTo = () => {};
+if (typeof window !== "undefined") window.scrollTo = () => {};

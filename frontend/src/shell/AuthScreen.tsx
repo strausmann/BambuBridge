@@ -2,16 +2,16 @@ import type { ReactNode } from "react";
 import { LanguageSwitch } from "./LanguageSwitch";
 import { Logo } from "./Logo";
 import { ThemeSwitch } from "./ThemeSwitch";
-import { useShortViewport } from "./useShortViewport";
+import { useVisualViewport } from "./overlays/useVisualViewport";
 
 /**
  * Frame of the screens before the shell (sign-in, first start): logo, one panel, theme and
  * language. On a short viewport (on-screen keyboard open) the panel sits at the top and the
  * page scrolls, so the focused field and the button below it stay reachable. "Short" comes from
- * the media query and, for iOS, from the visual viewport (`useShortViewport`).
+ * the media query and, for iOS, from the visual viewport (`useVisualViewport`).
  */
 export function AuthScreen({ children }: { children: ReactNode }) {
-  const short = useShortViewport();
+  const { short } = useVisualViewport();
   return (
     <main
       data-short={short || undefined}

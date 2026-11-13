@@ -6,7 +6,7 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "coverage", "playwright-report", "test-results", "src/api/schema.gen.ts", "src/i18n/locales/**/messages.ts"] },
+  { ignores: ["dist", "dist-next", "coverage", "playwright-report", "test-results", "src/api/schema.gen.ts", "src/i18n/locales/**/messages.ts"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   jsxA11y.flatConfigs.recommended,
@@ -27,6 +27,27 @@ export default tseslint.config(
       "security/detect-non-literal-regexp": "off",
       "security/detect-unsafe-regex": "off",
       "security/detect-child-process": "off",
+    },
+  },
+  {
+    // Dialogs, sheets, comboboxes and search fields carry the on-screen keyboard and back-button
+    // handling of src/shell/overlays (visual viewport, inner scrolling, history entry). Built
+    // straight from react-aria they would lose it, so the raw parts stay inside that directory.
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/shell/overlays/**"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "react-aria-components",
+              importNames: ["Modal", "ModalOverlay", "Dialog", "ComboBox", "Popover", "SearchField"],
+              message: "Use AppDialog, AppSheet, AppComboBox or AppSearchField from src/shell/overlays.",
+            },
+          ],
+        },
+      ],
     },
   },
   {
