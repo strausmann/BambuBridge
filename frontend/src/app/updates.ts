@@ -37,6 +37,8 @@ export interface UpdateEnvironment {
   waitForRegistrationMs: number;
   /** Resolves once the waiting worker controls the page (or after a while, whichever is first). */
   waitForController: () => Promise<void>;
+  /** After a reload call: if no `pagehide` came by then, the page stayed (a leave prompt said "stay"). */
+  reloadSettleMs: number;
 }
 
 export const RELOAD_GUARD_KEY = "bb.reloadedFor";
@@ -80,13 +82,39 @@ function controllerChange(ms = 3000): Promise<void> {
   });
 }
 
+/**
+ * `sessionStorage`, or this page's memory where site storage is blocked: reading
+ * `window.sessionStorage` itself throws a `SecurityError` then, and this code runs before React
+ * renders, so an unguarded access would leave the page blank. The memory copy holds for the
+ * page's lifetime; without storage the reload guard then works per page load, not per tab.
+ */
+const memory = new Map<string, string>();
+const guardedSessionStorage: UpdateEnvironment["storage"] = {
+  getItem(key) {
+    try {
+      return window.sessionStorage.getItem(key);
+    } catch {
+      return memory.get(key) ?? null;
+    }
+  },
+  setItem(key, value) {
+    memory.set(key, value);
+    try {
+      window.sessionStorage.setItem(key, value);
+    } catch {
+      /* blocked site storage: the memory copy above is all there is */
+    }
+  },
+};
+
 const defaults = (): UpdateEnvironment => ({
-  storage: window.sessionStorage,
+  storage: guardedSessionStorage,
   reload: () => window.location.reload(),
   isBusy: () => typing() || hasDirtyForms(),
   waitForWorkerMs: 10_000,
   waitForRegistrationMs: 10_000,
   waitForController: () => controllerChange(),
+  reloadSettleMs: 3000,
 });
 
 interface UpdateState {
@@ -177,7 +205,25 @@ export async function applyUpdate({ automatic = false }: { automatic?: boolean }
     await updateSW(true);
     await controlled;
   }
-  env.reload();
+  reloadOnce(env);
+}
+
+/**
+ * Reloads, and keeps further attempts out while the page is on its way. A reload can be cancelled
+ * (the token screen asks before leaving, and "stay" keeps the page): when no `pagehide` followed
+ * within `reloadSettleMs`, the page is still here and the update can be tried again.
+ */
+function reloadOnce(current: UpdateEnvironment): void {
+  let leaving = false;
+  const onPageHide = () => {
+    leaving = true;
+  };
+  window.addEventListener("pagehide", onPageHide, { once: true });
+  current.reload();
+  window.setTimeout(() => {
+    window.removeEventListener("pagehide", onPageHide);
+    if (!leaving) applying = false;
+  }, current.reloadSettleMs);
 }
 
 async function onServerVersion(version: string): Promise<void> {

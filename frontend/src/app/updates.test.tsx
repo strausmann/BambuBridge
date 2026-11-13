@@ -32,7 +32,12 @@ const running: (() => void)[] = [];
 /** One page load: a registered worker, the update hooks, a fetch that reports `serverVersion`. */
 function startPage(
   registration: FakeRegistration | undefined = { update: vi.fn(() => Promise.resolve()), installing: null, waiting: null },
-  { deferRegistration = false, waitForRegistrationMs = 2000 }: { deferRegistration?: boolean; waitForRegistrationMs?: number } = {},
+  {
+    deferRegistration = false,
+    waitForRegistrationMs = 2000,
+    browserStorage = false,
+    reloadSettleMs = 1000,
+  }: { deferRegistration?: boolean; waitForRegistrationMs?: number; browserStorage?: boolean; reloadSettleMs?: number } = {},
 ) {
   resetUpdatesForTest();
   resetVersionSignal();
@@ -49,7 +54,8 @@ function startPage(
     return updateSW;
   };
   const stop = startUpdates(register, {
-    storage,
+    ...(browserStorage ? {} : { storage }),
+    reloadSettleMs,
     reload: () => reloads.push("reload"),
     waitForWorkerMs: 50,
     waitForRegistrationMs,
@@ -371,6 +377,90 @@ describe("forms with input hold the reload back", () => {
     renderApp("/sign-in");
     await screen.findByLabelText("API-Token");
     await answerWith("9.9.9+next");
+    expect(reloads).toEqual(["reload"]);
+    page.stop();
+  });
+});
+
+describe("site storage blocked", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("starts without sessionStorage and still reloads at most twice in this page's life", async () => {
+    vi.spyOn(window, "sessionStorage", "get").mockImplementation(() => {
+      throw new DOMException("The operation is insecure.", "SecurityError");
+    });
+    // Each "page load" here is the same document (the reload is a stub), so the memory fallback
+    // carries over, as it would for the page's lifetime.
+    for (const version of ["9.9.9+one", "9.9.9+one", "9.9.9+two", "9.9.9+three"]) {
+      const page = startPage(undefined, { browserStorage: true });
+      await answerWith(version);
+      page.stop();
+    }
+    expect(reloads).toEqual(["reload", "reload"]);
+  });
+
+  it("the app renders with blocked site storage once the updates are started", async () => {
+    vi.spyOn(window, "sessionStorage", "get").mockImplementation(() => {
+      throw new DOMException("The operation is insecure.", "SecurityError");
+    });
+    vi.spyOn(window, "localStorage", "get").mockImplementation(() => {
+      throw new DOMException("The operation is insecure.", "SecurityError");
+    });
+    const page = startPage(undefined, { browserStorage: true });
+    stubFetch({
+      "GET /api/v1/auth/session": () => problemResponse(401, "not_authenticated", "Authentication required"),
+      "GET /api/v1/info": () => jsonResponse(INFO),
+    });
+    renderApp("/sign-in");
+    expect(await screen.findByLabelText("API-Token")).toBeInTheDocument();
+    page.stop();
+  });
+});
+
+describe("a reload that does not happen", () => {
+  it("the browser stays on the page (a leave prompt was answered 'stay'): the button works again", async () => {
+    function Form() {
+      useDirtyGuard(true);
+      return <UpdateBanner />;
+    }
+    const page = startPage(undefined, { reloadSettleMs: 60 });
+    renderWithProviders(<Form />);
+    await answerWith("9.9.9+next");
+    const press = async () => {
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Neu laden" }));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+    };
+    // Two presses at once: one attempt.
+    await press();
+    await press();
+    expect(reloads).toEqual(["reload"]);
+    // No pagehide followed: after a moment the page counts as still here, and a press works again.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+    await press();
+    expect(reloads).toEqual(["reload", "reload"]);
+    page.stop();
+  });
+
+  it("while the page is really leaving (pagehide), the latch stays: no second attempt", async () => {
+    function Form() {
+      useDirtyGuard(true);
+      return <UpdateBanner />;
+    }
+    const page = startPage(undefined, { reloadSettleMs: 60 });
+    renderWithProviders(<Form />);
+    await answerWith("9.9.9+next");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Neu laden" }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    act(() => void window.dispatchEvent(new Event("pagehide")));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Neu laden" }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
     expect(reloads).toEqual(["reload"]);
     page.stop();
   });
