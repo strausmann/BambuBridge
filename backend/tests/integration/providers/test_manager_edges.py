@@ -171,3 +171,170 @@ async def test_missing_required_secret_reports_needs_secret(
     status = mgr.status(row.id)
     assert status is not None
     assert (status.state, status.message) == ("needs_secret", "secret is missing: token")
+
+
+SECRET = "edge-password-123456"
+
+
+class _BadProbe(fakes.RecordingProvider):
+    type_name: ClassVar[str] = "bad_probe"
+    result: ClassVar[Any] = None
+
+    async def test_connection(self, config: dict[str, Any], secrets: dict[str, str]) -> ProbeResult:
+        return type(self).result  # type: ignore[no-any-return]
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        ProbeResult("yes", "m", 1),  # type: ignore[arg-type]
+        ProbeResult(True, 5, 1),  # type: ignore[arg-type]
+        ProbeResult(True, "m", "1"),  # type: ignore[arg-type]
+        ProbeResult(True, "m", -1),
+        ProbeResult(True, "m", True),  # type: ignore[arg-type]
+    ],
+)
+async def test_probe_with_malformed_fields_is_an_error_result(
+    mgr: ProviderManager, result: ProbeResult
+):
+    _BadProbe.result = result
+    probe = await mgr.probe(_BadProbe, {}, {"password": SECRET})
+    assert (probe.ok, probe.message) == (False, "test failed (invalid result)")
+
+
+async def test_probe_message_is_masked_whole_then_capped(mgr: ProviderManager):
+    from app.events.communication import MAX_MASK_INPUT
+    from app.providers.manager import MAX_STATUS_MESSAGE_LENGTH
+
+    _BadProbe.result = ProbeResult(True, SECRET + "z" * 1000, 2)
+    probe = await mgr.probe(_BadProbe, {}, {"password": SECRET})
+    assert probe.message.startswith("***")
+    assert len(probe.message) <= MAX_STATUS_MESSAGE_LENGTH
+    huge = SECRET + "z" * MAX_MASK_INPUT
+    _BadProbe.result = ProbeResult(True, huge, 2)
+    probe = await mgr.probe(_BadProbe, {}, {"password": SECRET})
+    assert probe.message == f"<omitted: {len(huge)} bytes>"
+
+
+async def test_masked_status_is_computed_once_per_status(
+    mgr: ProviderManager, engine: AsyncEngine, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+):
+    from app.providers import manager as manager_module
+
+    iid = await _instance(engine, app, "recording")
+    await mgr.apply(iid)
+    calls = 0
+    real = manager_module.masker_for
+
+    def counting(*args: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return real(*args)
+
+    monkeypatch.setattr(manager_module, "masker_for", counting)
+    running = mgr._running[iid].provider
+    running._state, running._message = "connected", f"using {SECRET}"  # type: ignore[attr-defined]
+    try:
+        first = [mgr.status(iid) for _ in range(5)]
+        assert calls == 1
+        assert first[0] is not None and first[0].message == "using ***"
+        running._message = "changed"  # type: ignore[attr-defined]
+        assert mgr.status(iid).message == "changed"  # type: ignore[union-attr]
+        assert calls == 2
+    finally:
+        await mgr.stop()
+
+
+async def test_event_payloads_are_masked_with_the_instance_secrets(
+    mgr: ProviderManager, engine: AsyncEngine, app: FastAPI
+):
+    from sqlalchemy import select
+
+    from app.models.event import Event
+
+    token = "payload-token-123456"
+    async with make_session_factory(engine)() as session:
+        row = await repo.create(
+            session,
+            app.state.secret_box,
+            kind="integration",
+            type_name="demo",
+            name="payload",
+            enabled=True,
+            config={"interval_seconds": 3600},
+            secrets={"token": token},
+            user_id=None,
+        )
+        await session.commit()
+    await mgr.apply(row.id)
+    try:
+        await mgr.run_action(row.id, "emit_now", {"label": f"carries {token}"})
+    finally:
+        await mgr.stop()
+    async with make_session_factory(engine)() as session:
+        payloads = (
+            await session.scalars(select(Event.payload).where(Event.source_instance_id == row.id))
+        ).all()
+    assert [p["label"] for p in payloads] == ["carries ***"]
+
+
+async def test_delete_forgets_per_instance_state(
+    mgr: ProviderManager, engine: AsyncEngine, app: FastAPI
+):
+    async with make_session_factory(engine)() as session:
+        row = await repo.create(
+            session,
+            app.state.secret_box,
+            kind="integration",
+            type_name="demo",
+            name="forgotten",
+            enabled=True,
+            config={"interval_seconds": 3600},
+            secrets={"token": "forget-token-123456"},
+            user_id=None,
+        )
+        await session.commit()
+    await mgr.apply(row.id)
+    await mgr.run_action(row.id, "emit_now", {})
+    assert row.id in DemoProvider._last_sequence
+    async with make_session_factory(engine)() as session:
+        assert await repo.delete(session, row.id)
+        await session.commit()
+    await mgr.apply(row.id)
+    assert mgr.status(row.id) is None
+    assert row.id not in mgr._locks
+    assert row.id not in mgr._applied
+    assert row.id not in DemoProvider._last_sequence
+
+
+class _LateStart(fakes.RecordingProvider):
+    """Catches the cancellation of a timed-out start and finishes starting a bit later."""
+
+    type_name: ClassVar[str] = "late_start"
+    order: ClassVar[list[str]] = []
+
+    async def start(self, ctx: ProviderContext) -> None:
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.2)
+            type(self).order.append("started")
+
+    async def stop(self) -> None:
+        type(self).order.append("stopped")
+
+
+async def test_cleanup_after_start_timeout_waits_for_the_start_to_end(
+    mgr: ProviderManager, engine: AsyncEngine, app: FastAPI
+):
+    app.state.provider_registry.register(_LateStart)
+    _LateStart.order = []
+    iid = await _instance(engine, app, "late_start")
+    await mgr.apply(iid)
+    assert mgr.status(iid).message == "timeout during start"  # type: ignore[union-attr]
+    for _ in range(40):
+        if len(_LateStart.order) == 2:
+            break
+        await asyncio.sleep(0.05)
+    # stop() must not run while start() is still finishing.
+    assert _LateStart.order == ["started", "stopped"]

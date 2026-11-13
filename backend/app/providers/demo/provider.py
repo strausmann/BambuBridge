@@ -101,6 +101,11 @@ class DemoProvider:
     # The last sequence per instance in this process (see the module text).
     _last_sequence: ClassVar[dict[uuid.UUID, int]] = {}
 
+    @classmethod
+    def forget_instance(cls, instance_id: uuid.UUID) -> None:
+        """The instance was deleted: drop its sequence (called by the manager)."""
+        cls._last_sequence.pop(instance_id, None)
+
     def __init__(self) -> None:
         self._ctx: ProviderContext | None = None
         self._loop: asyncio.Task[None] | None = None

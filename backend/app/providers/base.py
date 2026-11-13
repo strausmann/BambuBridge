@@ -7,6 +7,9 @@ attributes describe it to the API and the web UI: ``config_schema`` (a JSON sche
 subset of :mod:`app.providers.schema`; secret fields carry ``"x-secret": true``), the event
 types it emits and the actions it offers.
 
+A class may define ``forget_instance(instance_id)`` (a class method): the manager calls it
+when an instance is deleted, so state the class keeps per instance can be dropped.
+
 Secrets reach a provider only through ``ProviderContext.secrets`` (and the ``secrets``
 argument of ``test_connection``), never through ``config``. Provider code records what it
 sends and receives with ``ProviderContext.record``, which masks every secret of the

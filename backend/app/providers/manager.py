@@ -18,7 +18,19 @@ and ``needs_secret`` (a stored secret cannot be decrypted - another
 ``BAMBUBRIDGE_SECRET_KEY`` - or a required one is missing). While an instance runs, its
 state is what the provider reports. Every state the manager sets, and the provider's state
 right after a start, is also written to ``provider_instances.status`` (for other processes
-and after a restart), without a notification.
+and after a restart), without a notification. What a provider reports later (for example
+``disconnected``) stays in the memory of this process: the API of this process shows it,
+the stored column keeps the state from the start.
+
+An instance that ended in ``error`` - a timed-out ``stop`` or ``start``, a failed start -
+stays there until its configuration changes. ``start_all`` (at startup and after the
+listener reconnects) applies only instances whose stored version differs from the one
+applied last, so it does not retry them: a change, or a restart of the server, does.
+
+Everything provider code hands back is treated as untrusted and masked with the instance's
+secrets before it is shown or stored: status messages, probe messages, action results and
+event payloads. A message too large to mask (``MAX_MASK_INPUT`` bytes) is replaced by a
+placeholder; a masked message is capped at ``MAX_STATUS_MESSAGE_LENGTH`` characters.
 """
 
 from __future__ import annotations
@@ -149,6 +161,20 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _clean_text(secret_paths: Collection[str], secrets: Collection[str], raw: object) -> str:
+    """Provider text made safe to show and store: masked whole, then capped.
+
+    Never cut before masking (a cut inside a secret leaves a part no rule recognises). A
+    text larger than ``MAX_MASK_INPUT`` bytes is replaced by the placeholder (fail closed);
+    something that is not a string by its type.
+    """
+    text = raw if isinstance(raw, str) else f"<{type(raw).__name__}>"
+    size = len(text.encode("utf-8", "surrogatepass"))
+    if size > MAX_MASK_INPUT:
+        return omitted(size)
+    return _cap(masker_for(secret_paths, secrets).text(make_storable(text)))
+
+
 def _cap(message: str) -> str:
     """At most ``MAX_STATUS_MESSAGE_LENGTH`` characters, never ending inside a ``***``."""
     if len(message) <= MAX_STATUS_MESSAGE_LENGTH:
@@ -183,8 +209,13 @@ class ProviderManager:
         # The configuration version (``updated_at``) each instance was last applied with.
         self._applied: dict[uuid.UUID, datetime] = {}
         self._locks: dict[uuid.UUID, asyncio.Lock] = {}
+        # Per instance: (what the provider reported, its cleaned form).
+        self._status_cache: dict[uuid.UUID, tuple[ProviderStatus, ProviderStatus]] = {}
         # Calls that timed out: cancelled, kept referenced until they end on their own.
+        # Abandoned calls are not per-instance state: they leave the set when they end, and
+        # dropping one earlier would let a still-running task be garbage collected.
         self._abandoned: set[asyncio.Task[Any]] = set()
+        self.last_abandoned: asyncio.Task[Any] | None = None
         self.listener = ProviderListener(engine, self)
 
     # -- lifecycle ----------------------------------------------------------
@@ -219,29 +250,30 @@ class ProviderManager:
                 reported = running.provider.status()
             except Exception as exc:
                 return ProviderStatus("error", f"status failed ({type(exc).__name__})", _now())
-            return self._clean(running, reported)
+            return self._clean(instance_id, running, reported)
         return self._states.get(instance_id)
 
-    @staticmethod
-    def _clean(running: _Running, reported: ProviderStatus) -> ProviderStatus:
+    def _clean(
+        self, instance_id: uuid.UUID, running: _Running, reported: ProviderStatus
+    ) -> ProviderStatus:
         """The provider's own message masked with the instance's secrets, then capped.
 
         Fail closed: a provider may put an error text or a credential into its message,
-        and the message is shown by the API and stored in ``provider_instances``. Anything
-        that is not a string is replaced by its type.
+        and the message is shown by the API and stored in ``provider_instances``. The result
+        is cached per instance and reported status, so a read of an unchanged status does
+        no masking work on the event loop.
         """
+        cached = self._status_cache.get(instance_id)
+        if cached is not None and cached[0] == reported:
+            return cached[1]
         raw: object = reported.message  # provider code: do not trust the annotation
         if raw is None:
-            return reported
-        message = raw if isinstance(raw, str) else f"<{type(raw).__name__}>"
-        # Masked whole or not at all, as in the communication log: a cut before masking can
-        # leave part of a secret that no rule recognises any more. Too large to mask:
-        # replaced by the placeholder (fail closed). The cap comes after masking.
-        size = len(message.encode("utf-8", "surrogatepass"))
-        if size > MAX_MASK_INPUT:
-            return ProviderStatus(reported.state, omitted(size), reported.since)
-        masked = masker_for(running.secret_paths, running.secrets).text(make_storable(message))
-        return ProviderStatus(reported.state, _cap(masked), reported.since)
+            cleaned = reported
+        else:
+            message = _clean_text(running.secret_paths, running.secrets, raw)
+            cleaned = ProviderStatus(reported.state, message, reported.since)
+        self._status_cache[instance_id] = (reported, cleaned)
+        return cleaned
 
     async def _set_state(
         self, instance_id: uuid.UUID, state: ProviderStatusState, message: str | None = None
@@ -268,7 +300,8 @@ class ProviderManager:
         """Run ``call`` for at most ``step_timeout``: ``(finished, result or exception)``.
 
         A call that does not finish in time is cancelled and not awaited: a provider that
-        ignores the cancellation cannot hold up the manager.
+        ignores the cancellation cannot hold up the manager. It stays referenced in
+        ``_abandoned`` until it ends (``last_abandoned`` is the latest one).
         """
         task = asyncio.ensure_future(call)
         done, _ = await asyncio.wait({task}, timeout=self.step_timeout)
@@ -276,6 +309,7 @@ class ProviderManager:
             task.cancel()
             self._abandoned.add(task)
             task.add_done_callback(self._forget)
+            self.last_abandoned = task
             return False, None
         if task.cancelled():
             return True, asyncio.CancelledError()
@@ -305,6 +339,21 @@ class ProviderManager:
             if await self._stop_running(instance_id):
                 await self._set_state(instance_id, "stopped")
 
+    def _forget_instance(self, instance_id: uuid.UUID) -> None:
+        """Drop everything kept for a deleted instance, also in the provider classes."""
+        self._states.pop(instance_id, None)
+        self._applied.pop(instance_id, None)
+        self._status_cache.pop(instance_id, None)
+        # Held by the caller; a later apply makes a new one.
+        self._locks.pop(instance_id, None)
+        for cls in self._registry.all():
+            hook = getattr(cls, "forget_instance", None)
+            if callable(hook):
+                try:
+                    hook(instance_id)
+                except Exception as exc:
+                    _log.warning("forget_instance of %s failed (%s)", cls, type(exc).__name__)
+
     def _lock(self, instance_id: uuid.UUID) -> asyncio.Lock:
         return self._locks.setdefault(instance_id, asyncio.Lock())
 
@@ -320,8 +369,7 @@ class ProviderManager:
                     self._applied[instance_id] = row.updated_at
                 return
             if row is None:
-                self._states.pop(instance_id, None)
-                self._applied.pop(instance_id, None)
+                self._forget_instance(instance_id)
                 return
             self._applied[instance_id] = row.updated_at
             await self._start(row)
@@ -358,7 +406,7 @@ class ProviderManager:
             instance_id=iid,
             config=config,
             secrets=secrets,
-            emit=self._emitter(iid, cls),
+            emit=self._emitter(iid, cls, paths, tuple(secrets.values())),
             record=InstanceRecorder(
                 self._recorder,
                 self._sessions,
@@ -376,12 +424,13 @@ class ProviderManager:
         finished, outcome = await self._step(provider.start(ctx))
         if not finished:
             await self._set_state(iid, "error", "timeout during start")
-            # It may finish starting later: make sure it is stopped then.
-            self._background(provider.stop())
+            # It may still finish starting after the cancellation: stop it only once the
+            # start has ended, never while it is still running.
+            self._background(self._stop_after(self.last_abandoned, provider))
             return
         if isinstance(outcome, BaseException):
             await self._set_state(iid, "error", f"start failed ({type(outcome).__name__})")
-            self._background(provider.stop())
+            self._background(asyncio.wait_for(provider.stop(), timeout=self.step_timeout))
             return
         self._running[iid] = _Running(provider, tuple(secrets.values()), paths)
         status = self.status(iid)
@@ -389,10 +438,16 @@ class ProviderManager:
             self._states[iid] = status
             await self._persist(iid, status.state, status.message)
 
+    async def _stop_after(self, start: asyncio.Task[Any] | None, provider: Provider) -> None:
+        if start is not None:
+            # Unbounded on purpose: a start that never ends has nothing to stop.
+            await asyncio.wait({start})
+        await asyncio.wait_for(provider.stop(), timeout=self.step_timeout)
+
     def _background(self, call: Awaitable[Any]) -> None:
         async def bounded() -> None:
             try:
-                await asyncio.wait_for(call, timeout=self.step_timeout)
+                await call
             except Exception as exc:
                 _log.warning("provider cleanup ended with %s", type(exc).__name__)
 
@@ -400,7 +455,13 @@ class ProviderManager:
         self._abandoned.add(task)
         task.add_done_callback(self._abandoned.discard)
 
-    def _emitter(self, instance_id: uuid.UUID, cls: type[Provider]) -> Any:
+    def _emitter(
+        self,
+        instance_id: uuid.UUID,
+        cls: type[Provider],
+        secret_paths: Collection[str] = (),
+        secrets: Collection[str] = (),
+    ) -> Any:
         declared = {e.name: e for e in cls.event_types}
 
         async def emit(
@@ -418,6 +479,11 @@ class ProviderManager:
                 validate(event_type.payload_schema, payload)
             except ValidationError as exc:
                 raise ValueError(f"payload does not match the event type ({exc})") from None
+            # Events are shown in the web UI and passed on to subscribers: a provider's
+            # payload is masked with the instance's secrets like everything else it returns.
+            payload = await asyncio.to_thread(
+                lambda: masker_for(secret_paths, secrets).value(payload)
+            )
             async with self._sessions() as session:
                 try:
                     event_id = await self._events.emit(
@@ -455,9 +521,21 @@ class ProviderManager:
         if isinstance(outcome, BaseException) or not isinstance(outcome, ProbeResult):
             name = type(outcome).__name__
             return ProbeResult(False, f"test failed ({name})", elapsed)
-        masker = masker_for(secret_paths_from_schema(cls.config_schema), tuple(secrets.values()))
-        message = await asyncio.to_thread(masker.text, str(outcome.message))
-        return ProbeResult(bool(outcome.ok), message, int(outcome.duration_ms))
+        if (
+            not isinstance(outcome.ok, bool)
+            or not isinstance(outcome.message, str)
+            or isinstance(outcome.duration_ms, bool)
+            or not isinstance(outcome.duration_ms, int)
+            or not 0 <= outcome.duration_ms <= 2**31 - 1
+        ):
+            return ProbeResult(False, "test failed (invalid result)", elapsed)
+        message = await asyncio.to_thread(
+            _clean_text,
+            secret_paths_from_schema(cls.config_schema),
+            tuple(secrets.values()),
+            outcome.message,
+        )
+        return ProbeResult(outcome.ok, message, outcome.duration_ms)
 
     async def run_action(
         self, instance_id: uuid.UUID, name: str, params: dict[str, Any]
