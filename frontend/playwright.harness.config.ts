@@ -12,12 +12,12 @@ export default defineConfig({
   reporter: "list",
   use: { baseURL: HARNESS_URL, locale: "de-DE" },
   projects: [
-    { name: "chromium", testIgnore: /(keyboard|visual-viewport)\.spec\.ts$/, use: { ...devices["Desktop Chrome"] } },
-    { name: "webkit", testIgnore: /(keyboard|visual-viewport)\.spec\.ts$/, use: { ...devices["Desktop Safari"] } },
+    { name: "chromium", testIgnore: /(keyboard|visual-viewport|popover-reveal)\.spec\.ts$/, use: { ...devices["Desktop Chrome"] } },
+    { name: "webkit", testIgnore: /(keyboard|visual-viewport|popover-reveal)\.spec\.ts$/, use: { ...devices["Desktop Safari"] } },
     // A phone with the on-screen keyboard open (the layout viewport shrinks with it), and a laptop
     // with little height: the same short projects as playwright.config.ts.
-    { name: "short-chromium", testMatch: /keyboard\.spec\.ts$/, use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 400 }, hasTouch: true, isMobile: true } },
-    { name: "short-webkit", testMatch: /keyboard\.spec\.ts$/, use: { ...devices["Desktop Safari"], viewport: { width: 390, height: 400 }, hasTouch: true, isMobile: true } },
+    { name: "short-chromium", testMatch: /(keyboard|popover-reveal)\.spec\.ts$/, use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 400 }, hasTouch: true, isMobile: true } },
+    { name: "short-webkit", testMatch: /(keyboard|popover-reveal)\.spec\.ts$/, use: { ...devices["Desktop Safari"], viewport: { width: 390, height: 400 }, hasTouch: true, isMobile: true } },
     // A tall phone whose visual viewport alone shrinks (iOS Safari with the keyboard open).
     { name: "tall-chromium", testMatch: /visual-viewport\.spec\.ts$/, use: { ...devices["Desktop Chrome"], viewport: { width: 390, height: 780 }, hasTouch: true, isMobile: true } },
     { name: "tall-webkit", testMatch: /visual-viewport\.spec\.ts$/, use: { ...devices["Desktop Safari"], viewport: { width: 390, height: 780 }, hasTouch: true, isMobile: true } },

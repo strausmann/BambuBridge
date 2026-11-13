@@ -1,6 +1,6 @@
 /**
  * Overlay harness: a sheet and a dialog with a combobox, a second field and the main button at
- * the end, the shape every form overlay of the app has. `?open=sheet|dialog` opens one at once,
+ * the end, the shape every form overlay of the app has. `?open=sheet|dialog` opens one at once, `?open=combo` shows the combobox alone,
  * `&low=1` puts the combobox last.
  * The keyboard test (harness/keyboard.spec.ts) checks what stays visible on a short viewport.
  */
@@ -41,8 +41,19 @@ function Form({ low }: { low: boolean }) {
 const params = new URLSearchParams(location.search);
 const low = params.get("low") === "1";
 
+/** `?open=combo`: only the combobox on the page (its list is the one overlay under test). */
+function ComboOnly() {
+  return (
+    <main className="flex flex-col items-start gap-4 p-4">
+      <h1 className="text-title font-bold">Spule 17</h1>
+      <AppComboBox label="Drucker" options={PRINTERS} emptyText="Kein Drucker passt." />
+    </main>
+  );
+}
+
 function Page() {
   const initial = params.get("open");
+  if (initial === "combo") return <ComboOnly />;
   const [open, setOpen] = useState<"sheet" | "dialog" | null>(initial === "sheet" || initial === "dialog" ? initial : null);
   const close = (isOpen: boolean) => setOpen(isOpen ? open : null);
   const actions = (

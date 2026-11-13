@@ -1,6 +1,7 @@
-import { Button, ComboBox, Input, Label, ListBox, ListBoxItem, Popover, Text } from "react-aria-components";
+import { Button, ComboBox, Input, Label, ListBox, ListBoxItem, Text } from "react-aria-components";
 import { ChevronDownIcon } from "../icons";
 import { FIELD, FOCUS } from "../ui";
+import { RevealPopover } from "./RevealPopover";
 import { useVisualViewport } from "./useVisualViewport";
 
 export interface ComboOption {
@@ -52,7 +53,7 @@ export function AppComboBox({ label, options, selectedKey, onSelectionChange, de
           {description}
         </Text>
       ) : null}
-      <Popover maxHeight={maxHeight} shouldFlip containerPadding={EDGE_PX} offset={4} className="popover-panel w-(--trigger-width) overflow-y-auto overscroll-contain rounded-r2 border border-line-strong bg-surface text-ink shadow-popover">
+      <RevealPopover maxHeight={maxHeight} shouldFlip containerPadding={EDGE_PX} offset={4} className="popover-panel w-(--trigger-width) overflow-y-auto overscroll-contain rounded-r2 border border-line-strong bg-surface text-ink shadow-popover">
         <ListBox className="py-1 outline-none" renderEmptyState={() => <p className="px-3 py-3 text-ink-2">{emptyText}</p>}>
           {(item: ComboOption) => (
             <ListBoxItem
@@ -64,7 +65,7 @@ export function AppComboBox({ label, options, selectedKey, onSelectionChange, de
             </ListBoxItem>
           )}
         </ListBox>
-      </Popover>
+      </RevealPopover>
     </ComboBox>
   );
 }
