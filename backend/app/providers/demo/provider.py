@@ -4,8 +4,8 @@ Every ``interval_seconds`` it emits ``integration.demo.tick`` (payload ``{label,
 ``dedup_key`` = the sequence) and records a pseudo call ``GET demo://tick?token=<token>``
 in the communication log. The pseudo peer echoes the token in its answer under a name no
 masking rule knows, so the log shows masking by name (the query) and by value (the answer)
-end to end. The action ``emit_now`` emits one tick at once (optionally with another label)
-and returns only its ``sequence``.
+end to end. The action ``emit_now`` emits one tick at once with the configured label (it
+takes no parameters) and returns only its ``sequence``.
 
 It is shipped in the image; no instance is created by default.
 
@@ -88,14 +88,9 @@ class DemoProvider:
         )
     ]
     actions: ClassVar[list[ActionDef]] = [
-        ActionDef(
-            "emit_now",
-            {
-                "type": "object",
-                "properties": {"label": {"type": "string", "minLength": 1, "maxLength": 100}},
-                "additionalProperties": False,
-            },
-        )
+        # No parameters: a label chosen by the caller would come back through the event
+        # (masked when it equals the token) and act as a guess oracle.
+        ActionDef("emit_now", {"type": "object", "properties": {}, "additionalProperties": False})
     ]
 
     # The last sequence per instance in this process (see the module text).
@@ -151,17 +146,17 @@ class DemoProvider:
     async def run_action(
         self,
         name: str,  # noqa: ARG002  # one action only; the manager checks the name
-        params: dict[str, Any],
+        params: dict[str, Any],  # noqa: ARG002  # emit_now takes none (checked by the manager)
     ) -> dict[str, Any]:
         # The manager checks the name and the parameters against ``actions``. The result
         # never echoes the parameters (see ``Provider.run_action``).
-        payload = await self._tick(params.get("label"))
+        payload = await self._tick()
         return {"sequence": payload["sequence"]}
 
     async def tick_once(self) -> dict[str, Any] | None:
         """One scheduled tick; a failure is reported in the status, not raised."""
         try:
-            result = await self._tick(None)
+            result = await self._tick()
         except Exception as exc:
             self._set("disconnected", f"tick failed ({type(exc).__name__})")
             return None
@@ -179,12 +174,12 @@ class DemoProvider:
         type(self)._last_sequence[instance_id] = sequence
         return sequence
 
-    async def _tick(self, label: str | None) -> dict[str, Any]:
+    async def _tick(self) -> dict[str, Any]:
         ctx = self._ctx
         if ctx is None:
             raise RuntimeError("not started")
         sequence = self._next_sequence(ctx.instance_id)
-        payload = {"label": label or str(ctx.config["label"]), "sequence": sequence}
+        payload = {"label": str(ctx.config["label"]), "sequence": sequence}
         started = time.monotonic()
         await ctx.emit(type=EVENT_TYPE, payload=payload, schema_version=1, dedup_key=str(sequence))
         token = ctx.secrets.get("token", "")

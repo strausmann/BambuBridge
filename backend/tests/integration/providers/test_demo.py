@@ -94,18 +94,19 @@ def _context(
     )
 
 
-async def test_emit_now_uses_the_given_label_and_a_rising_sequence(engine: AsyncEngine):
+async def test_emit_now_uses_the_configured_label_and_a_rising_sequence(engine: AsyncEngine):
     events: list[dict[str, Any]] = []
     demo = DemoProvider()
     await demo.start(_context(engine, events, {"interval_seconds": 3600, "label": "cfg"}))
     try:
         assert demo.status().state == "connected"
         first = await demo.run_action("emit_now", {})
-        second = await demo.run_action("emit_now", {"label": "given"})
+        second = await demo.run_action("emit_now", {})
     finally:
         await demo.stop()
     assert demo.status().state == "stopped"
-    assert [e["payload"]["label"] for e in events] == ["cfg", "given"]
+    # Always the configured label: emit_now takes no parameters.
+    assert [e["payload"]["label"] for e in events] == ["cfg", "cfg"]
     assert events[0]["type"] == "integration.demo.tick"
     assert events[0]["schema_version"] == 1
     assert events[0]["dedup_key"] == str(events[0]["payload"]["sequence"])

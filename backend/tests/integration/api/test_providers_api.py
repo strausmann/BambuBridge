@@ -78,7 +78,11 @@ async def test_provider_types_describe_schema_events_and_actions(
         }
     ]
     assert demo["actions"][0]["name"] == "emit_now"
-    assert demo["actions"][0]["params_schema"]["properties"]["label"]["type"] == "string"
+    assert demo["actions"][0]["params_schema"] == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
 
 
 async def test_crud_roundtrip_records_the_acting_user(
@@ -307,12 +311,9 @@ async def test_action_requires_operate_scope(
         403,
         "insufficient_scope",
     )
-    r = await client.post(
-        url, json={"params": {"label": "op"}}, headers={KEY_HEADER: operate_token}
-    )
+    r = await client.post(url, json={"params": {}}, headers={KEY_HEADER: operate_token})
     assert r.status_code == 200, r.text
     assert set(r.json()["result"]) == {"sequence"}
-    assert b"op" not in r.content.replace(b"operate", b"")
 
 
 @pytest.mark.usefixtures("manager")
@@ -328,6 +329,13 @@ async def test_action_errors(admin_client: httpx.AsyncClient):
         422,
         "invalid_action_params",
     )
+    # No label at all: a chosen label would be a guess oracle through the events.
+    problem = _problem(
+        await admin_client.post(f"{base}/emit_now", json={"params": {"label": "guess"}}),
+        422,
+        "invalid_action_params",
+    )
+    assert "label" in problem["detail"]
     await admin_client.patch(f"{PROVIDERS_URL}/{created['id']}", json={"enabled": False})
     await eventually(
         lambda: state_of(admin_client, created["id"]), lambda s: s["state"] == "stopped", 5
