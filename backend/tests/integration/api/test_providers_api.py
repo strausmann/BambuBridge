@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -440,10 +441,11 @@ async def test_short_secret_is_refused(admin_client: httpx.AsyncClient):
 
 
 async def test_huge_integer_is_422_not_500(admin_client: httpx.AsyncClient):
-    content = (
-        '{"kind": "integration", "type_name": "demo", "name": "big", '
-        '"config": {"token": "%s", "interval_seconds": 1%s}}' % (TOKEN, "0" * 400)
-    )
+    # Built by hand: json.dumps would refuse nothing, but the number must reach the server
+    # as JSON text of 401 digits.
+    body = {"kind": "integration", "type_name": "demo", "name": "big", "config": {"token": TOKEN}}
+    huge = "1" + "0" * 400
+    content = json.dumps(body).replace('"token"', f'"interval_seconds": {huge}, "token"')
     r = await admin_client.post(
         PROVIDERS_URL, content=content, headers={"content-type": "application/json"}
     )
