@@ -596,6 +596,16 @@ def _secret_pattern(secret: str) -> tuple[str, int]:
     return "|".join([*b64, per_char, *(re.escape(v) for v in literals)]), longest
 
 
+def known_secret_form(value: str) -> str:
+    """A known secret as the text is searched for it.
+
+    Surrounding white space and every invisible character (category Cf and every
+    Default_Ignorable_Code_Point) removed. A secret shorter than ``MIN_KNOWN_SECRET_LENGTH``
+    in this form is not masked by value: whoever accepts secrets measures them with this.
+    """
+    return _FORMAT.sub("", value.strip())
+
+
 def _known_secret(entry: object) -> str:
     if isinstance(entry, bytes):
         try:
@@ -635,7 +645,7 @@ class Masker:
         # Also as the text is searched: without format characters (the input loses them),
         # and percent-decoded (a secret that holds a literal ``%2D`` or ``+`` reads
         # differently in a decoded text, and decoding can be what reveals the rest of it).
-        secrets |= {_FORMAT.sub("", secret) for secret in secrets}
+        secrets |= {known_secret_form(secret) for secret in secrets}
         secrets |= {decode(secret) for secret in secrets for decode in (unquote, unquote_plus)}
         # Longest first: at one position the longest secret is the one that is replaced.
         ordered = sorted(

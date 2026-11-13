@@ -450,3 +450,26 @@ async def test_huge_integer_is_422_not_500(admin_client: httpx.AsyncClient):
         PROVIDERS_URL, content=content, headers={"content-type": "application/json"}
     )
     assert r.status_code == 422, r.text
+
+
+@pytest.mark.parametrize("padding", [" ", "​", "͏"])
+async def test_padded_short_secret_is_refused_and_never_logged(
+    admin_client: httpx.AsyncClient, engine: AsyncEngine, padding: str
+):
+    from sqlalchemy import func
+
+    from app.models.communication_entry import CommunicationEntry
+
+    core = "abc1234"  # 7 characters
+    value = padding * 2 + core + padding * 2
+    body = {"kind": "integration", "type_name": "demo", "name": "pad", "config": {"token": value}}
+    r = await admin_client.post(PROVIDERS_URL, json=body)
+    _problem(r, 422, "invalid_provider_config")
+    assert core.encode() not in r.content
+    r = await admin_client.post(
+        f"{TYPES_URL}/integration/demo/test", json={"config": body["config"]}
+    )
+    _problem(r, 422, "invalid_provider_config")
+    async with make_session_factory(engine)() as session:
+        assert await session.scalar(select(func.count()).select_from(ProviderInstance)) == 0
+        assert await session.scalar(select(func.count()).select_from(CommunicationEntry)) == 0

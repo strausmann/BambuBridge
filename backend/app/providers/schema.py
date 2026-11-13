@@ -26,7 +26,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.events.validation import is_storable
-from app.security.masking import MIN_KNOWN_SECRET_LENGTH
+from app.security.masking import MIN_KNOWN_SECRET_LENGTH, known_secret_form
 
 # A string without its own ``maxLength`` is still bounded by this.
 MAX_STRING_LENGTH = 4096
@@ -77,6 +77,8 @@ def _check_value(prop: Mapping[str, Any], value: object, field: str) -> None:
         high = prop.get("maxLength", MAX_STRING_LENGTH)
         if not low <= len(value) <= high:
             raise ValidationError(field, f"must be {low} to {high} characters long")
+        if prop.get("x-secret") is True:
+            _check_secret(value, low, field)
     elif kind == "integer":
         if not _is_int(value):
             raise ValidationError(field, "must be an integer")
@@ -93,6 +95,23 @@ def _check_value(prop: Mapping[str, Any], value: object, field: str) -> None:
             raise ValidationError(field, f"must be at most {prop['maximum']}")
     if "enum" in prop and value not in prop["enum"]:
         raise ValidationError(field, "must be one of the allowed values")
+
+
+def _check_secret(value: str, low: int, field: str) -> None:
+    """A secret is measured as the masker searches for it (:func:`known_secret_form`).
+
+    White space or an invisible character at either end is refused outright: the masker
+    drops them, so they would only pad a short secret past ``minLength``. Invisible
+    characters inside do not count towards the length.
+    """
+    if value and (not known_secret_form(value[0]) or not known_secret_form(value[-1])):
+        raise ValidationError(
+            field, "must not start or end with white space or invisible characters"
+        )
+    if len(known_secret_form(value)) < low:
+        raise ValidationError(
+            field, f"must be at least {low} characters long, invisible characters not counted"
+        )
 
 
 def check_schema(schema: object) -> None:

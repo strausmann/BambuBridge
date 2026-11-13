@@ -183,3 +183,38 @@ def test_a_huge_integer_without_bounds_is_fine():
         "additionalProperties": False,
     }
     assert validate(schema, {"n": 10**400}) == {"n": 10**400}
+
+
+SECRET_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"s": {"type": "string", "x-secret": True, "minLength": 8}},
+    "additionalProperties": False,
+}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "  abc1234  ",  # white space around 7 characters
+        "​abc1234​",  # zero-width space (Cf)
+        "͏abc1234͏",  # combining grapheme joiner (Default_Ignorable, not Cf)
+        "﻿abc1234",  # byte order mark in front
+        "abc­1234",  # a soft hyphen inside: 7 characters as the masker counts them
+    ],
+)
+def test_a_secret_is_measured_as_the_masker_measures_it(value: str):
+    # The masker ignores known secrets shorter than 8 after removing these characters;
+    # such a value would be stored in clear in the communication log.
+    with pytest.raises(ValidationError) as caught:
+        validate(SECRET_SCHEMA, {"s": value})
+    assert caught.value.field == "s"
+    assert value not in str(caught.value)
+
+
+def test_a_secret_with_white_space_around_it_is_refused_even_when_long():
+    with pytest.raises(ValidationError, match="white space or invisible"):
+        validate(SECRET_SCHEMA, {"s": " long-enough-secret "})
+
+
+def test_a_plain_secret_of_eight_characters_is_fine():
+    assert validate(SECRET_SCHEMA, {"s": "abcd1234"}) == {"s": "abcd1234"}
