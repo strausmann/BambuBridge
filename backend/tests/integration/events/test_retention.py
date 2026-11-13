@@ -5,6 +5,7 @@ import logging
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -480,10 +481,10 @@ async def test_job_runs_at_start_and_again_at_0015_utc(
     real = retention.run_retention
 
     async def recording(
-        session: AsyncSession, now: datetime, settings: SettingsStore
+        session: AsyncSession, now: datetime, settings: SettingsStore, **kwargs: Any
     ) -> RetentionResult:
         runs.append(now)
-        return await real(session, now, settings)
+        return await real(session, now, settings, **kwargs)
 
     monkeypatch.setattr(retention, "run_retention", recording)
     time = FakeTime(at(6, 20, 23, 50), max_sleeps=3)
@@ -512,7 +513,7 @@ async def test_job_start_does_not_wait_for_the_first_run_and_stop_cancels_it(
     started = asyncio.Event()
 
     async def hanging(
-        session: AsyncSession, now: datetime, settings: SettingsStore
+        session: AsyncSession, now: datetime, settings: SettingsStore, **kwargs: Any
     ) -> RetentionResult:
         await session.execute(text("SELECT count(*) FROM events"))  # an open transaction
         started.set()
@@ -731,11 +732,11 @@ async def test_job_backs_off_after_a_lock_timeout(
     real = retention.run_retention
 
     async def flaky(
-        session: AsyncSession, now: datetime, settings: SettingsStore
+        session: AsyncSession, now: datetime, settings: SettingsStore, **kwargs: Any
     ) -> RetentionResult:
         if failures:
             raise failures.pop()
-        return await real(session, now, settings)
+        return await real(session, now, settings, **kwargs)
 
     monkeypatch.setattr(retention, "run_retention", flaky)
     time = FakeTime(at(6, 20, 23, 0), max_sleeps=5)
@@ -807,3 +808,47 @@ async def test_repeated_skipped_runs_are_logged_as_an_error(
         "retention skipped 3 runs in a row: the clocks still differ, nothing is pruned",
         "retention skipped 4 runs in a row: the clocks still differ, nothing is pruned",
     ]
+
+
+async def test_retention_is_skipped_when_the_database_clock_jumped_past_the_previous_run(
+    sessions: async_sessionmaker[AsyncSession],
+    store: SettingsStore,
+    database_clock: DatabaseClock,
+    caplog: pytest.LogCaptureFixture,
+):
+    # Audit run 9, H4: host and database jump together; only the previous run tells.
+    await _add_events(sessions, at(1, 15), at(6, 10))
+    moment = [NOW - timedelta(days=200)]
+    database_clock.source = lambda: moment[0]
+    job = RetentionMaintenance(sessions, store, clock=lambda: moment[0])
+
+    with caplog.at_level(logging.WARNING, logger="app.events.retention"):
+        assert await job.run_once() is True  # first run: nothing to compare with
+        moment[0] = NOW  # 200 days later at once
+        assert await job.run_once() is True
+
+    assert await _children(sessions, "events") == _events(1, 2, 3, 4, 5, 6)
+    assert [r.getMessage() for r in caplog.records] == [
+        "retention skipped: the database clock jumped 17280000 s past the previous run"
+    ]
+
+    # The next run compares with the jumped time and goes ahead.
+    moment[0] = NOW + timedelta(days=1)
+    assert await job.run_once() is True
+    assert await _children(sessions, "events") == _events(3, 4, 5, 6)
+
+
+async def test_a_run_a_day_or_two_after_the_previous_one_is_not_a_jump(
+    sessions: async_sessionmaker[AsyncSession], store: SettingsStore
+):
+    async with sessions() as session:
+        result = await run_retention(
+            session, NOW, store, previous_database_now=NOW - retention.MAX_CLOCK_JUMP
+        )
+    assert result.skipped is False
+    async with sessions() as session:
+        skipped = await run_retention(
+            session, NOW, store, previous_database_now=NOW - retention.MAX_CLOCK_JUMP - SECOND
+        )
+    assert skipped.skipped is True
+    assert timedelta(days=2, hours=1) == retention.MAX_CLOCK_JUMP

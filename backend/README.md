@@ -175,7 +175,9 @@ What a provider instance sends and receives is written to `communication_log` by
 `record_isolated(session_factory, ...)`: it writes the row in a short transaction of its own
 and swallows a database error (for example a missing partition), with one warning that names
 the error class and SQLSTATE only, so a failed log entry never fails the work it describes;
-it masks in a worker thread, so the event loop is not held up. `record(session, ...)` adds
+it masks in a worker thread, so the event loop is not held up. The masker for a set of known
+secrets and secret paths is built once and cached in process memory (32 sets): building one
+can take seconds for long secrets. `record(session, ...)` adds
 the row to the caller's transaction instead and does not commit; a database error then
 aborts that transaction. Use it only where the entry has to be atomic with other work.
 
@@ -252,8 +254,10 @@ The periods are counted back from the database clock. If the host clock differs 
 more than five minutes the run is skipped with a warning (`retention skipped: ...`): a host
 clock far ahead would otherwise delete what is current. A partition whose range holds or
 follows the database's present moment is never dropped, nor the partition that holds the
-newest rows of a table (a guard for a clock jump that host and database share). From the
-third skipped run in a row on, each skip is logged as an error.
+newest rows of a table (a guard for a clock jump that host and database share). A run is also skipped
+when the database clock is more than 49 hours (twice the daily interval and an hour) past
+the previous run's; the next run compares with the jumped time. The previous time is kept in
+memory only. From the third skipped run in a row on, each skip is logged as an error.
 
 A run deletes the rows older than the period in the month the cut-off falls into and drops
 the monthly partitions that lie entirely before it. Outbox deliveries of events older than

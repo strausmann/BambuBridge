@@ -35,6 +35,7 @@ describes.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import uuid
 from collections.abc import Collection, Iterable, Mapping
@@ -62,6 +63,9 @@ MAX_HEADER_VALUE_LENGTH = 2048
 # one side share, both in bytes of UTF-8.
 MAX_MASK_INPUT = 65_536
 MAX_HEADERS_INPUT = 65_536
+
+# How many maskers (one per set of known secrets and secret paths) are kept for reuse.
+MASKER_CACHE_SIZE = 32
 
 _log = logging.getLogger(__name__)
 
@@ -223,9 +227,9 @@ class _Exchange:
 
 
 def _numbered(name: str, number: int) -> str:
-    """``name#number``, still within ``MAX_HEADER_NAME_LENGTH``."""
+    """``name#number``, still within ``MAX_HEADER_NAME_LENGTH`` and not cut inside a mask."""
     suffix = f"#{number}"
-    return name[: MAX_HEADER_NAME_LENGTH - len(suffix)] + suffix
+    return _cut_masked(name, MAX_HEADER_NAME_LENGTH - len(suffix)) + suffix
 
 
 def _text(value: object) -> str:
@@ -245,6 +249,36 @@ def _decode(data: bytes) -> str | None:
         return data.decode("utf-8")
     except UnicodeDecodeError:
         return None
+
+
+@functools.lru_cache(maxsize=MASKER_CACHE_SIZE)
+def _cached_masker(secret_paths: frozenset[Any], known_secrets: frozenset[Any]) -> Masker:
+    return Masker(secret_paths=tuple(secret_paths), known_secrets=tuple(known_secrets))
+
+
+def masker_for(secret_paths: Collection[str], known_secrets: Collection[str]) -> Masker:
+    """The :class:`Masker` for this set of secret paths and known secrets, built once.
+
+    Building one compiles a pattern per secret and can take seconds for long secrets; a
+    provider passes the same set with every record. The cache lives in process memory only
+    (``MASKER_CACHE_SIZE`` sets, least recently used out). Order does not matter. A set that
+    cannot be a key (an entry that is not hashable) is built without the cache, so that its
+    error is raised as usual.
+    """
+    try:
+        key = (frozenset(_entries(secret_paths)), frozenset(_entries(known_secrets)))
+    except TypeError:
+        return Masker(secret_paths=secret_paths, known_secrets=known_secrets)
+    return _cached_masker(*key)
+
+
+masker_for.cache_info = _cached_masker.cache_info  # type: ignore[attr-defined]
+masker_for.cache_clear = _cached_masker.cache_clear  # type: ignore[attr-defined]
+
+
+def _entries(values: Collection[Any]) -> Collection[Any]:
+    """A single string (or bytes) is one entry, as for :class:`Masker`."""
+    return (values,) if isinstance(values, str | bytes) else values
 
 
 def _entry_values(
@@ -284,7 +318,7 @@ def _entry_values(
         ):
             raise ValueError(f"the body of {name} must be bytes, a string or None")
 
-    exchange = _Exchange(Masker(secret_paths=secret_paths, known_secrets=known_secrets))
+    exchange = _Exchange(masker_for(secret_paths, known_secrets))
     values: dict[str, Any] = {
         "occurred_at": func.clock_timestamp(),
         "instance_id": instance_id,
@@ -340,6 +374,11 @@ class CommunicationRecorder:
         month) is raised as it comes and aborts the caller's transaction: use this only
         when the entry has to be atomic with other work, and :meth:`record_isolated`
         otherwise.
+
+        Masking runs here, on the event loop: CPU work of up to seconds for large parts
+        and many or long secrets (the masker itself is cached per secret set, see
+        :func:`masker_for`). **Provider code uses** :meth:`record_isolated`, which masks in
+        a worker thread.
         """
         values = _entry_values(
             instance_id=instance_id,

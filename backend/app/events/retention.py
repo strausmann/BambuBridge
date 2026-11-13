@@ -72,6 +72,9 @@ MAX_CLOCK_DIFFERENCE = timedelta(minutes=5)
 # Waits after the first, second and every further run in a row that failed on a lock.
 LOCK_BACKOFF_SECONDS = (60.0, 300.0, 900.0)
 LOCK_NOT_AVAILABLE = "55P03"
+# A database clock further than this past the previous run's (twice the daily interval plus
+# a margin) is a jump: the run is skipped, the next one compares with the jumped time.
+MAX_CLOCK_JUMP = 2 * timedelta(days=1) + timedelta(hours=1)
 # From this many skipped runs in a row on, each one is logged as an error.
 SKIPPED_RUNS_ERROR = 3
 
@@ -120,6 +123,8 @@ class RetentionResult:
     deleted_deliveries: int = 0
     deleted_pending_deliveries: int = 0
     skipped: bool = False
+    # The database clock the run saw (for the next run's jump check); not part of equality.
+    database_now: datetime | None = field(default=None, compare=False)
 
 
 def _month_start(moment: datetime) -> datetime:
@@ -219,12 +224,19 @@ async def _drop_partitions(
 
 
 async def run_retention(
-    session: AsyncSession, now: datetime, settings: SettingsStore
+    session: AsyncSession,
+    now: datetime,
+    settings: SettingsStore,
+    *,
+    previous_database_now: datetime | None = None,
 ) -> RetentionResult:
     """Remove what is older than the retention periods, counted back from the database clock.
 
     ``now`` is the host clock; it only serves to compare the two. If they differ by more
-    than ``MAX_CLOCK_DIFFERENCE`` nothing is removed and the result says ``skipped``.
+    than ``MAX_CLOCK_DIFFERENCE`` nothing is removed and the result says ``skipped``; the
+    same when the database clock is more than ``MAX_CLOCK_JUMP`` past
+    ``previous_database_now`` (the clock the previous run saw: a jump host and database
+    share, which their comparison cannot show).
 
     Unlike the rest of the event code this **commits**, twice (after the rows and after the
     partitions; see the module text): give it a session of its own, never one with other
@@ -245,7 +257,16 @@ async def run_retention(
             "retention skipped: application and database clocks differ by %d s",
             int(difference.total_seconds()),
         )
-        return RetentionResult(skipped=True)
+        return RetentionResult(skipped=True, database_now=database_now)
+    if previous_database_now is not None and (
+        database_now - previous_database_now > MAX_CLOCK_JUMP
+    ):
+        await session.rollback()
+        _log.warning(
+            "retention skipped: the database clock jumped %d s past the previous run",
+            int((database_now - previous_database_now).total_seconds()),
+        )
+        return RetentionResult(skipped=True, database_now=database_now)
     await settings.reload_and_notify(session)
     cutoffs = {
         table: database_now - timedelta(days=int(settings.get(key)))
@@ -267,6 +288,7 @@ async def run_retention(
         deleted_rows=deleted_rows,
         deleted_deliveries=finished,
         deleted_pending_deliveries=pending,
+        database_now=database_now,
     )
 
 
@@ -302,10 +324,19 @@ class RetentionMaintenance(DailyJob):
         self._sessions = sessions
         self._settings = settings
         self._skipped_in_a_row = 0
+        # In memory only: after a restart the first run has nothing to compare with.
+        self._last_database_now: datetime | None = None
 
     async def _work(self) -> None:
         async with self._sessions() as session:
-            result = await run_retention(session, self._clock(), self._settings)
+            result = await run_retention(
+                session,
+                self._clock(),
+                self._settings,
+                previous_database_now=self._last_database_now,
+            )
+        # Also after a skip: the next run compares with what this one saw.
+        self._last_database_now = result.database_now or self._last_database_now
         if result.skipped:
             self._skipped_in_a_row += 1
             if self._skipped_in_a_row >= SKIPPED_RUNS_ERROR:

@@ -541,6 +541,7 @@ async def test_record_isolated_masks_off_the_event_loop(
 ):
     import threading
 
+    communication.masker_for.cache_clear()  # built afresh, so the build can be watched
     threads: list[threading.Thread] = []
     real = communication.Masker
 
@@ -593,3 +594,67 @@ async def test_an_omitted_header_name_takes_its_value_with_it(
     stored = json.dumps(entry.request_headers)
     assert token not in stored and "made-up" not in stored
     assert entry.truncated is True
+
+
+@pytest.mark.parametrize("invisible", ["\u200b", "\u00ad", "\ufeff"])
+async def test_a_format_character_inside_a_header_name_does_not_hide_its_value(
+    db_session: AsyncSession, invisible: str
+):
+    value = "unknown-" + "peer-value-" + "1234"
+    entry = await _record(db_session, request=Message(headers=[("To" + invisible + "ken", value)]))
+    assert value not in json.dumps(entry.request_headers)
+
+
+async def test_a_numbered_header_name_never_ends_in_part_of_a_mask(db_session: AsyncSession):
+    import re
+
+    # Masked, both names read "X" + "a" * 190 + "token=***" (200 characters): the second is
+    # numbered, and its cut must not leave "*" or "**" in front of "#2".
+    head = "X" + "a" * 190 + "token="
+    entry = await _record(
+        db_session, request=Message(headers=[(head + "one", "1"), (head + "two", "2")])
+    )
+
+    names = list(entry.request_headers)
+    assert len(names) == 2
+    assert all(len(name) <= 200 for name in names)
+    assert not any(re.search(r"(?<!\*)\*{1,2}#", name) for name in names), names
+
+
+async def test_the_masker_is_built_once_per_secret_set(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+):
+    communication.masker_for.cache_clear()
+    built: list[object] = []
+    real = communication.Masker
+
+    def counting(**kwargs: Any) -> communication.Masker:
+        built.append(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(communication, "Masker", counting)
+    secrets = ["zz-" + "made-up-secret-" + str(i) for i in range(3)]
+
+    for known in (secrets, list(reversed(secrets)), secrets, secrets[:2]):
+        await recorder.record(
+            db_session,
+            instance_id=INSTANCE,
+            method="GET",
+            target="/",
+            status=200,
+            duration_ms=1,
+            request=None,
+            response=None,
+            known_secrets=known,
+            secret_paths=["a.b"],
+        )
+    await db_session.rollback()
+
+    assert len(built) == 2  # the same set in any order is one Masker; another set is another
+    assert communication.masker_for.cache_info().maxsize == communication.MASKER_CACHE_SIZE
+
+
+def test_a_known_secret_that_is_not_text_still_raises_through_the_cache():
+    communication.masker_for.cache_clear()
+    with pytest.raises(ValueError, match="known_secrets"):
+        communication.masker_for((), [bytearray(b"made-up-bytes")])  # type: ignore[list-item]
