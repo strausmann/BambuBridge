@@ -6,8 +6,10 @@ Three rules decide what becomes ``***``:
    one of ``authorization``, ``cookie``, ``set-cookie``, ``x-bambubridge-key``, contains
    one of the words in ``SENSITIVE_WORDS`` (``token``, ``secret``, ``password``, ``key``,
    ``access_code`` and more) or has one of ``SENSITIVE_NAME_WORDS`` (``pass``, ``pin``,
-   ``sid`` ...) as a word of its own (``user_pass``, ``userPW``). Names are compared without
-   regard to case.
+   ``sid`` ...) as a word of its own (``user_pass``, ``userPW``), or a word that ends in
+   ``pass`` or ``pw`` (``dbpass``, ``rootpw``). Names are compared without regard to case,
+   after NFKC, without combining marks and with the dotless i as ``i`` - the same test for
+   parsed JSON and for every text rule, which accept names of Unicode word characters.
 2. **By path.** JSON fields a provider marked with ``"x-secret": true`` in its schema
    (:func:`secret_paths_from_schema`). The last segment of a path is what counts: every
    field of that name is masked, wherever it stands, in parsed JSON and in text alike, so
@@ -16,10 +18,15 @@ Three rules decide what becomes ``***``:
    ``MIN_KNOWN_SECRET_LENGTH`` characters (surrounding white space removed), in any
    spelling an encoder writes: each character as itself or escaped (percent escape of its
    UTF-8 bytes in either case, ``\\uXXXX`` in either case and as a surrogate pair, ``\\xNN``,
-   ``\\UXXXXXXXX``, the short escapes such as ``\\/`` and ``\\"``, ``+`` for a space), the
+   ``\\UXXXXXXXX``, the short escapes such as ``\\/`` and ``\\"``, ``+`` for a space, HTML and
+   XML character references ``&#N;``, ``&#xH;`` and ``&amp; &lt; &gt; &quot; &apos;``), each
+   backslash escape also as ``json.dumps`` or ``repr()`` write it a second time, the
    Python ``repr`` spellings, the UTF-8 bytes read as ISO 8859-1, and base64 or base64url of
    its UTF-8 bytes, also as part of a longer base64 value in any of the three alignments and
    wrapped over several lines.
+
+Invisible format characters (Unicode category Cf: zero-width space, soft hyphen, byte order
+mark, word joiner ...) are removed from a text before anything is searched.
 
 In text that is not parsed JSON (an address, an error message, a body in another format,
 broken JSON) the names are found by patterns: ``"name": value`` and ``'name': value`` (a
@@ -37,7 +44,8 @@ encoded into another one): if that finds anything, the decoded text is what is s
 Masking prefers hiding too much over showing a secret: a field called ``monkey`` is masked
 because its name contains ``key``. What it cannot do: find a secret nobody named or marked,
 find a known secret that was transformed in a way not listed above (hashed, encrypted,
-escaped in two different ways at once), or keep the structure below a masked field.
+quoted-printable, ES6 ``\\u{..}`` or octal escapes, a look-alike letter), or keep the
+structure below a masked field.
 
 Nothing here logs, and no error message quotes a value.
 """
@@ -105,7 +113,7 @@ _QUOTED_FIELD = re.compile(
 # ``name=`` or ``name:`` (with optional blanks around the sign) as in a query string, a form
 # body, a header line or a message for people. The lookbehind makes a name start only where
 # a run of name characters starts, which keeps the scan linear.
-_PAIR_NAME = re.compile(r"(?<![A-Za-z0-9_.%\-\[\]])([A-Za-z0-9_.%\-\[\]]+)[ \t]*([=:])[ \t]*")
+_PAIR_NAME = re.compile(r"(?<![\w.%\-\[\]])([\w.%\-\[\]]+)[ \t]*([=:])[ \t]*")
 # The value after ``name=``: quoted (possibly unterminated), a scheme word with what follows
 # it (``Authorization=Bearer <token>``), or bare up to the next ``&`` or white space.
 _PAIR_VALUE = re.compile(r""""(?:[^"\\]|\\.)*"?|'[^']*'?|(?i:bearer|basic)\s+[^&\s]*|[^&\s]*""")
@@ -116,7 +124,7 @@ _LINE_REST = re.compile(r"[^\r\n]*")
 # ``--name value`` / ``-name value`` on a command line (``--name=value`` is a pair). Tried at
 # every position (lookahead): a flag inside the bare value of another one counts too.
 _FLAG = re.compile(
-    r"""(?=(?<![\w-])--?([A-Za-z%][\w.%-]{0,127})[ \t]+("(?:[^"\\]|\\.)*"?|'[^']*'?|[^\s]+))"""
+    r"""(?=(?<![\w-])--?((?:[^\W\d_]|%)[\w.%-]{0,127})[ \t]+("(?:[^"\\]|\\.)*"?|'[^']*'?|[^\s]+))"""
 )
 # A part of a multipart form body: its Content-Disposition line names the field; the value
 # follows the blank line after the part's headers and ends before the next boundary line.
@@ -129,17 +137,49 @@ _BOUNDARY_LINE = re.compile(r"\r?\n--")
 _SURROGATE = re.compile("[\ud800-\udfff]")
 
 
+def _format_characters() -> re.Pattern[str]:
+    """All characters of Unicode category Cf (zero-width space, soft hyphen, byte order
+    mark, word joiner ...). They are invisible, so they are taken out of a text before the
+    search for known values: otherwise one of them inside a secret hides it."""
+    chars = [
+        chr(code)
+        for start, end in ((0, 0x30000), (0xE0000, 0xE1000))
+        for code in range(start, end)
+        if unicodedata.category(chr(code)) == "Cf"
+    ]
+    return re.compile("[" + "".join(re.escape(char) for char in chars) + "]")
+
+
+_FORMAT = _format_characters()
+# Letters that NFKC keeps apart from their Latin twins in names (Turkish dotless i).
+_NAME_LETTERS = str.maketrans({"\u0131": "i"})
+
+
+def _normalize_name(name: str) -> str:
+    """NFKC, without combining marks (``P\u0130N`` -> ``PIN``), the dotless i as ``i``."""
+    decomposed = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", name))
+    bare = "".join(char for char in decomposed if not unicodedata.combining(char))
+    return unicodedata.normalize("NFC", bare).translate(_NAME_LETTERS)
+
+
 def _fold(name: str) -> str:
-    return unicodedata.normalize("NFKC", name).casefold()
+    return _normalize_name(name).casefold()
 
 
 def is_sensitive_name(name: str) -> bool:
-    """Whether a header, field or parameter of this name holds a credential (rule 1)."""
-    normalized = unicodedata.normalize("NFKC", name)
+    """Whether a header, field or parameter of this name holds a credential (rule 1).
+
+    The same test serves parsed JSON and every text rule."""
+    normalized = _normalize_name(name)
     folded = normalized.casefold()
     if folded in SENSITIVE_HEADERS or SENSITIVE_WORDS.search(folded) is not None:
         return True
-    return any(word.casefold() in SENSITIVE_NAME_WORDS for word in _NAME_WORD.findall(normalized))
+    for word in _NAME_WORD.findall(normalized):
+        word = word.casefold()
+        # ``pass`` and ``pw`` also end a word: ``dbpass``, ``rootpw``, ``MQTTPASS``.
+        if word in SENSITIVE_NAME_WORDS or word.endswith(("pass", "pw")):
+            return True
+    return False
 
 
 # -- rule 3: the spellings of a known secret --------------------------------------------------
@@ -177,17 +217,61 @@ def _char_forms(char: str) -> set[str]:
     return forms
 
 
+# HTML/XML named references, and the numeric reference as a pattern: ``&#N;`` and
+# ``&#xH;`` in either case, with up to eight leading zeros.
+_NAMED_REFERENCES = {
+    "&": ("&amp;",),
+    "<": ("&lt;",),
+    ">": ("&gt;",),
+    '"': ("&quot;",),
+    "'": ("&apos;",),
+}
+_MAX_REFERENCE_ZEROS = 8
+
+
+def _escape_twice(form: str) -> list[str]:
+    """A spelling as written once, and as ``json.dumps`` or ``repr()`` write it again when a
+    caller puts the text into a string a second (and third) time: longest first."""
+    if not any(char in form for char in "\\\"'"):
+        return [form]
+    variants = {form}
+    for _ in range(2):
+        variants |= {
+            again
+            for value in variants
+            for again in (
+                json.dumps(value)[1:-1],
+                json.dumps(value, ensure_ascii=False)[1:-1],
+                repr(value)[1:-1],
+            )
+        }
+    return sorted(variants, key=lambda v: (-len(v), v))
+
+
 def _form_pattern(form: str) -> str:
-    # Only escapes are matched without regard to case, never the character itself.
-    escaped = re.escape(form)
-    return f"(?i:{escaped})" if len(form) > 1 and form[0] in "%\\" else escaped
+    # Only escapes and references are matched without regard to case, never the character.
+    if len(form) > 1 and form[0] in "%&\\":
+        return "(?i:" + "|".join(re.escape(f) for f in _escape_twice(form)) + ")"
+    return re.escape(form)
 
 
-def _char_pattern(char: str) -> str:
+def _reference_patterns(char: str) -> tuple[list[str], int]:
+    code = ord(char)
+    zeros = f"0{{0,{_MAX_REFERENCE_ZEROS}}}"
+    patterns = [f"(?i:&\\#x{zeros}{code:x};)", f"&\\#{zeros}{code};"]
+    return patterns, len(f"&#x{code:x};") + _MAX_REFERENCE_ZEROS
+
+
+def _char_pattern(char: str) -> tuple[str, int]:
+    """The atomic group for one character, and the longest text it matches."""
     # Atomic, longest form first: no backtracking between overlapping forms (``\\`` and
-    # ``\\\\``, ``%`` and ``%25``), which keeps the search linear.
-    forms = sorted(_char_forms(char), key=lambda form: (-len(form), form))
-    return "(?>" + "|".join(_form_pattern(form) for form in forms) + ")"
+    # ``\\\\``, ``%`` and ``%25``, ``&amp;`` and ``&``), which keeps the search linear.
+    forms = sorted(
+        _char_forms(char) | set(_NAMED_REFERENCES.get(char, ())), key=lambda f: (-len(f), f)
+    )
+    references, reference_length = _reference_patterns(char)
+    longest = max(reference_length, *(len(_escape_twice(f)[0]) for f in forms))
+    return "(?>" + "|".join([*references, *(_form_pattern(f) for f in forms)]) + ")", longest
 
 
 _LINE_BREAK = r"(?:\r?\n)?"
@@ -225,15 +309,19 @@ def _literal_spellings(secret: str) -> set[str]:
     percent = {quote(secret, safe=""), quote(secret, safe="/"), quote_plus(secret)}
     percent |= {_PERCENT_ESCAPE.sub(lambda m: m.group().lower(), p) for p in percent}
     escaped = {json.dumps(secret)[1:-1], json.dumps(secret, ensure_ascii=False)[1:-1]}
+    escaped.add(json.dumps(secret)[1:-1].replace("/", "\\/"))
     reprs = {repr(secret)[1:-1], repr(raw)[2:-1]}
     latin_1 = {raw.decode("latin-1")}
-    return {secret} | percent | escaped | reprs | latin_1
+    once = {secret} | percent | escaped | reprs | latin_1
+    # Escaped a second (and third) time by ``repr()`` or ``json.dumps``.
+    return once | {twice for value in once for twice in _escape_twice(value)}
 
 
 def _secret_pattern(secret: str) -> tuple[str, int]:
     """One alternation for all spellings of ``secret``, and the longest it can match."""
-    per_char = "".join(_char_pattern(char) for char in secret)
-    longest = sum(max(map(len, _char_forms(char))) for char in secret)
+    groups = [_char_pattern(char) for char in secret]
+    per_char = "".join(group for group, _ in groups)
+    longest = sum(length for _, length in groups)
     b64, b64_longest = _base64_patterns(secret.encode("utf-8", "surrogatepass"))
     literals = sorted(_literal_spellings(secret), key=lambda v: (-len(v), v))
     longest = max(longest, b64_longest, len(literals[0]))
@@ -443,8 +531,12 @@ class Masker:
     # -- public -------------------------------------------------------------
 
     def text(self, value: str) -> str:
-        """Mask free text: a body that is not JSON, an address, an error message."""
-        out = self._mask_once(value)
+        """Mask free text: a body that is not JSON, an address, an error message.
+
+        Invisible format characters (Unicode category Cf) are taken out first: they would
+        otherwise split a known secret so that its search no longer finds it.
+        """
+        out = self._mask_once(_FORMAT.sub("", value))
         decoders: tuple[Callable[[str], str], ...] = (unquote, unquote_plus)
         for decode in decoders:
             probe = out

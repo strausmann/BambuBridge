@@ -8,6 +8,7 @@ spelling a standard decoder turns back into it.
 from __future__ import annotations
 
 import base64
+import html
 import json
 import time
 from urllib.parse import quote
@@ -59,7 +60,7 @@ def test_more_names_hold_a_credential(name: str):
     assert is_sensitive_name(name)
 
 
-@pytest.mark.parametrize("name", ["compass", "spinner", "inside", "design", "output", "bypass"])
+@pytest.mark.parametrize("name", ["spinner", "inside", "design", "output", "pinned"])
 def test_short_credential_words_count_as_words_only(name: str):
     # "pass", "pin", "sid", "sig", "otp", "pw" are whole words of the name, not substrings.
     assert not is_sensitive_name(name)
@@ -483,3 +484,134 @@ def test_quote_of_a_known_secret_is_still_masked_after_the_change():
         base64.b64encode(secret.encode()).decode(),
     ):
         assert masker.text(f"<{spelled}>") == "<***>"
+
+
+# --- fix round 2 (audit run 7) --------------------------------------------------------------
+# Made-up values only, put together at runtime.
+
+S4 = "Ab" + "+cd&<x>ef=9Qz"
+S5 = "Xy'9z" + '"Qw&r7'
+S6 = "ab\\cd" + '"ef\\\\gh/ij'
+
+
+def _go_html(value: str) -> str:
+    table = {"+": "&#43;", "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&#34;"}
+    return "".join(table.get(c, c) for c in value)
+
+
+def _php(value: str) -> str:
+    return json.dumps(value)[1:-1].replace("/", "\\/")
+
+
+def _refs(value: str, form: str) -> str:
+    return "".join(c if c.isalnum() else form.format(ord(c)) for c in value)
+
+
+@pytest.mark.parametrize(
+    ("secret", "spelled"),
+    [
+        (S, _go_html(S)),
+        (S4, _go_html(S4)),
+        (S5, html.escape(S5)),
+        (S5, html.escape(S5).replace("&#x27;", "&apos;")),
+        (S, _refs(S, "&#{};")),
+        (S, _refs(S, "&#x{:X};")),
+        (S, _refs(S, "&#x{:04x};")),
+        (S, _refs(S, "&#{:05d};")),
+        (S4, _go_html(S4).replace("&amp;", "&AMP;").replace("&lt;", "&LT;")),
+    ],
+    ids=[
+        "go-plus",
+        "go-all",
+        "python",
+        "xml-apos",
+        "decimal",
+        "hex-upper",
+        "hex-zeros",
+        "dec-zeros",
+        "named-upper",
+    ],
+)
+def test_a_known_secret_is_masked_as_html_or_xml_character_references(secret: str, spelled: str):
+    masker = Masker(known_secrets=[S, S4, S5])
+    for out in (masker.text(f"<p>got {spelled}</p>"), masker.body(json.dumps({"page": spelled}))):
+        assert MASK in out, out
+        assert secret not in html.unescape(out)
+
+
+def test_plain_ampersands_and_tags_stay_as_they_are():
+    text = "nothing secret here & <b>bold</b> &amp; &#43; done"
+    assert Masker(known_secrets=[S, S4, S5]).text(text) == text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "upstream said " + repr('{"got":"' + _php(S) + '"}'),
+        "upstream said " + json.dumps('{"got":"' + _php(S) + '"}'),
+        "upstream said " + repr('{"got":"' + json.dumps(S4)[1:-1].replace("&", "\\u0026") + '"}'),
+        "upstream said " + json.dumps(json.dumps({"got": S5})),
+        "upstream said " + repr(_php(S6)),
+        "upstream said " + json.dumps(_php(S6)),
+    ],
+    ids=["repr-php", "json-php", "repr-go", "json-json", "repr-backslashes", "json-backslashes"],
+)
+def test_a_known_secret_escaped_a_second_time_is_masked(text: str):
+    out = Masker(known_secrets=[S, S4, S5, S6]).text(text)
+    assert MASK in out, out
+    once = out.replace("\\\\", "\\")
+    for secret in (S, S4, S5, S6):
+        for decoded in (out, once, once.replace("\\\\", "\\")):
+            assert secret not in decoded
+    assert "Tok3n" not in out and "9Qz" not in out and "Qw&r7" not in out and "gh/ij" not in out
+
+
+@pytest.mark.parametrize("invisible", ["\u200b", "\u00ad", "\ufeff", "\u2060", "\u200d"])
+def test_invisible_format_characters_cannot_split_a_known_secret(invisible: str):
+    secret = "fake-secret-value-0001"
+    spelled = secret[:5] + invisible + secret[5:12] + invisible + secret[12:]
+    out = Masker(known_secrets=[secret]).text(f"x {spelled} y")
+    assert out == "x *** y"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "\uff50\uff41\uff53\uff53\uff57\uff4f\uff52\uff44",
+        "passw\u00f6rd",
+        "P\u0130N",
+        "p\u0131n",
+        "Kennw\u00f6rt_secret",
+    ],
+    ids=["fullwidth", "umlaut", "turkish-dotted", "turkish-dotless", "non-ascii-prefix"],
+)
+def test_text_and_json_use_the_same_unicode_name_test(name: str):
+    masker = Masker()
+    assert is_sensitive_name(name)
+    assert "hunter" not in masker.text(f"{name}=hunter2x&n=1")
+    assert json.loads(masker.body(json.dumps({name: "hunter2x"}))) == {name: MASK}
+
+
+@pytest.mark.parametrize(
+    "name", ["dbpass", "userpass", "rootpw", "MQTTPASS", "adminPw", "db_rootpw"]
+)
+def test_names_ending_in_pass_or_pw_hold_a_credential(name: str):
+    assert is_sensitive_name(name)
+    assert Masker().text(f"{name}=hunter2x") == f"{name}=***"
+
+
+@pytest.mark.parametrize(
+    ("secret", "text"),
+    [
+        ("\\" * 40 + "x", "\\" * 65_536),
+        ("&" * 40 + "x", "&amp;" * 13_107),
+        ("<" * 40 + "x", "&#x00003c;" * 6_553),
+        ("a" * 40, "a​" * 32_768),
+        ('"' * 40 + "x", '\\\\\\"' * 16_384),
+    ],
+    ids=["backslashes", "named-references", "numeric-references", "format-characters", "escaped"],
+)
+def test_the_round_2_spellings_take_linear_time(secret: str, text: str):
+    started = time.monotonic()
+    Masker(known_secrets=[secret]).text(text)
+    assert time.monotonic() - started < 5
