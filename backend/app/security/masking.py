@@ -8,8 +8,10 @@ Three rules decide what becomes ``***``:
    ``access_code`` and more) or has one of ``SENSITIVE_NAME_WORDS`` (``pass``, ``pin``,
    ``sid`` ...) as a word of its own (``user_pass``, ``userPW``), or a word that ends in
    ``pass`` or ``pw`` (``dbpass``, ``rootpw``). Names are compared without regard to case,
-   after NFKC, without combining marks and with the dotless i as ``i`` - the same test for
-   parsed JSON and for every text rule, which accept names of Unicode word characters.
+   after NFKC, without any mark (category M, also those of combining class 0 such as
+   ``\\u20dd``), without invisible characters and with the dotless i as ``i`` - the same
+   test for parsed JSON and for every text rule, which accept names of Unicode word
+   characters.
 2. **By path.** JSON fields a provider marked with ``"x-secret": true`` in its schema
    (:func:`secret_paths_from_schema`). The last segment of a path is what counts: every
    field of that name is masked, wherever it stands, in parsed JSON and in text alike, so
@@ -25,11 +27,13 @@ Three rules decide what becomes ``***``:
    its UTF-8 bytes, also as part of a longer base64 value in any of the three alignments and
    wrapped over several lines.
 
-Invisible format characters (Unicode category Cf: zero-width space, soft hyphen, byte order
-mark, word joiner ...) are removed from a text before anything is searched, in every
-decoding round, and also where they are written as an escape (``&#8203;``, ``\\u200b``,
-``\\U000e0001``, a surrogate pair, percent or ``\\x`` bytes judged one UTF-8 character at a
-time).
+Invisible characters (Unicode category Cf: zero-width space, soft hyphen, byte order mark,
+word joiner ...; and every Default_Ignorable_Code_Point: variation selectors, the combining
+grapheme joiner, Hangul fillers ...) are removed from a text and from each known secret
+before anything is searched, in every decoding round, and also where they are written as an
+escape (``&#8203;``, ``\\u200b``, ``\\U000e0001``, a surrogate pair, percent or ``\\x`` bytes
+judged one UTF-8 character at a time).
+
 Declared limit: a hostile peer obfuscating a known secret with encoded invisible characters
 beyond these cases is not caught; neither is a run of backslashes in a secret spelled in two
 ways at once (``\\\\`` next to ``\\x5c``), which no encoder writes.
@@ -109,26 +113,53 @@ def _class_ranges(codes: list[int]) -> str:
     return "".join(parts)
 
 
-def _category_characters() -> tuple[str, str]:
-    """The characters of Unicode category Cf (zero-width space, soft hyphen, byte order
-    mark, word joiner ...) and of the mark categories (combining accents ...), each as the
-    inside of a regular-expression character class. Cf characters are invisible, so they
-    are taken out of a text before anything is searched: otherwise one of them inside a
-    secret or a name hides it. Marks belong to the name they are written in (``to\u0301ken``)."""
-    formats: list[int] = []
+# Default_Ignorable_Code_Point outside category Cf (Unicode DerivedCoreProperties): the
+# combining grapheme joiner, Hangul fillers, Mongolian variation selectors, variation
+# selectors, musical formatting and the tag block. As invisible as the Cf characters.
+_IGNORABLE_RANGES = (
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),
+    (0x061C, 0x061C),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x206F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+
+
+def _category_characters() -> tuple[frozenset[int], str, str]:
+    """The invisible characters (Unicode category Cf: zero-width space, soft hyphen, byte
+    order mark, word joiner ...; and every Default_Ignorable_Code_Point: variation
+    selectors, the combining grapheme joiner ...) as a set and as the inside of a
+    regular-expression character class, and the mark characters (category M) as such a
+    class. Invisible characters are taken out of a text before anything is searched:
+    otherwise one of them inside a secret or a name hides it. Marks belong to the name they
+    are written in (``to\u0301ken``) and are dropped from it before it is judged."""
+    invisible = {code for start, end in _IGNORABLE_RANGES for code in range(start, end + 1)}
     marks: list[int] = []
     for start, end in ((0, 0x30000), (0xE0000, 0xE1000)):
         for code in range(start, end):
             category = unicodedata.category(chr(code))
             if category == "Cf":
-                formats.append(code)
+                invisible.add(code)
             elif category[0] == "M":
                 marks.append(code)
-    return _class_ranges(formats), _class_ranges(marks)
+    return frozenset(invisible), _class_ranges(sorted(invisible)), _class_ranges(marks)
 
 
-_FORMAT_CHARS, _MARK_CHARS = _category_characters()
+_INVISIBLE, _FORMAT_CHARS, _MARK_CHARS = _category_characters()
 _FORMAT = re.compile("[" + _FORMAT_CHARS + "]")
+_MARK = re.compile("[" + _MARK_CHARS + "]")
 # Characters of a name in text: Unicode word characters with their combining marks.
 _NAME_CHARS = r"\w.%\-\[\]" + _MARK_CHARS
 
@@ -201,7 +232,8 @@ _RUN_BYTE = re.compile(r"\\+[xX]([0-9a-fA-F]{2})|%([0-9a-fA-F]{2})")
 
 
 def _is_format(char: str) -> bool:
-    return unicodedata.category(char) == "Cf"
+    """Whether ``char`` is invisible: category Cf or a Default_Ignorable_Code_Point."""
+    return ord(char) in _INVISIBLE
 
 
 def _code_point(digits: str) -> str | None:
@@ -285,11 +317,13 @@ _NAME_LETTERS = str.maketrans({"\u0131": "i"})
 
 
 def _normalize_name(name: str) -> str:
-    """NFKC, without format characters (``To\u200bken`` -> ``Token``: the written name drops
-    them too) and combining marks (``P\u0130N`` -> ``PIN``), the dotless i as ``i``."""
+    """NFKC, without invisible characters (``To\u200bken`` -> ``Token``: the written name
+    drops them too, and so do ``\ufe0f`` or ``\u034f``) and without every mark, also
+    those of combining class 0 (``P\u0130N`` -> ``PIN``, ``to\u20ddken`` -> ``token``),
+    the dotless i as ``i``."""
     name = _FORMAT.sub("", name)
     decomposed = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", name))
-    bare = "".join(char for char in decomposed if not unicodedata.combining(char))
+    bare = _FORMAT.sub("", _MARK.sub("", decomposed))
     return unicodedata.normalize("NFC", bare).translate(_NAME_LETTERS)
 
 
@@ -684,8 +718,9 @@ class Masker:
     def text(self, value: str) -> str:
         """Mask free text: a body that is not JSON, an address, an error message.
 
-        Invisible format characters (Unicode category Cf) are taken out first: they would
-        otherwise split a known secret so that its search no longer finds it.
+        Invisible characters (Unicode category Cf and every Default_Ignorable_Code_Point)
+        are taken out first: they would otherwise split a known secret so that its search
+        no longer finds it.
         """
         # Two probes are decoded each round. ``names``: the text with the name rules applied
         # but the known values still in place, so a known secret that is also a name

@@ -925,3 +925,50 @@ def test_a_known_value_that_decoding_removes_entirely_leaves_nothing_to_mask():
     secret = "&#8203;" + "&#8203;"  # nothing but escaped invisible characters
     out = Masker(known_secrets=[secret]).text(f"x {secret} {SPLIT_TRIGGER}")
     assert REMOTE not in out and "8203" not in out, out
+
+
+# --- fix round 5 (audit run 10) --------------------------------------------------------------
+
+
+def _exchange(masker: Masker):
+    from app.events.communication import _Exchange
+
+    return _Exchange(masker)
+
+
+# F2: every mark (category M, also those of combining class 0) and every
+# Default_Ignorable_Code_Point is dropped from a name before it is judged.
+
+NAME_HIDERS = ["\ufe0f", "\u034f", "\U000e0100", "\u180b", "\u20dd"]
+
+
+@pytest.mark.parametrize("hider", NAME_HIDERS, ids=["fe0f", "cgj", "vs17", "mongolian-fvs", "20dd"])
+def test_a_mark_or_ignorable_character_inside_a_name_does_not_hide_its_value(hider: str):
+    name = "to" + hider + "ken"
+    masker = Masker()
+    exchange = _exchange(masker)
+
+    assert is_sensitive_name(name)
+    for out in (
+        str(exchange.headers([(name, UNKNOWN_VALUE)])),
+        exchange.target(f"https://peer/?{name}={UNKNOWN_VALUE}"),
+        masker.text(f"{name}={UNKNOWN_VALUE}"),
+        exchange.body(json.dumps({name: UNKNOWN_VALUE}, ensure_ascii=False)),
+        exchange.body(json.dumps({name: UNKNOWN_VALUE})),
+    ):
+        assert UNKNOWN_VALUE not in out, out
+
+
+# Hardening: default-ignorable characters (not only Cf) inside a known secret.
+
+
+@pytest.mark.parametrize(
+    "hider", ["\ufe0f", "\u034f", "&#xfe0f;", "\\ufe0f", "%EF%B8%8F", "\u3164"]
+)
+def test_an_ignorable_character_inside_a_known_secret_does_not_hide_it(hider: str):
+    secret = "ignorable-" + "made-up-0046"
+    masker = Masker(known_secrets=[secret])
+    out = masker.text(f"x {secret[:9]}{hider}{secret[9:]} y")
+    assert out == "x *** y", out
+    configured = Masker(known_secrets=[secret[:9] + "\u034f" + secret[9:]])
+    assert configured.text(f"x {secret} y") == "x *** y"
