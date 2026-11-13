@@ -11,7 +11,7 @@ import base64
 import html
 import json
 import time
-from urllib.parse import quote
+from urllib.parse import quote, unquote, unquote_plus
 
 import pytest
 
@@ -811,3 +811,110 @@ def test_a_known_secret_percent_encoded_twice_is_masked():
     twice = quote(quote(secret, safe="").replace("-", "%2D"), safe="")
     out = Masker(known_secrets=[secret]).target("/?q=" + twice)
     assert "credential" not in out and "%2563" not in out, out
+
+
+# --- fix round 4, follow-up: decoding never loses an earlier mask ----------------------------
+
+PLUS_SECRET = "ab" + "+cd-made-up-0042"
+PERCENT_SECRET = "pw" + "%2Bvalue-made-up-7"
+TRIGGER = "q=password%3D" + REMOTE  # a pair that only shows decoded: the decoded form is kept
+
+
+@pytest.mark.parametrize(
+    ("secret", "spelled"),
+    [
+        (PLUS_SECRET, PLUS_SECRET),
+        (PLUS_SECRET, quote(PLUS_SECRET, safe="")),
+        (PERCENT_SECRET, PERCENT_SECRET),
+        (PERCENT_SECRET, quote(PERCENT_SECRET, safe="")),
+    ],
+    ids=["plus", "plus-encoded", "percent", "percent-encoded"],
+)
+def test_a_known_secret_that_decoding_changes_stays_masked(secret: str, spelled: str):
+    masker = Masker(known_secrets=[secret])
+    # The second trigger only shows once "+" is decoded as a space.
+    plus_trigger = "q=password+%3D+" + REMOTE
+    for text in (
+        f"x {spelled} {TRIGGER}",
+        f"/a?{TRIGGER}&s={spelled}",
+        f"x {spelled} {plus_trigger}",
+    ):
+        out = masker.text(text)
+        assert REMOTE not in out, out
+        for view in (out, unquote(out), unquote_plus(out)):
+            assert "made-up" not in view, out
+
+
+def test_equal_counts_of_known_values_before_and_after_decoding_lose_no_mask():
+    # One value decoding hides (it holds a literal "%2B"), one decoding reveals (encoded
+    # twice): the counts are the same, the spans are not.
+    hidden, revealed = PERCENT_SECRET, "rv" + "-made-up-value-0043"
+    twice = quote(quote(revealed, safe="").replace("-", "%2D"), safe="")
+    masker = Masker(known_secrets=[hidden, revealed])
+
+    out = masker.text(f"x {hidden} y {twice}")
+
+    for view in (out, unquote(out), unquote(unquote(out)), unquote_plus(out)):
+        assert "made-up" not in view, out
+
+
+def test_a_secret_with_a_literal_percent_escape_split_by_an_escaped_format_character():
+    # Found by the fuzz run: decoding percent escapes first would change the secret itself.
+    secret = "LbP+juDS" + "7XG%2DCSp9-made-up"
+    spelled = secret[:12] + "\\xe2\\x80\\x8b" + secret[12:]
+    out = Masker(known_secrets=[secret]).text(f"x {spelled} q=password%3D{REMOTE}")
+    assert "made-up" not in out and REMOTE not in out, out
+
+
+def test_a_secret_with_a_literal_percent_escape_and_a_separator_encoded_twice():
+    # The fuzz case: "%25E2%2580%258B" needs two percent rounds, the first of which turns
+    # the secret's own "%2D" into "-". The decoded spelling is a known value as well.
+    secret = 'LbP+juDS"7XG' + "%2DCSp9YG2CM<DFBqr<Yp"
+    spelled = (
+        secret[:24]
+        + "\\xe2\\x80\\x8b"
+        + secret[24:28]
+        + "\\U000E0001"
+        + secret[28:31]
+        + "%25E2%2580%258B"
+        + secret[31:]
+    )
+    out = Masker(known_secrets=[secret]).text("a " * 50 + spelled + " tail")
+    for view in (out, unquote(out), unquote(unquote(out))):
+        assert "CSp9YG" not in view and "DFBqr" not in view, out
+
+
+@pytest.mark.parametrize("reference", ["&#x5c;", "&#92;", "&#x005C;"])
+def test_a_backslash_run_written_as_references_is_masked(reference: str):
+    secret = "dGtaLV2" + "\\" * 2 + "HihL-made-up"
+    spelled = secret.replace("\\", reference)
+    out = Masker(known_secrets=[secret]).text(f"?got={spelled} end")
+    assert out == "?got=*** end", out
+
+
+REF_SECRET = "ab" + "&#173;cd-made-up-0044"  # holds a literal reference to a soft hyphen
+SPLIT_TRIGGER = "pass&#8203;word=" + REMOTE  # a pair that only shows once the escape goes
+
+
+def test_a_known_secret_that_the_escape_round_changes_stays_masked():
+    out = Masker(known_secrets=[REF_SECRET]).text(f"x {REF_SECRET} {SPLIT_TRIGGER}")
+    readable = html.unescape(out).replace("\u200b", "").replace("\u00ad", "")
+    assert "made-up" not in readable and REMOTE not in readable, out
+
+
+def test_equal_counts_in_the_escape_round_lose_no_mask():
+    # The escape round hides one known value (its literal reference goes) and reveals one
+    # (split by an escaped format character): the counts are the same, the spans are not.
+    revealed = "rv" + "-made-up-value-0045"
+    split = revealed[:6] + "&#8203;" + revealed[6:]
+    out = Masker(known_secrets=[REF_SECRET, revealed]).text(f"x {REF_SECRET} y {split}")
+    readable = html.unescape(out).replace("\u200b", "")  # as a reader would decode it
+    assert "made-up" not in readable, out
+
+
+def test_a_carried_spelling_shorter_than_a_known_secret_is_not_searched():
+    # "%41%42%43%44" decodes to "ABCD": as short as that, a value is not searched (the
+    # same threshold as for known secrets); the spelling given is still masked.
+    secret = "%41%42" + "%43%44"
+    out = Masker(known_secrets=[secret]).text(f"x {secret} q=password%3D{REMOTE}")
+    assert REMOTE not in out and secret not in out, out

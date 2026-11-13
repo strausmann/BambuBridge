@@ -423,8 +423,12 @@ def _run_pattern(run: str) -> tuple[str, int]:
         {variant for form in _char_forms("\\") for variant in _escape_twice(form)},
         key=lambda f: (-len(f), f),
     )
-    longest = max(len(form) for form in forms) * len(run)
-    return "(?>" + "|".join(f"(?i:{re.escape(form * len(run))})" for form in forms) + ")", longest
+    references, reference_length = _reference_patterns("\\")
+    # References (``&#x5c;``) cannot be mistaken for a backslash: one per character.
+    referenced = "(?:" + "|".join(references) + f"){{{len(run)}}}"
+    longest = max(max(len(form) for form in forms), reference_length) * len(run)
+    alternatives = [referenced, *(f"(?i:{re.escape(form * len(run))})" for form in forms)]
+    return "(?>" + "|".join(alternatives) + ")", longest
 
 
 _LINE_BREAK = r"(?:\r?\n)?"
@@ -517,8 +521,11 @@ class Masker:
                     leaves.add(_fold(parts[-1]))
         self._leaf_names = frozenset(leaves)
         secrets = {_known_secret(entry) for entry in _entries(known_secrets)}
-        # Also as the text is searched: without format characters (the input loses them).
+        # Also as the text is searched: without format characters (the input loses them),
+        # and percent-decoded (a secret that holds a literal ``%2D`` or ``+`` reads
+        # differently in a decoded text, and decoding can be what reveals the rest of it).
         secrets |= {_FORMAT.sub("", secret) for secret in secrets}
+        secrets |= {decode(secret) for secret in secrets for decode in (unquote, unquote_plus)}
         # Longest first: at one position the longest secret is the one that is replaced.
         ordered = sorted(
             (s for s in secrets if len(s) >= MIN_KNOWN_SECRET_LENGTH), key=lambda s: (-len(s), s)
@@ -559,9 +566,6 @@ class Masker:
             return text
         out.append(text[position:])
         return "".join(out)
-
-    def _count_known(self, text: str) -> int:
-        return sum(1 for _ in self._known_spans(text))
 
     def _has_known(self, text: str) -> bool:
         return next(self._known_spans(text), None) is not None
@@ -683,27 +687,35 @@ class Masker:
         Invisible format characters (Unicode category Cf) are taken out first: they would
         otherwise split a known secret so that its search no longer finds it.
         """
-        # Decoding runs on the text with the name rules applied but the known values still in
-        # place: a known secret that is also a name (``password%3Dx``) must still be a name
-        # once ``%3D`` is decoded. What decoding brings to light is masked in full.
-        out, names = self._masked_pair(_FORMAT.sub("", value))
-        decoders: tuple[Callable[[str], str], ...] = (unquote, unquote_plus, _drop_encoded_format)
+        # Two probes are decoded each round. ``names``: the text with the name rules applied
+        # but the known values still in place, so a known secret that is also a name
+        # (``password%3Dx``) is still a name once ``%3D`` is decoded. ``shown``: the output
+        # so far, so that whatever it still hides in an encoded form is found. If either
+        # finds something, the decoded form is kept, masked in full; it never loses a mask:
+        # every known value masked before is carried along in its decoded spelling (a secret
+        # with ``+`` or ``%2B`` reads differently once decoded) and masked as well.
+        base = _FORMAT.sub("", value)
+        out, names = self._masked_pair(base)
+        seen = {base[start:end] for start, end in self._known_spans(base)}
+        # Escaped format characters first: that leaves percent escapes alone, so a secret
+        # that holds a literal ``%2D`` is still itself (the percent rounds drop them as well).
+        decoders: tuple[Callable[[str], str], ...] = (_drop_encoded_format, unquote, unquote_plus)
         for decode in decoders:
-            probe = names
+            probe, shown, carried = names, out, seen
             for _ in range(_DECODE_ROUNDS):
-                # Without the NUL an escape can bring in (taken out later, it could join two
-                # halves of a secret) and without format characters, also written as escapes.
-                decoded = _drop_encoded_format(_FORMAT.sub("", decode(probe).replace("\x00", "")))
-                if decoded == probe:
+                decoded, decoded_shown = _normalized(decode, probe), _normalized(decode, shown)
+                if decoded == probe and decoded_shown == shown:
                     break
-                decoded_out, decoded_names = self._masked_pair(decoded)
-                if decoded_names != decoded or self._count_known(decoded) > self._count_known(
-                    probe
-                ):
-                    names = probe = decoded_names
-                    out = decoded_out
+                carried = {_normalized(decode, value) for value in carried}
+                full, rules_only = self._masked_pair(decoded)
+                if rules_only != decoded or self._masked_pair(decoded_shown)[0] != decoded_shown:
+                    out = shown = _apply(full, _literal_spans(full, carried))
+                    names = probe = rules_only
+                    seen = carried = carried | {
+                        decoded[start:end] for start, end in self._known_spans(decoded)
+                    }
                 else:
-                    probe = decoded
+                    probe, shown = decoded, decoded_shown
         return out
 
     def value(self, value: Any) -> Any:
@@ -794,6 +806,25 @@ class Masker:
             except ValueError:
                 pass  # not JSON after all: the text rules below still apply
         return self.text(text)
+
+
+def _normalized(decode: Callable[[str], str], text: str) -> str:
+    """One decoding round: without the NUL an escape can bring in (taken out later, it could
+    join two halves of a secret) and without format characters, also written as escapes."""
+    return _drop_encoded_format(_FORMAT.sub("", decode(text).replace("\x00", "")))
+
+
+def _literal_spans(text: str, values: Collection[str]) -> set[tuple[int, int]]:
+    """Every occurrence of each value (none shorter than a known secret can be)."""
+    spans: set[tuple[int, int]] = set()
+    for value in values:
+        if len(value) < MIN_KNOWN_SECRET_LENGTH:
+            continue
+        start = text.find(value)
+        while start >= 0:
+            spans.add((start, start + len(value)))
+            start = text.find(value, start + 1)
+    return spans
 
 
 def _apply(value: str, spans: set[tuple[int, int]]) -> str:
