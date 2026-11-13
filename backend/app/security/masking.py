@@ -257,7 +257,9 @@ _NAME_LETTERS = str.maketrans({"\u0131": "i"})
 
 
 def _normalize_name(name: str) -> str:
-    """NFKC, without combining marks (``P\u0130N`` -> ``PIN``), the dotless i as ``i``."""
+    """NFKC, without format characters (``To\u200bken`` -> ``Token``: the written name drops
+    them too) and combining marks (``P\u0130N`` -> ``PIN``), the dotless i as ``i``."""
+    name = _FORMAT.sub("", name)
     decomposed = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", name))
     bare = "".join(char for char in decomposed if not unicodedata.combining(char))
     return unicodedata.normalize("NFC", bare).translate(_NAME_LETTERS)

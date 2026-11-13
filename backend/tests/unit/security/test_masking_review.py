@@ -606,7 +606,7 @@ def test_names_ending_in_pass_or_pw_hold_a_credential(name: str):
         ("\\" * 40 + "x", "\\" * 65_536),
         ("&" * 40 + "x", "&amp;" * 13_107),
         ("<" * 40 + "x", "&#x00003c;" * 6_553),
-        ("a" * 40, "a​" * 32_768),
+        ("a" * 40, "a\u200b" * 32_768),
         ('"' * 40 + "x", '\\\\\\"' * 16_384),
         ("a" * 40, "\\" * 65_536 + "u200b"),
         ("a" * 40, "&#" * 32_768),
@@ -631,7 +631,7 @@ def test_the_round_2_spellings_take_linear_time(secret: str, text: str):
 
 # --- fix round 2, follow-up: Cf characters at the cut and encoded, backslash runs ---------
 
-ZWSP = "​"
+ZWSP = "\u200b"
 SECRET_R2 = "fake-secret-value-0001"
 
 
@@ -732,3 +732,35 @@ def test_text_and_the_cut_resolve_mixed_escapes_the_same_way():
     )
     out = Masker(known_secrets=[SECRET_R2]).text(f"x {spelled} y")
     assert not any(fragment in out for fragment in _fragments(SECRET_R2)), out
+
+
+# --- fix round 3 (audit run 9) ---------------------------------------------------------------
+
+UNKNOWN_VALUE = "unknown-" + "peer-value-" + "1234"  # not a known secret: only the name masks it
+INVISIBLE = ["\u200b", "\u00ad", "\u2060", "\ufeff", "\u200d"]
+SPLIT_NAMES = [
+    ("To", "ken"),
+    ("Se", "cret"),
+    ("pa", "ssword"),
+    ("Author", "ization"),
+    ("Coo", "kie"),
+]
+
+
+@pytest.mark.parametrize("invisible", INVISIBLE)
+@pytest.mark.parametrize(("head", "tail"), SPLIT_NAMES)
+def test_a_format_character_inside_a_name_does_not_hide_its_value(
+    invisible: str, head: str, tail: str
+):
+    name = head + invisible + tail
+    masker = Masker()
+
+    assert is_sensitive_name(name)
+    for out in (
+        json.dumps(masker.value({name: UNKNOWN_VALUE}), ensure_ascii=False),
+        masker.body(json.dumps({name: UNKNOWN_VALUE, "token": "t"}, ensure_ascii=False)),
+        masker.body(json.dumps({name: UNKNOWN_VALUE}, ensure_ascii=False)),
+        masker.body(json.dumps({name: UNKNOWN_VALUE, "token": "t"})),  # name as \uXXXX
+        masker.text(f"{name}={UNKNOWN_VALUE}"),
+    ):
+        assert UNKNOWN_VALUE not in out, out
