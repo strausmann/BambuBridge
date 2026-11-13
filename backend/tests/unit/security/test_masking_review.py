@@ -986,10 +986,12 @@ def _exchange(masker: Masker):
     return _Exchange(masker)
 
 
-def test_a_decoding_round_that_would_reveal_a_fragment_is_not_adopted(monkeypatch):
+def test_a_decoding_round_that_would_reveal_a_fragment_masks_it(monkeypatch):
     # The backstop, shown by breaking the positional decoding on purpose: the known spans
     # are decoded together with what stands before them again (the run-10 regression).
-    # The round then shows a fragment the previous output did not, and is not adopted.
+    # The round shows a fragment of the secret. It is still kept, so the encoded
+    # secret-named pair it reveals is masked, and the fragment is masked as well: rejecting
+    # the round would leave the pair readable.
     import app.security.masking as masking
 
     def joined(decode, segments):
@@ -999,7 +1001,28 @@ def test_a_decoding_round_that_would_reveal_a_fragment_is_not_adopted(monkeypatc
     monkeypatch.setattr(masking, "_decode_segments", joined)
     out = Masker(known_secrets=[HEX_SECRET]).text("code=%" + HEX_SECRET + " token%3Dabc")
     assert not _shows_a_fragment(out, HEX_SECRET), out
-    assert out == "code=%*** token%3Dabc"
+    assert out == "code=*** token=***"
+
+
+def test_many_occurrences_of_one_secret_take_linear_time():
+    # The fragment check costs the number of distinct known values, not of occurrences.
+    masker = Masker(known_secrets=[HEX_SECRET])
+    unit = "%" + HEX_SECRET + " "
+    trigger = " token%3D" + REMOTE
+    count = (65_536 - len(trigger)) // len(unit)
+
+    def seconds(text: str) -> float:
+        best = float("inf")
+        for _ in range(3):
+            started = time.perf_counter()
+            out = masker.text(text)
+            best = min(best, time.perf_counter() - started)
+        assert REMOTE not in out and not _shows_a_fragment(out, HEX_SECRET)
+        return best
+
+    single = seconds(unit * (count // 2) + trigger)
+    double = seconds(unit * count + trigger)
+    assert double / max(single, 1e-3) < 3.0, (single, double)
 
 
 # F2: every mark (category M, also those of combining class 0) and every

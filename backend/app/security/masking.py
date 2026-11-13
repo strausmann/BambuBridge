@@ -56,7 +56,8 @@ then done once more on the decoded text (escaped invisible characters dropped, t
 escapes resolved, up to ``_DECODE_ROUNDS`` times each, for an address encoded into another
 one): if that finds anything, the decoded text is what is stored. What a rule or a known
 value found is decoded on its own and masked at its place in the decoded text, so nothing in
-front of it can form an escape with its first characters.
+front of it can form an escape with its first characters; in a decoded text every part of
+a known secret at most two characters shorter than it is masked as well.
 
 Masking prefers hiding too much over showing a secret: a field called ``monkey`` is masked
 because its name contains ``key``. What it cannot do: find a secret nobody named or marked,
@@ -588,6 +589,18 @@ class Masker:
         )
         patterns = [_secret_pattern(secret) for secret in ordered]
         self.longest_secret = max((longest for _, longest in patterns), default=0)
+        # The parts of each known secret at most two characters shorter than it, one
+        # alternation for all: a decoding round masks them wherever they show (fail closed).
+        # Their number follows the distinct known values, not their occurrences.
+        fragments = sorted(
+            {fragment for secret in ordered for fragment in _fragments(secret)},
+            key=lambda f: (-len(f), f),
+        )
+        self._fragment = (
+            re.compile("(?=(" + "|".join(re.escape(f) for f in fragments) + "))")
+            if fragments
+            else None
+        )
         # A lookahead finds overlapping occurrences too.
         self._known = (
             re.compile("(?=(" + "|".join(pattern for pattern, _ in patterns) + "))")
@@ -611,6 +624,12 @@ class Masker:
             start, end = match.start(), match.end(1)
         if end >= 0:
             yield start, end
+
+    def _fragment_spans(self, text: str) -> set[tuple[int, int]]:
+        """Every occurrence of a part of a known secret two characters shorter than it."""
+        if self._fragment is None:
+            return set()
+        return {(match.start(), match.end(1)) for match in self._fragment.finditer(text)}
 
     def _replace_known(self, text: str) -> str:
         out: list[str] = []
@@ -747,9 +766,10 @@ class Masker:
         # text, so a known secret or masked word that is also a name (``password%3Dx``,
         # ``basic password+%3D+x``) is still a name once ``%3D`` is decoded. A decoded round
         # is kept when it shows anything new (a name rule or a known value outside the
-        # recorded positions), masked in full, and only if it shows no fragment of a
-        # carried known value that the previous output did not show already (fail closed:
-        # otherwise the previous output stays).
+        # recorded positions), masked in full; any part of a known secret at most two
+        # characters shorter than it is masked there as well (fail closed: whatever
+        # decoding did to a value, the round never shows most of it, and it is never
+        # rejected, which would leave what it revealed unmasked).
         base = _FORMAT.sub("", value)
         rules = self._rule_spans(base)
         known = set(self._known_spans(base))
@@ -767,12 +787,14 @@ class Masker:
                 at = {(start, end) for start, end, _ in regions}
                 rules = self._rule_spans(decoded)
                 known = set(self._known_spans(decoded))
-                literal = _literal_spans(decoded, carried)
-                full = _apply(decoded, rules | known | at | literal)
-                spellings = [piece for piece, kind in probe if kind == _KNOWN] + carried
+                literal = _literal_spans(decoded, set(carried))
                 shows_more = _apply(decoded, rules | known | at) != _apply(decoded, at)
-                if shows_more and not _reveals(full, out, spellings, decode):
-                    out = full
+                if shows_more:
+                    # Fail closed: a fragment of a known secret the decoded text shows
+                    # anyway (a value its neighbours changed in decoding) is masked as well.
+                    out = _apply(
+                        decoded, rules | known | at | literal | self._fragment_spans(decoded)
+                    )
                     regions += _regions(rules, known | literal)
                     adopted = _segments(decoded, regions)
                 probe = _segments(decoded, regions)
@@ -934,21 +956,6 @@ def _fragments(spelling: str) -> set[str]:
     """The parts of a spelling at most two characters shorter than it."""
     size = len(spelling) - 2
     return {spelling[i : i + size] for i in range(len(spelling) - size + 1)}
-
-
-def _reveals(
-    candidate: str, previous: str, spellings: Collection[str], decode: Callable[[str], str]
-) -> bool:
-    """Whether ``candidate`` shows a fragment of a carried spelling (one long enough to be a
-    known secret) that ``previous`` did not show, as written or decoded the same way."""
-    before = (previous, _normalized(decode, previous))
-    for spelling in spellings:
-        if len(spelling) < MIN_KNOWN_SECRET_LENGTH:
-            continue
-        for fragment in _fragments(spelling):
-            if fragment in candidate and not any(fragment in text for text in before):
-                return True
-    return False
 
 
 def _literal_spans(text: str, values: Collection[str]) -> set[tuple[int, int]]:
