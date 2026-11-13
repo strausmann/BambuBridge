@@ -137,6 +137,41 @@ _BOUNDARY_LINE = re.compile(r"\r?\n--")
 _SURROGATE = re.compile("[\ud800-\udfff]")
 
 
+# A format character written as an escape or reference: HTML/XML numeric reference, JSON or
+# Python ``\\u``/``\\x`` escape (also escaped twice), or percent-encoded UTF-8.
+_ENCODED_CHARACTER = re.compile(
+    r"(?i:&\#x0{0,8}([0-9a-f]{1,6});|&\#0{0,8}([0-9]{1,7});|(?<!\\)\\{1,8}u([0-9a-f]{4})"
+    r"|((?<!\\)(?:\\{1,8}x[0-9a-f]{2}){1,4})|((?:%[0-9a-f]{2}){1,4}))"
+)
+
+
+def _encoded_character(match: re.Match[str]) -> str:
+    """The character an escape stands for, or ``""`` for a format character, else the
+    escape as it was."""
+    hex_ref, dec_ref, unicode_escape, hex_bytes, percent = match.groups()
+    try:
+        if hex_ref or dec_ref or unicode_escape:
+            chars = chr(int(hex_ref or unicode_escape, 16) if not dec_ref else int(dec_ref))
+        else:
+            hexes = re.findall(r"[0-9a-fA-F]{2}", (hex_bytes or percent).replace("x", " "))
+            data = bytes(int(h, 16) for h in hexes)
+            try:
+                chars = data.decode("utf-8")
+            except UnicodeDecodeError:
+                chars = data.decode("latin-1") if len(data) == 1 else ""
+    except ValueError, OverflowError:
+        return match.group()
+    if chars and all(unicodedata.category(char) == "Cf" for char in chars):
+        return ""
+    return match.group()
+
+
+def _drop_encoded_format(text: str) -> str:
+    """``text`` without format characters written as escapes (``&#8203;``, ``%E2%80%8B``,
+    ``\\u200b``): decoded, they would split a known secret just as the characters do."""
+    return _ENCODED_CHARACTER.sub(_encoded_character, text)
+
+
 def _format_characters() -> re.Pattern[str]:
     """All characters of Unicode category Cf (zero-width space, soft hyphen, byte order
     mark, word joiner ...). They are invisible, so they are taken out of a text before the
@@ -274,6 +309,28 @@ def _char_pattern(char: str) -> tuple[str, int]:
     return "(?>" + "|".join([*references, *(_form_pattern(f) for f in forms)]) + ")", longest
 
 
+def _runs(secret: str) -> list[str]:
+    """``secret`` in runs: a run of backslashes is one unit, every other character one."""
+    return [match.group() for match in re.finditer(r"\\+|.", secret, re.DOTALL)]
+
+
+def _run_pattern(run: str) -> tuple[str, int]:
+    """The atomic group for one unit of :func:`_runs`.
+
+    A backslash run is spelled the same way throughout (``k`` backslashes, ``2k`` when
+    escaped, ``4k`` when escaped twice ...): matched one by one, the escaped form of the
+    first backslash would take the second one and starve the next group.
+    """
+    if len(run) == 1:
+        return _char_pattern(run)
+    forms = sorted(
+        {variant for form in _char_forms("\\") for variant in _escape_twice(form)},
+        key=lambda f: (-len(f), f),
+    )
+    longest = max(len(form) for form in forms) * len(run)
+    return "(?>" + "|".join(f"(?i:{re.escape(form * len(run))})" for form in forms) + ")", longest
+
+
 _LINE_BREAK = r"(?:\r?\n)?"
 
 
@@ -319,7 +376,7 @@ def _literal_spellings(secret: str) -> set[str]:
 
 def _secret_pattern(secret: str) -> tuple[str, int]:
     """One alternation for all spellings of ``secret``, and the longest it can match."""
-    groups = [_char_pattern(char) for char in secret]
+    groups = [_run_pattern(run) for run in _runs(secret)]
     per_char = "".join(group for group, _ in groups)
     longest = sum(length for _, length in groups)
     b64, b64_longest = _base64_patterns(secret.encode("utf-8", "surrogatepass"))
@@ -537,13 +594,13 @@ class Masker:
         otherwise split a known secret so that its search no longer finds it.
         """
         out = self._mask_once(_FORMAT.sub("", value))
-        decoders: tuple[Callable[[str], str], ...] = (unquote, unquote_plus)
+        decoders: tuple[Callable[[str], str], ...] = (unquote, unquote_plus, _drop_encoded_format)
         for decode in decoders:
             probe = out
             for _ in range(_DECODE_ROUNDS):
                 # Without the NUL an escape can bring in: taken out later, it could join two
                 # halves of a secret.
-                decoded = decode(probe).replace("\x00", "")
+                decoded = _FORMAT.sub("", decode(probe).replace("\x00", ""))
                 if decoded == probe:
                     break
                 masked = self._mask_once(decoded)
@@ -651,6 +708,9 @@ class Masker:
         are dropped as well. A known secret that would straddle the cut is left out whole:
         half a secret would no longer be recognised and masked.
         """
+        # The same text that masking will see: without invisible format characters, so that
+        # a secret they split is found here as well and never cut in two.
+        text = _FORMAT.sub("", text)
         if complete and len(text) <= limit:
             return text, False
         cut = min(limit, len(text) if complete else max(0, len(text) - self.longest_secret))

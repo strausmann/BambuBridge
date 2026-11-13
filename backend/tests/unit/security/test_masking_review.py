@@ -608,10 +608,89 @@ def test_names_ending_in_pass_or_pw_hold_a_credential(name: str):
         ("<" * 40 + "x", "&#x00003c;" * 6_553),
         ("a" * 40, "a​" * 32_768),
         ('"' * 40 + "x", '\\\\\\"' * 16_384),
+        ("a" * 40, "\\" * 65_536 + "u200b"),
+        ("a" * 40, "&#" * 32_768),
+        ("a" * 40, "%e2%80" * 10_922),
     ],
-    ids=["backslashes", "named-references", "numeric-references", "format-characters", "escaped"],
+    ids=[
+        "backslashes",
+        "named-references",
+        "numeric-references",
+        "format-characters",
+        "escaped",
+        "backslashes-before-an-escape",
+        "reference-starts",
+        "percent-runs",
+    ],
 )
 def test_the_round_2_spellings_take_linear_time(secret: str, text: str):
     started = time.monotonic()
     Masker(known_secrets=[secret]).text(text)
     assert time.monotonic() - started < 5
+
+
+# --- fix round 2, follow-up: Cf characters at the cut and encoded, backslash runs ---------
+
+ZWSP = "​"
+SECRET_R2 = "fake-secret-value-0001"
+
+
+def _fragments(secret: str, size: int = 6) -> list[str]:
+    return [secret[i : i + size] for i in range(len(secret) - size + 1)]
+
+
+@pytest.mark.parametrize("offset", [-12, -8, -4, -1, 0, 1])
+def test_a_secret_split_by_a_format_character_across_the_cut_leaves_no_fragment(offset: int):
+    masker = Masker(known_secrets=[SECRET_R2])
+    spelled = SECRET_R2[:6] + ZWSP + ZWSP + SECRET_R2[6:14] + ZWSP + SECRET_R2[14:]
+    limit = 100
+    text = "a " * ((limit + offset) // 2) + spelled + " tail"
+
+    prefix, cut = masker.safe_prefix(text, complete=True, limit=limit)
+    out = masker.text(prefix)
+
+    assert cut is True
+    assert not any(fragment in out for fragment in _fragments(SECRET_R2)), out
+
+
+@pytest.mark.parametrize(
+    "separator",
+    [
+        "%E2%80%8B",
+        "%e2%80%8b",
+        "&#8203;",
+        "&#x200B;",
+        "&#x0200b;",
+        "\\u200b",
+        "\\\\u200b",
+        "\\xad",
+        "%C2%AD",
+        "%25E2%2580%258B",
+        "\\xe2\\x80\\x8b",
+    ],
+)
+def test_a_secret_split_by_an_encoded_format_character_is_masked(separator: str):
+    masker = Masker(known_secrets=[SECRET_R2])
+    spelled = SECRET_R2[:5] + separator + SECRET_R2[5:12] + separator + SECRET_R2[12:]
+    for text in (f"x {spelled} y", f"/a?q={spelled}&n=1"):
+        out = masker.text(text)
+        assert not any(fragment in out for fragment in _fragments(SECRET_R2)), out
+
+
+def test_a_secret_with_a_run_of_backslashes_is_masked_in_a_mixed_spelling():
+    secret = "bnGHzX" + "\\" * 2 + "SzDT+YxMBWcgw9wQPm?USgb"
+    masker = Masker(known_secrets=[secret])
+    for spelled in (
+        _go_html(secret),
+        json.dumps(secret)[1:-1].replace("+", "\\u002B"),
+        "\\" * 2 + secret,
+        secret.replace("\\", "\\" * 4),
+    ):
+        out = masker.text(f"got {spelled} end")
+        assert MASK in out, out
+        assert "SzDT" not in out and "bnGHzX" not in out
+
+
+def test_escapes_that_are_no_format_character_stay_as_they_are():
+    text = "a &#9999999; b &#x110000; c &#43; d %41 e \\u0041 f \\xff g %ff"
+    assert Masker(known_secrets=[SECRET_R2]).text(text) == text

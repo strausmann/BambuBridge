@@ -208,7 +208,9 @@ in this order:
    - the user information in `scheme://user:password@host` up to the last `@` (the whole of
      it when there is no colon), and the credential after `Bearer` or `Basic`.
 
-   Invisible format characters (zero-width space, soft hyphen, ...) are removed first.
+   Invisible format characters (zero-width space, soft hyphen, ...) are removed first, also
+   before the first cut and in each decoding round, and also when written as an escape
+   (`&#8203;`, `%E2%80%8B`, `\u200b`) inside a known secret.
    A JSON body is masked on its parsed values (after a byte order mark); an object that
    repeats a name is rewritten with the repeats numbered (`name#2`), so no parser can pick
    another value. Any other text is searched at every position for `"name": value` and
