@@ -363,6 +363,7 @@ async def test_event_payload_is_still_checked_against_its_schema(
 async def test_delete_forgets_per_instance_state(
     mgr: ProviderManager, engine: AsyncEngine, app: FastAPI
 ):
+    mgr.step_timeout = 10.0  # not a timeout test (see the rejected-tick test)
     async with make_session_factory(engine)() as session:
         row = await repo.create(
             session,
@@ -543,6 +544,9 @@ async def test_a_rejected_tick_names_the_field_and_nothing_of_its_value(
     mgr: ProviderManager, engine: AsyncEngine, app: FastAPI, caplog: pytest.LogCaptureFixture
 ):
     """A harmless label that looks like a credential: fail closed, but say where."""
+    # Not a timeout test: the fixture's 0.3 s is too tight for building the masker under
+    # serial coverage (it failed once in make ci that way).
+    mgr.step_timeout = 10.0
     label = "Garage key: shelf 3"
     async with make_session_factory(engine)() as session:
         row = await repo.create(
