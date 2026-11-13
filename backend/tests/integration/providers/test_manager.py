@@ -433,3 +433,41 @@ async def test_status_message_too_large_to_mask_is_replaced(
     )
     assert r.json()["status"]["message"] == f"<omitted: {len(message)} bytes>"
     assert TOKEN.encode() not in r.content
+
+
+async def test_status_mask_follows_a_changed_secret(
+    admin_client: httpx.AsyncClient, manager: ProviderManager, monkeypatch: pytest.MonkeyPatch
+):
+    """The cleaned status of the old secrets is never reused for the new ones."""
+    from datetime import UTC, datetime
+
+    from app.providers.base import ProviderStatus
+    from tests.integration.providers import fakes
+
+    second = "second-secret-4711"
+    # The same status object every time: it compares equal before and after the change.
+    fixed = ProviderStatus("connected", f"using {second}", datetime.now(UTC))
+    monkeypatch.setattr(fakes.RecordingProvider, "status", lambda self: fixed)
+    created = await create(
+        admin_client,
+        kind="integration",
+        type_name="recording",
+        name="rotating",
+        config={"password": "first-secret-0815"},
+    )
+    iid = created["id"]
+    before = await eventually(
+        lambda: state_of(admin_client, iid), lambda s: s["state"] == "connected", 5
+    )
+    assert before["message"] == f"using {second}"  # not a secret of the instance yet
+    started = len(fakes.RecordingProvider.starts)
+    r = await admin_client.patch(f"{PROVIDERS_URL}/{iid}", json={"config": {"password": second}})
+    assert r.status_code == 200
+
+    async def restarted() -> int:
+        return len(fakes.RecordingProvider.starts)
+
+    await eventually(restarted, lambda n: n > started, 5)
+    r = await admin_client.get(f"{PROVIDERS_URL}/{iid}")
+    assert second.encode() not in r.content
+    assert r.json()["status"]["message"] == "using ***"

@@ -209,13 +209,15 @@ class ProviderManager:
         # The configuration version (``updated_at``) each instance was last applied with.
         self._applied: dict[uuid.UUID, datetime] = {}
         self._locks: dict[uuid.UUID, asyncio.Lock] = {}
-        # Per instance: (what the provider reported, its cleaned form).
-        self._status_cache: dict[uuid.UUID, tuple[ProviderStatus, ProviderStatus]] = {}
+        # Per instance: ((reported status, secrets, secret paths), cleaned status).
+        self._status_cache: dict[
+            uuid.UUID,
+            tuple[tuple[ProviderStatus, tuple[str, ...], frozenset[str]], ProviderStatus],
+        ] = {}
         # Calls that timed out: cancelled, kept referenced until they end on their own.
         # Abandoned calls are not per-instance state: they leave the set when they end, and
         # dropping one earlier would let a still-running task be garbage collected.
         self._abandoned: set[asyncio.Task[Any]] = set()
-        self.last_abandoned: asyncio.Task[Any] | None = None
         self.listener = ProviderListener(engine, self)
 
     # -- lifecycle ----------------------------------------------------------
@@ -260,11 +262,14 @@ class ProviderManager:
 
         Fail closed: a provider may put an error text or a credential into its message,
         and the message is shown by the API and stored in ``provider_instances``. The result
-        is cached per instance and reported status, so a read of an unchanged status does
-        no masking work on the event loop.
+        is cached per instance, reported status and masking inputs (secrets, secret paths),
+        so a read of an unchanged status does no masking work on the event loop; a stop or
+        start of the instance drops the entry.
         """
+        # Keyed by the masking inputs as well: text cleaned with other secrets is never reused.
+        key = (reported, running.secrets, running.secret_paths)
         cached = self._status_cache.get(instance_id)
-        if cached is not None and cached[0] == reported:
+        if cached is not None and cached[0] == key:
             return cached[1]
         raw: object = reported.message  # provider code: do not trust the annotation
         if raw is None:
@@ -272,7 +277,7 @@ class ProviderManager:
         else:
             message = _clean_text(running.secret_paths, running.secrets, raw)
             cleaned = ProviderStatus(reported.state, message, reported.since)
-        self._status_cache[instance_id] = (reported, cleaned)
+        self._status_cache[instance_id] = (key, cleaned)
         return cleaned
 
     async def _set_state(
@@ -296,12 +301,13 @@ class ProviderManager:
 
     # -- steps --------------------------------------------------------------
 
-    async def _step(self, call: Coroutine[Any, Any, Any]) -> tuple[bool, Any]:
-        """Run ``call`` for at most ``step_timeout``: ``(finished, result or exception)``.
+    async def _step(self, call: Coroutine[Any, Any, Any]) -> tuple[bool, Any, asyncio.Task[Any]]:
+        """Run ``call`` for at most ``step_timeout``: ``(finished, result or exception, task)``.
 
         A call that does not finish in time is cancelled and not awaited: a provider that
         ignores the cancellation cannot hold up the manager. It stays referenced in
-        ``_abandoned`` until it ends (``last_abandoned`` is the latest one).
+        ``_abandoned`` until it ends. The task is returned to the caller, never kept in a
+        shared attribute: another apply may time out in the meantime.
         """
         task = asyncio.ensure_future(call)
         done, _ = await asyncio.wait({task}, timeout=self.step_timeout)
@@ -309,12 +315,11 @@ class ProviderManager:
             task.cancel()
             self._abandoned.add(task)
             task.add_done_callback(self._forget)
-            self.last_abandoned = task
-            return False, None
+            return False, None, task
         if task.cancelled():
-            return True, asyncio.CancelledError()
+            return True, asyncio.CancelledError(), task
         exc = task.exception()
-        return True, exc if exc is not None else task.result()
+        return True, exc if exc is not None else task.result(), task
 
     def _forget(self, task: asyncio.Task[Any]) -> None:
         self._abandoned.discard(task)
@@ -326,7 +331,8 @@ class ProviderManager:
         running = self._running.pop(instance_id, None)
         if running is None:
             return True
-        finished, outcome = await self._step(running.provider.stop())
+        self._status_cache.pop(instance_id, None)
+        finished, outcome, _ = await self._step(running.provider.stop())
         if not finished:
             await self._set_state(instance_id, "error", "timeout during stop")
             return False
@@ -376,6 +382,7 @@ class ProviderManager:
 
     async def _start(self, row: ProviderInstance) -> None:
         iid = row.id
+        self._status_cache.pop(iid, None)
         if not row.enabled:
             await self._set_state(iid, "stopped")
             return
@@ -421,12 +428,12 @@ class ProviderManager:
         except Exception as exc:
             await self._set_state(iid, "error", f"start failed ({type(exc).__name__})")
             return
-        finished, outcome = await self._step(provider.start(ctx))
+        finished, outcome, start_task = await self._step(provider.start(ctx))
         if not finished:
-            await self._set_state(iid, "error", "timeout during start")
-            # It may still finish starting after the cancellation: stop it only once the
+            # It may still finish starting after the cancellation: stop it only once its own
             # start has ended, never while it is still running.
-            self._background(self._stop_after(self.last_abandoned, provider))
+            self._background(self._stop_after(start_task, provider))
+            await self._set_state(iid, "error", "timeout during start")
             return
         if isinstance(outcome, BaseException):
             await self._set_state(iid, "error", f"start failed ({type(outcome).__name__})")
@@ -438,10 +445,9 @@ class ProviderManager:
             self._states[iid] = status
             await self._persist(iid, status.state, status.message)
 
-    async def _stop_after(self, start: asyncio.Task[Any] | None, provider: Provider) -> None:
-        if start is not None:
-            # Unbounded on purpose: a start that never ends has nothing to stop.
-            await asyncio.wait({start})
+    async def _stop_after(self, start: asyncio.Task[Any], provider: Provider) -> None:
+        # Unbounded on purpose: a start that never ends has nothing to stop.
+        await asyncio.wait({start})
         await asyncio.wait_for(provider.stop(), timeout=self.step_timeout)
 
     def _background(self, call: Awaitable[Any]) -> None:
@@ -514,7 +520,7 @@ class ProviderManager:
             provider = cls()
         except Exception as exc:
             return ProbeResult(False, f"test failed ({type(exc).__name__})", 0)
-        finished, outcome = await self._step(provider.test_connection(config, secrets))
+        finished, outcome, _ = await self._step(provider.test_connection(config, secrets))
         elapsed = int((time.monotonic() - started) * 1000)
         if not finished:
             return ProbeResult(False, "the test did not finish in time", elapsed)
@@ -549,7 +555,7 @@ class ProviderManager:
             raise UnknownActionError("no such action")
         checked = validate(action.params_schema, params)
         started = time.monotonic()
-        finished, outcome = await self._step(running.provider.run_action(name, checked))
+        finished, outcome, _ = await self._step(running.provider.run_action(name, checked))
         if not finished:
             raise ActionTimeoutError("the action did not finish in time")
         if isinstance(outcome, BaseException):

@@ -338,3 +338,45 @@ async def test_cleanup_after_start_timeout_waits_for_the_start_to_end(
         await asyncio.sleep(0.05)
     # stop() must not run while start() is still finishing.
     assert _LateStart.order == ["started", "stopped"]
+
+
+class _SlowLateStart(fakes.RecordingProvider):
+    """Finishes its start ``delay`` seconds after the cancellation; logs per object."""
+
+    type_name: ClassVar[str] = "slow_late"
+    log: ClassVar[list[tuple[int, str]]] = []
+    delays: ClassVar[list[float]] = []
+
+    async def start(self, ctx: ProviderContext) -> None:
+        delay = type(self).delays.pop(0)
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            await asyncio.sleep(delay)
+            type(self).log.append((id(self), "started"))
+
+    async def stop(self) -> None:
+        type(self).log.append((id(self), "stopped"))
+
+
+async def test_concurrent_start_timeouts_each_stop_their_own_provider_once(
+    mgr: ProviderManager, engine: AsyncEngine, app: FastAPI
+):
+    app.state.provider_registry.register(_SlowLateStart)
+    _SlowLateStart.log = []
+    # The first to time out finishes its start last.
+    _SlowLateStart.delays = [0.8, 0.1]
+    first = await _instance(engine, app, "slow_late")
+    second = await _instance(engine, app, "slow_late")
+    await asyncio.gather(mgr.apply(first), mgr.apply(second))
+    for _ in range(60):
+        if len(_SlowLateStart.log) == 4:
+            break
+        await asyncio.sleep(0.05)
+    per_object: dict[int, list[str]] = {}
+    for obj, what in _SlowLateStart.log:
+        per_object.setdefault(obj, []).append(what)
+    assert len(per_object) == 2
+    for events in per_object.values():
+        # Stopped exactly once, and only after its own start ended.
+        assert events == ["started", "stopped"], _SlowLateStart.log
