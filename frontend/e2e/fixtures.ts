@@ -36,7 +36,16 @@ export { expect };
  */
 export async function shot(page: Page, name: string, options: { fullPage?: boolean } = {}): Promise<void> {
   const dir = process.env.E2E_SCREENSHOT_DIR;
-  if (dir && test.info().project.name.endsWith("chromium")) await page.screenshot({ path: `${dir}/${name}.png`, fullPage: options.fullPage ?? true });
+  if (!dir || !test.info().project.name.endsWith("chromium")) return;
+  // The picture shows the resting state, not a sheet or a note on its way in.
+  await settled(page);
+  await page.screenshot({ path: `${dir}/${name}.png`, fullPage: options.fullPage ?? true });
+}
+
+/** No overlay entering or leaving and no animation or transition still running. */
+export async function settled(page: Page): Promise<void> {
+  await expect(page.locator("[data-entering], [data-exiting]")).toHaveCount(0);
+  await page.waitForFunction(() => document.getAnimations().every((animation) => animation.playState !== "running"));
 }
 
 export async function bootstrapToken(page: Page): Promise<string> {
@@ -60,7 +69,11 @@ export async function signedInAt(page: Page, path: string): Promise<void> {
   await signIn(page, token);
   // On a loaded machine (load average above the core count) the sign-in request has stayed
   // pending past the default five seconds without failing; the wait is for the sign-in, not a
-  // speed check.
+  // speed check. Hypothesis checked for it: the worker's first install fetches the whole
+  // precache (23 files) right after the page loads, so the sign-in POST queues behind that burst
+  // on the single-process e2e server. Measured with four busy cores (16 sign-ins, Chromium):
+  // median 1.24 s with workers blocked, 1.40 s with the worker installing, worst 1.81 s. The
+  // burst costs a little; it does not explain a request pending for five seconds.
   await expect(page.getByTestId("signed-in-user")).toBeAttached({ timeout: 20_000 });
 }
 

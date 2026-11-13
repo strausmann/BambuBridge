@@ -1112,6 +1112,15 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
+            /** @description Too many sign-in attempts; a browser navigation gets a page that moves on to the sign-in once Retry-After has passed (text/html) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
             /** @description Service Unavailable */
             503: {
                 headers: {

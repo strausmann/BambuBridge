@@ -1,12 +1,41 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
+
+/** Space between the last line of the page and the notes above it. */
+export const NOTICE_GAP_PX = 12;
+
+/**
+ * Publishes how much room the notes take as `--notice-h` on the root element (their height plus
+ * a gap, `0px` while none is shown). The page adds it to its bottom padding, so its last
+ * control can always be scrolled clear of a note instead of ending under it.
+ */
+function usePublishedHeight(ref: React.RefObject<HTMLDivElement | null>): void {
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const root = document.documentElement;
+    const observer = new ResizeObserver(([entry]) => {
+      const height = Math.ceil(entry?.contentRect.height ?? 0);
+      root.style.setProperty("--notice-h", height > 0 ? `${height + NOTICE_GAP_PX}px` : "0px");
+    });
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty("--notice-h");
+    };
+  }, [ref]);
+}
 
 /**
  * Where page-wide notes appear: above the tab bar on a phone (`aboveTabBar`), in the bottom
- * corner on a wide screen. They cover no heading and no control, and stack when there are two.
+ * corner on a wide screen. They stack when there are two, and the page keeps room below its
+ * last control for them (`--notice-h`), so they cover no heading and no control.
  */
 export function NoticeArea({ aboveTabBar, children }: { aboveTabBar: boolean; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  usePublishedHeight(ref);
   return (
     <div
+      ref={ref}
       className={`pointer-events-none fixed inset-x-0 z-30 flex flex-col items-center gap-2 pr-[max(1rem,env(safe-area-inset-right))] pl-[max(1rem,env(safe-area-inset-left))] lg:bottom-6 lg:items-end lg:pr-8 ${
         aboveTabBar ? "bottom-[calc(4rem+env(safe-area-inset-bottom)+0.75rem)]" : "bottom-[max(1rem,env(safe-area-inset-bottom))]"
       }`}

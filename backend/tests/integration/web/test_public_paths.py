@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import anyio
 import httpx
 import pytest
 
@@ -102,3 +103,77 @@ async def test_the_list_opens_nothing_else(client: httpx.AsyncClient):
     assert not is_public_file("/assets/../api/v1/settings")
     assert not is_public_file("/icons/")
     assert not is_public_file("/sw.js/x")
+
+
+async def _raw_get(app: object, path: str, raw_path: bytes) -> tuple[int, dict[str, str], bytes]:
+    """One GET straight into the ASGI app, with exactly this path and raw path (no client
+    normalises dot segments or decodes ``%2f`` on the way)."""
+    sent: list[dict[str, object]] = []
+    requested = False
+    finished = anyio.Event()
+
+    async def receive() -> dict[str, object]:
+        nonlocal requested
+        if not requested:
+            requested = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        # A file response listens for the client going away; it goes once the answer is out.
+        await finished.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+        if message["type"] == "http.response.body" and not message.get("more_body", False):
+            finished.set()
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": raw_path,
+        "root_path": "",
+        "query_string": b"",
+        "headers": [(b"host", b"test")],
+        "client": ("127.0.0.1", 1234),
+        "server": ("test", 80),
+    }
+    await app(scope, receive, send)  # type: ignore[operator]
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")  # type: ignore[misc]
+    headers = {k.decode().lower(): v.decode() for k, v in start["headers"]}  # type: ignore[union-attr]
+    return start["status"], headers, body  # type: ignore[return-value]
+
+
+@pytest.mark.parametrize(
+    ("path", "raw_path"),
+    [
+        ("/sw.js/", b"/sw.js/"),
+        ("/sw.js/", b"/sw.js%2f"),
+        ("/./sw.js", b"/./sw.js"),
+        ("/icons/./icon-192.png", b"/icons/./icon-192.png"),
+        ("/assets//index-abc123.js", b"/assets//index-abc123.js"),
+        ("/manifest.webmanifest/", b"/manifest.webmanifest/"),
+    ],
+)
+async def test_a_public_file_under_another_spelling_is_404(
+    settings: Settings, tmp_path: Path, engine: object, path: str, raw_path: bytes
+):
+    """Only the canonical path serves a file of the build: ``/sw.js/`` or ``/./sw.js`` would
+    otherwise be the worker script without the ``no-store`` the exact path gets."""
+    for name, text in FILES.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text)
+    application = create_app(settings, web_dist_dir=tmp_path)
+    try:
+        status, _headers, body = await _raw_get(application, path, raw_path)
+        assert status == 404, path
+        assert b"BambuBridge shell" not in body
+        # The canonical spelling still works.
+        status, headers, _body = await _raw_get(application, "/sw.js", b"/sw.js")
+        assert status == 200
+        assert headers["cache-control"] == "no-store"
+    finally:
+        await application.state.engine.dispose()

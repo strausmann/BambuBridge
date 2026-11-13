@@ -7,9 +7,11 @@ import { hasDirtyForms } from "./dirtyGuard";
  *
  * Every API answer carries `X-BambuBridge-Version`. When it differs from this page's build, the
  * service worker is asked for the new version and the page reloads into it, once per server
- * version: `sessionStorage["bb.reloadedFor"]` remembers the version a reload was made for, so a
- * page that still comes up on the old build (a cache in between) does not reload in a loop; it
- * shows the banner instead. Someone typing (a focused field) or a form with unsaved changes also
+ * version: `sessionStorage["bb.reloadedFor"]` remembers every version a reload was made for (a
+ * JSON list), so a page that still comes up on the old build (a cache in between) does not
+ * reload in a loop; it shows the banner instead. At most `MAX_RELOADS_PER_SESSION` reloads happen
+ * per tab session: two replicas on different builds behind one proxy would otherwise alternate
+ * the page between them for ever. Someone typing (a focused field) or a form with unsaved changes also
  * gets the banner ("Neue Version – jetzt neu laden") rather than a reload under their hands.
  *
  * A new worker waits (`registerType: "prompt"`): an open tab would otherwise lose the old hashed
@@ -36,12 +38,30 @@ export interface UpdateEnvironment {
 }
 
 export const RELOAD_GUARD_KEY = "bb.reloadedFor";
+export const MAX_RELOADS_PER_SESSION = 2;
 export const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+
+/** Input types someone types into; a focused checkbox, slider or button is no reason to wait. */
+const TEXT_ENTRY_TYPES = new Set(["text", "search", "email", "url", "tel", "password", "number"]);
 
 function typing(): boolean {
   const element = document.activeElement;
   if (!(element instanceof HTMLElement)) return false;
-  return element.isContentEditable || element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement;
+  if (element.isContentEditable || element instanceof HTMLTextAreaElement) return true;
+  return element instanceof HTMLInputElement && TEXT_ENTRY_TYPES.has(element.type);
+}
+
+/** The versions a reload was made for in this tab session. An entry from before the list format is one version. */
+function reloadedFor(storage: UpdateEnvironment["storage"]): string[] {
+  const raw = storage.getItem(RELOAD_GUARD_KEY);
+  if (raw === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.filter((entry): entry is string => typeof entry === "string");
+  } catch {
+    // not JSON: the earlier single-version format
+  }
+  return [raw];
 }
 
 /** The new worker announces itself with `controllerchange`; a reload before that would get the old one. */
@@ -130,13 +150,15 @@ export async function applyUpdate(): Promise<void> {
 
 async function onServerVersion(version: string): Promise<void> {
   if (env === null) return;
-  if (env.storage.getItem(RELOAD_GUARD_KEY) === version || env.isBusy()) {
-    // The reload for this version was made already, or would interrupt someone: ask instead.
+  const done = reloadedFor(env.storage);
+  if (done.includes(version) || done.length >= MAX_RELOADS_PER_SESSION || env.isBusy()) {
+    // The reload for this version was made already, the reloads of this session are used up,
+    // or it would interrupt someone: ask instead.
     void checkForUpdate();
     setState({ banner: true });
     return;
   }
-  env.storage.setItem(RELOAD_GUARD_KEY, version);
+  env.storage.setItem(RELOAD_GUARD_KEY, JSON.stringify([...done, version]));
   await applyUpdate();
 }
 

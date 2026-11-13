@@ -111,18 +111,44 @@ def wants_html(request: Request) -> bool:
     return "text/html" in request.headers.get("accept", "").lower()
 
 
-def sign_in_page(target: str) -> HTMLResponse:
-    """401 for a browser: a page that moves on to the web UI's sign-in, remembering ``target``."""
+# The answer depends on Accept (a page for a browser, problem JSON otherwise).
+VARY_ACCEPT = {"Vary": "Accept"}
+
+
+def _page(
+    title: str, text: str, target: str, delay: int, status_code: int, headers: dict[str, str]
+) -> HTMLResponse:
+    """A page without script that moves on to the web UI's sign-in after ``delay`` seconds."""
     location = html.escape("/sign-in?redirect=" + quote(target, safe=""), quote=True)
     body = (
         "<!doctype html>\n"
         '<html lang="en"><head><meta charset="utf-8">'
-        f'<meta http-equiv="refresh" content="0; url={location}">'
-        "<title>Sign-in required</title></head>"
-        f'<body><p>Sign-in required. <a href="{location}">Continue to the sign-in</a>.</p>'
+        f'<meta http-equiv="refresh" content="{delay}; url={location}">'
+        f"<title>{title}</title></head>"
+        f'<body><p>{text} <a href="{location}">Continue to the sign-in</a>.</p>'
         "</body></html>\n"
     )
-    return HTMLResponse(body, status_code=status.HTTP_401_UNAUTHORIZED)
+    return HTMLResponse(body, status_code=status_code, headers={**headers, **VARY_ACCEPT})
+
+
+def sign_in_page(target: str) -> HTMLResponse:
+    """401 for a browser: a page that moves on to the web UI's sign-in, remembering ``target``."""
+    return _page(
+        "Sign-in required", "Sign-in required.", target, 0, status.HTTP_401_UNAUTHORIZED, {}
+    )
+
+
+def too_many_attempts_page(target: str, error: ApiError) -> HTMLResponse:
+    """429 for a browser: the same way on, once the limit's wait (``Retry-After``) is over."""
+    retry_after = int(error.headers.get("Retry-After", "60"))
+    return _page(
+        "Too many sign-in attempts",
+        f"Too many sign-in attempts. Try again in {retry_after} seconds.",
+        target,
+        retry_after,
+        status.HTTP_429_TOO_MANY_REQUESTS,
+        {"Retry-After": str(retry_after)},
+    )
 
 
 @router.get(
@@ -136,6 +162,11 @@ def sign_in_page(target: str) -> HTMLResponse:
             "model": ProblemDetail,
             "description": "Not signed in; a browser navigation gets a page that moves on "
             "to the sign-in (text/html)",
+        },
+        429: {
+            "model": ProblemDetail,
+            "description": "Too many sign-in attempts; a browser navigation gets a page that "
+            "moves on to the sign-in once Retry-After has passed (text/html)",
         },
         503: {"model": ProblemDetail},
     },
@@ -152,12 +183,18 @@ async def auth_continue(
     ):
         return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
     # A sign-in attempt from here on: the same per-client limit as POST /api/v1/auth/session.
-    check_sign_in_limit(request)
+    try:
+        check_sign_in_limit(request)
+    except ApiError as error:
+        if wants_html(request):
+            return too_many_attempts_page(target, error)
+        error.headers.update(VARY_ACCEPT)
+        raise
     opened = await open_identity_session(request, db)
     if opened is None:
         if wants_html(request):
             return sign_in_page(target)
-        raise ApiError(401, "not_authenticated", "Authentication required")
+        raise ApiError(401, "not_authenticated", "Authentication required", headers=VARY_ACCEPT)
     new_token = opened.token
     response = RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
     ui_sessions.set_cookies(

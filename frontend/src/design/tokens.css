@@ -183,6 +183,22 @@
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
+/* Elevation: a panel that floats over the page (the list of a combo box). Utility: shadow-popover. */
+@theme inline {
+  --shadow-popover: var(--elevation-popover);
+}
+:root {
+  --elevation-popover: 0 12px 28px -12px rgb(13 18 24 / 0.28), 0 2px 6px -2px rgb(13 18 24 / 0.14);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --elevation-popover: 0 12px 28px -12px rgb(0 0 0 / 0.7), 0 2px 6px -2px rgb(0 0 0 / 0.5);
+  }
+}
+:root[data-theme="dark"] {
+  --elevation-popover: 0 12px 28px -12px rgb(0 0 0 / 0.7), 0 2px 6px -2px rgb(0 0 0 / 0.5);
+}
+
 :root {
   /* focus ring: 3 px in the link colour */
   --focus-ring: 3px solid var(--link);

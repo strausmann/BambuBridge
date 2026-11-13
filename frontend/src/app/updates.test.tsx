@@ -4,7 +4,7 @@ import { apiFetch, resetVersionSignal, VERSION_HEADER } from "../api/client";
 import { UpdateBanner } from "../shell/UpdateBanner";
 import { jsonResponse, renderWithProviders, stubFetch } from "../test-utils";
 import { useDirtyGuard } from "./dirtyGuard";
-import { RELOAD_GUARD_KEY, resetUpdatesForTest, startUpdates, UPDATE_CHECK_INTERVAL_MS, type RegisterSW } from "./updates";
+import { MAX_RELOADS_PER_SESSION, RELOAD_GUARD_KEY, resetUpdatesForTest, startUpdates, UPDATE_CHECK_INTERVAL_MS, type RegisterSW } from "./updates";
 
 /** sessionStorage survives a reload; this one survives a "new page" in the test as well. */
 class MemoryStorage {
@@ -81,7 +81,7 @@ describe("version check", () => {
     await answerWith("9.9.9+next");
     expect(page.registration!.update).toHaveBeenCalled();
     expect(reloads).toEqual(["reload"]);
-    expect(storage.getItem(RELOAD_GUARD_KEY)).toBe("9.9.9+next");
+    expect(JSON.parse(storage.getItem(RELOAD_GUARD_KEY)!)).toEqual(["9.9.9+next"]);
     // The same answer again on this page: still one reload.
     await answerWith("9.9.9+next");
     expect(reloads).toEqual(["reload"]);
@@ -104,10 +104,65 @@ describe("version check", () => {
   });
 
   it("a newer version after that one reloads again", async () => {
-    storage.setItem(RELOAD_GUARD_KEY, "9.9.9+next");
+    storage.setItem(RELOAD_GUARD_KEY, JSON.stringify(["9.9.9+next"]));
     const page = startPage();
     await answerWith("9.9.10+later");
     expect(reloads).toEqual(["reload"]);
+    expect(JSON.parse(storage.getItem(RELOAD_GUARD_KEY)!)).toEqual(["9.9.9+next", "9.9.10+later"]);
+    page.stop();
+  });
+
+  it("two replicas on different builds behind one proxy: reloads stop after the cap, then the banner", async () => {
+    // Each page load gets an answer from the other replica, alternating between two builds.
+    const versions = ["9.9.9+a", "9.9.9+b", "9.9.9+a", "9.9.9+b", "9.9.9+a", "9.9.9+b"];
+    for (const version of versions) {
+      const page = startPage();
+      renderWithProviders(<UpdateBanner />);
+      await answerWith(version);
+      page.stop();
+    }
+    expect(MAX_RELOADS_PER_SESSION).toBe(2);
+    expect(reloads).toEqual(["reload", "reload"]);
+    expect(screen.getAllByRole("status").at(-1)).toHaveTextContent("Neue Version");
+  });
+
+  it("a third new version in one session gets the banner, not a third reload", async () => {
+    for (const version of ["9.9.9+one", "9.9.9+two", "9.9.9+three"]) {
+      const page = startPage();
+      await answerWith(version);
+      page.stop();
+    }
+    expect(reloads).toEqual(["reload", "reload"]);
+  });
+
+  it("an old single-version entry (the earlier format) still counts as reloaded for", async () => {
+    storage.setItem(RELOAD_GUARD_KEY, "9.9.9+next");
+    const page = startPage();
+    await answerWith("9.9.9+next");
+    expect(reloads).toEqual([]);
+    page.stop();
+  });
+
+  it.each([
+    ["a checkbox", <input key="c" type="checkbox" aria-label="Field" />],
+    ["a range slider", <input key="r" type="range" aria-label="Field" />],
+    ["a select", <select key="s" aria-label="Field"><option>a</option></select>],
+    ["a button", <button key="b" type="button" aria-label="Field" />],
+  ])("a focused control that takes no typing (%s) does not hold the reload back", async (_name, element) => {
+    const page = startPage();
+    renderWithProviders(element);
+    screen.getByLabelText("Field").focus();
+    await answerWith("9.9.9+next");
+    expect(reloads).toEqual(["reload"]);
+    page.stop();
+  });
+
+  it.each(["text", "search", "email", "url", "tel", "password", "number"])("a focused %s field holds the reload back", async (type) => {
+    const page = startPage();
+    renderWithProviders(<input type={type} aria-label="Field" />);
+    screen.getByLabelText("Field").focus();
+    await answerWith("9.9.9+next");
+    expect(reloads).toEqual([]);
     page.stop();
   });
 
@@ -144,7 +199,7 @@ describe("version check", () => {
     expect(reloads).toEqual([]);
     expect(screen.getByRole("status")).toHaveTextContent("Neue Version – jetzt neu laden");
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Jetzt neu laden" }));
+      fireEvent.click(screen.getByRole("button", { name: "Neu laden" }));
       await new Promise((resolve) => setTimeout(resolve, 80));
     });
     expect(reloads).toEqual(["reload"]);

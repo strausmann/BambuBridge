@@ -136,6 +136,20 @@
     translate: 0 100%;
     transition-duration: 200ms;
   }
+  /* On a short viewport (keyboard open) the sheet sits at the top edge: it comes from there.
+     Below 640 px only; from there it is a centred panel that fades (below). */
+  @media (max-width: 639.98px) and (max-height: 560px) {
+    .sheet-panel[data-entering],
+    .sheet-panel[data-exiting] {
+      translate: 0 -100%;
+    }
+  }
+  @media (max-width: 639.98px) {
+    .sheet-panel:where([data-short] *)[data-entering],
+    .sheet-panel:where([data-short] *)[data-exiting] {
+      translate: 0 -100%;
+    }
+  }
   .dialog-panel,
   .popover-panel {
     transition-property: opacity, scale;

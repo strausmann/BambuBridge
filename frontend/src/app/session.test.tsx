@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiFetch, setCsrfToken } from "../api/client";
@@ -88,6 +88,35 @@ describe("root layout", () => {
     // A second refused request while leaving does not start a second navigation.
     await expect(apiFetch("/api/v1/settings")).rejects.toMatchObject({ status: 401 });
     expect(navigate).toHaveBeenCalledTimes(1);
+    uninstall();
+    window.history.replaceState(null, "", "/");
+  });
+
+  it.each([
+    ["the page comes back from the back-forward cache (pageshow)", "pageshow"],
+    ["the browser never leaves (cancelled, offline) and the wait runs out", "timeout"],
+  ])("the hop did not happen: %s; the splash goes and a later refusal tries again", async (_name, how) => {
+    stubFetch({
+      "GET /api/v1/auth/session": () => jsonResponse(SESSION),
+      "GET /api/v1/info": () => jsonResponse(INFO),
+      "GET /api/v1/settings": signedOut,
+    });
+    window.history.replaceState(null, "", "/protocol");
+    const queryClient = testQueryClient();
+    const navigate = vi.fn();
+    const uninstall = installAuthGuard(queryClient, navigate, { leavingTimeoutMs: how === "timeout" ? 400 : 60_000 });
+    renderApp("/protocol", queryClient);
+    expect(await screen.findByRole("heading", { name: "Protokoll" })).toBeInTheDocument();
+
+    await expect(apiFetch("/api/v1/settings")).rejects.toMatchObject({ status: 401 });
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("status")).toHaveTextContent("Lädt …");
+
+    if (how === "pageshow") act(() => void window.dispatchEvent(new Event("pageshow")));
+    // The splash is gone: the page shows what it has (here the sign-in, the session was ended).
+    await waitFor(() => expect(screen.queryByText("Lädt …")).not.toBeInTheDocument(), { timeout: 2000 });
+    await expect(apiFetch("/api/v1/settings")).rejects.toMatchObject({ status: 401 });
+    expect(navigate).toHaveBeenCalledTimes(2);
     uninstall();
     window.history.replaceState(null, "", "/");
   });

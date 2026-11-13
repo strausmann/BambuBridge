@@ -23,7 +23,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar />
         {/* Bottom padding keeps the last line clear of the tab bar and the home indicator. */}
-        <main id="content" tabIndex={-1} className="flex-1 p-4 pb-[calc(6rem+env(safe-area-inset-bottom))] outline-none lg:p-8 lg:pb-8">
+        <main id="content" tabIndex={-1} className="flex-1 p-4 pb-[calc(6rem+env(safe-area-inset-bottom)+var(--notice-h,0px))] outline-none lg:p-8 lg:pb-[calc(2rem+var(--notice-h,0px))]">
           {children}
         </main>
       </div>

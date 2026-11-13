@@ -16,7 +16,7 @@ export function UpdateBanner() {
       icon={<RefreshIcon />}
       action={
         <Button onPress={() => void applyUpdate()} className={`press inline-flex min-h-11 shrink-0 items-center rounded-r2 px-3 font-semibold text-ink underline underline-offset-2 hover:bg-surface ${FOCUS}`}>
-          {t`Jetzt neu laden`}
+          {t`Neu laden`}
         </Button>
       }
     >

@@ -45,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import ipaddress
+import json
 import os
 import secrets
 import shutil
@@ -161,6 +162,7 @@ class Builds:
     def __init__(self, first: Path, next_dir: Path, next_build_id: str) -> None:
         self.first = first
         self.next = next_dir
+        self.build_id = next_build_id
         self.version = f"{VERSION}+{next_build_id}"
         self.serving = Path(tempfile.mkdtemp(prefix="bb-e2e-dist-"))
         self.override: bytes | None = None
@@ -180,8 +182,13 @@ class Builds:
         self.override = self.version.encode("latin-1")
 
 
+INFO_PATH = "/api/v1/info"
+
+
 class VersionOverride:
-    """Reports the next build in ``X-BambuBridge-Version`` once the server was switched to it."""
+    """Reports the next build once the server was switched to it: in ``X-BambuBridge-Version``
+    of every API answer, and as ``build`` in the body of ``GET /api/v1/info`` (the device page
+    shows it as the server's build, so header and body must agree)."""
 
     def __init__(self, app: ASGIApp, builds: Builds) -> None:
         self.app = app
@@ -193,13 +200,36 @@ class VersionOverride:
             await self.app(scope, receive, send)
             return
 
+        is_info = scope["path"] == INFO_PATH and scope["method"] == "GET"
+        held: list[Message] = []
+
+        def with_version(headers: list[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
+            if any(key.lower() == _VERSION_HEADER for key, _ in headers):
+                headers = [(k, v) for k, v in headers if k.lower() != _VERSION_HEADER]
+                headers.append((_VERSION_HEADER, override))
+            return headers
+
         async def send_with_version(message: Message) -> None:
             if message["type"] == "http.response.start":
-                headers = message.get("headers", [])
-                if any(key.lower() == _VERSION_HEADER for key, _ in headers):
-                    headers = [(k, v) for k, v in headers if k.lower() != _VERSION_HEADER]
-                    headers.append((_VERSION_HEADER, override))
-                    message = {**message, "headers": headers}
+                message = {**message, "headers": with_version(list(message.get("headers", [])))}
+                if is_info:
+                    held.append(message)
+                    return
+            elif is_info and message["type"] == "http.response.body":
+                held.append(message)
+                if message.get("more_body", False):
+                    return
+                start, *bodies = held
+                content = b"".join(part.get("body", b"") for part in bodies)
+                if start["status"] == 200:
+                    data = json.loads(content)
+                    data["build"] = self.builds.build_id
+                    content = json.dumps(data).encode()
+                headers = [(k, v) for k, v in start["headers"] if k.lower() != b"content-length"]
+                headers.append((b"content-length", str(len(content)).encode()))
+                await send({**start, "headers": headers})
+                await send({"type": "http.response.body", "body": content})
+                return
             await send(message)
 
         await self.app(scope, receive, send_with_version)

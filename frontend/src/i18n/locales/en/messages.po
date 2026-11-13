@@ -264,10 +264,6 @@ msgstr "Installed app"
 msgid "Ja"
 msgstr "Yes"
 
-#: src/shell/UpdateBanner.tsx
-msgid "Jetzt neu laden"
-msgstr "Reload now"
-
 #: src/shell/ConnectionBanner.tsx
 msgid "Keine Verbindung"
 msgstr "No connection"
@@ -299,6 +295,10 @@ msgstr "Continue with single sign-on (SSO)"
 #: src/features/device/DevicePage.tsx
 msgid "Nein"
 msgstr "No"
+
+#: src/shell/UpdateBanner.tsx
+msgid "Neu laden"
+msgstr "Reload"
 
 #: src/shell/UpdateBanner.tsx
 msgid "Neue Version – jetzt neu laden"

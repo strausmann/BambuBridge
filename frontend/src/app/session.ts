@@ -185,8 +185,14 @@ export function useSession(): Session {
 
 let sessionEndedHandler: (() => void) | null = null;
 
-/** True from the moment the page leaves for the sign-in hop until it is gone. */
+/**
+ * True from the moment the page leaves for the sign-in hop until it is gone. If the browser does
+ * not leave after all (the navigation was cancelled, or the network is down) or comes back from
+ * the back-forward cache, the latch falls back: on `pageshow`, or after `LEAVING_TIMEOUT_MS`.
+ * Otherwise the splash would stay until a manual reload.
+ */
 let leaving = false;
+export const LEAVING_TIMEOUT_MS = 10_000;
 const leavingListeners = new Set<() => void>();
 function setLeaving(value: boolean): void {
   leaving = value;
@@ -215,17 +221,31 @@ export function continueUrl(): string {
  * the server sends the browser on to the sign-in page, remembering where it was. Never `/`: the
  * service worker would answer that from its cache with the same empty shell.
  */
-export function installAuthGuard(queryClient: QueryClient, navigate: (url: string) => void = (url) => window.location.assign(url)): () => void {
+export function installAuthGuard(
+  queryClient: QueryClient,
+  navigate: (url: string) => void = (url) => window.location.assign(url),
+  { leavingTimeoutMs = LEAVING_TIMEOUT_MS }: { leavingTimeoutMs?: number } = {},
+): () => void {
+  let timer: number | undefined;
+  const stayed = () => {
+    window.clearTimeout(timer);
+    timer = undefined;
+    if (leaving) setLeaving(false);
+  };
   const ended = () => {
     if (leaving) return;
     const target = continueUrl();
     setLeaving(true);
+    timer = window.setTimeout(stayed, leavingTimeoutMs);
     endSession(queryClient);
     navigate(target);
   };
+  window.addEventListener("pageshow", stayed);
   setOnAuthRequired(ended);
   sessionEndedHandler = ended;
   return () => {
+    window.removeEventListener("pageshow", stayed);
+    window.clearTimeout(timer);
     setOnAuthRequired(null);
     sessionEndedHandler = null;
     setLeaving(false);

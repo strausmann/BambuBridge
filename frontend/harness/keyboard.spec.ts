@@ -68,3 +68,38 @@ test("the list flips above the field when there is no room below it", async ({ p
   expect(popoverBox.y + popoverBox.height, "list above the field").toBeLessThanOrEqual(fieldBox.y + 0.5);
   await visible(page, page.getByRole("option").first(), "first match");
 });
+
+test("on a short viewport the sheet comes from the top edge it sits at, not from the bottom", async ({ page }) => {
+  await page.goto("/harness/overlays.html?open=sheet");
+  const panel = page.locator(".sheet-panel");
+  await expect(panel).toBeVisible();
+  await expect(page.locator("[data-entering]")).toHaveCount(0);
+  // The enter state, held still: where would the panel start from?
+  const start = await panel.evaluate((element: HTMLElement) => {
+    element.style.transition = "none";
+    element.setAttribute("data-entering", "");
+    const style = getComputedStyle(element);
+    return { translate: style.translate, opacity: style.opacity, scale: style.scale, top: element.getBoundingClientRect().top };
+  });
+  if (test.info().project.name === "short-wide-chromium") {
+    // From 640 px the sheet is a centred panel: it fades and grows a little.
+    expect(start.translate).toBe("none");
+    expect(start.opacity).toBe("0");
+    expect(start.scale).toBe("0.96");
+  } else {
+    // Above the panel: a negative vertical offset of its own height.
+    const [, y] = start.translate.split(" ");
+    expect(y, start.translate).toBe("-100%");
+  }
+});
+
+test("the list of a combo box lifts off the page with a shadow", async ({ page }) => {
+  await page.goto("/harness/overlays.html?open=dialog");
+  const field = page.getByRole("combobox", { name: "Drucker" });
+  await field.click();
+  await field.fill("P");
+  const popover = page.getByRole("listbox").locator("..");
+  await expect(popover).toBeVisible();
+  const shadow = await popover.evaluate((element) => getComputedStyle(element).boxShadow);
+  expect(shadow).not.toBe("none");
+});

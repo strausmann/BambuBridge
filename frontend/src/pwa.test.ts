@@ -32,11 +32,40 @@ describe("service worker", () => {
         path,
       ).toBe(true);
     }
-    for (const path of ["/", "/providers", "/protocol", "/settings", "/settings/auth", "/device", "/sign-in", "/apiary", "/authors", "/docsy"]) {
+    for (const path of ["/", "/providers", "/protocol", "/settings", "/settings/auth", "/device", "/sign-in", "/apiary", "/authors", "/docsy", "/protocol?q=api", "/healthzz", "/openapi.jsonx"]) {
       expect(
         deny.some((re) => re.test(path)),
         path,
       ).toBe(false);
+    }
+    // What Workbox tests (pathname + search, still percent-encoded): any spelling the server
+    // decodes or matches to one of its own paths is denied as well.
+    for (const path of [
+      "/API/x",
+      "/Api/v1/events",
+      "/%61pi/x",
+      "/%41PI/x",
+      "/a%70i/v1/info",
+      "/api",
+      "/api?x",
+      "/api%2fv1%2finfo",
+      "/auth",
+      "/auth?next=%2F",
+      "/%61uth/continue",
+      "/AUTH/continue",
+      "/healthz",
+      "/healthz?x",
+      "/readiness?x",
+      "/openapi.json?x",
+      "/%6fpenapi.json",
+      "/docs?x",
+      "/licenses/x",
+      "/licenses",
+    ]) {
+      expect(
+        deny.some((re) => re.test(path)),
+        path,
+      ).toBe(true);
     }
     // No runtime route at all: the worker serves the precached shell files and nothing else.
     expect(workbox.runtimeCaching).toEqual([]);
@@ -71,5 +100,12 @@ describe.runIf(required)("built service worker", () => {
     expect(rootFiles.filter((path) => !isPublicPath(path)), "file at the root of dist/ that is not on the public path list").toEqual([]);
     // One worker file: the workbox runtime is inlined.
     expect(rootFiles.filter((path) => /workbox|registerSW/.test(path))).toEqual([]);
+  });
+
+  it("the denylist reaches the worker unchanged, case-insensitive flag included", () => {
+    const sw = readFileSync(join(dist, "sw.js"), "utf8");
+    for (const pattern of workbox.navigateFallbackDenylist ?? []) {
+      expect(sw, String(pattern)).toContain(String(pattern));
+    }
   });
 });

@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { VERSION_HEADER } from "../../api/client";
+import { setOnAuthRequired, VERSION_HEADER } from "../../api/client";
 import { INFO, jsonResponse, problemResponse, renderWithProviders, stubFetch } from "../../test-utils";
 import { DevicePage, type DeviceEnvironment } from "./DevicePage";
 
@@ -93,6 +93,19 @@ describe("DevicePage", () => {
     renderWithProviders(<DevicePage environment={environment()} />);
     expect(await screen.findByText("Nicht erreichbar")).toBeInTheDocument();
     expect(await screen.findByText("Unbekannt (Server nicht erreichbar)")).toBeInTheDocument();
+  });
+
+  it("a 401 on the sign-in path is shown on the page; it does not send the browser to the sign-in", async () => {
+    const handler = vi.fn();
+    setOnAuthRequired(handler);
+    try {
+      serve(() => problemResponse(401, "not_authenticated", "Authentication required"));
+      renderWithProviders(<DevicePage environment={environment()} />);
+      expect(await screen.findByText("Erreichbar, nicht angemeldet (401)")).toBeInTheDocument();
+      expect(handler).not.toHaveBeenCalled();
+    } finally {
+      setOnAuthRequired(null);
+    }
   });
 
   it("checks again on request", async () => {

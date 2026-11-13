@@ -11,8 +11,10 @@ without the web UI.
 
 The files of the public path list (``PUBLIC_PATHS``, the same list as
 ``frontend/pwa-public-paths.json``) are files of the build and nothing else: a missing one is
-a 404 as well. The service worker in particular must never be answered with the app shell:
-a browser would refuse the HTML as a script and keep the old worker.
+a 404 as well. A file of the build is served only under its canonical path; another spelling
+of it (a trailing slash, an encoded slash, a dot segment, a doubled slash) is a 404. The
+service worker in particular must never be answered with the app shell: a browser would
+refuse the HTML as a script and keep the old worker.
 
 Without ``index.html`` in the build directory the server runs API-only: one warning, no
 route.
@@ -126,6 +128,11 @@ def mount_spa(app: FastAPI, dist_dir: Path) -> bool:
                 found = candidate.is_file() and candidate.is_relative_to(root)
             except OSError, ValueError:
                 raise HTTPException(status_code=404) from None
+            if found and candidate.relative_to(root).as_posix() != full_path:
+                # Another spelling of a file of the build (``sw.js/``, ``sw.js%2f``,
+                # ``./sw.js``, ``assets//x.js``): only the canonical path serves the file, so
+                # the header rules for exact paths (``no-store`` on the worker) always apply.
+                raise HTTPException(status_code=404)
             if found:
                 is_asset = candidate.is_relative_to(root / "assets")
                 return FileResponse(

@@ -1,9 +1,9 @@
 import { useLingui } from "@lingui/react/macro";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "react-aria-components";
 import { ApiError, apiFetch, AuthRequiredError } from "../../api/client";
-import { useInfo } from "../../app/session";
+import { SESSION_KEY, useInfo } from "../../app/session";
 import { AppSheet } from "../../shell/overlays/AppSheet";
 import { PRIMARY_BUTTON, SECONDARY_BUTTON } from "../../shell/ui";
 
@@ -62,13 +62,14 @@ function browserEnvironment(): DeviceEnvironment {
 type SessionCheck = "signed-in" | "signed-out" | "login-page" | "unreachable" | { status: number };
 
 /**
- * The sign-in path as the API sees it. An ordinary request: when the sign-in is gone, the shell
- * reacts as to any other request (the way out through `/auth/continue`); the 401 and login-page
- * states show only where nothing handles that (no shell around the page).
+ * The sign-in path as the API sees it. A diagnosis, so a 401 or a login page is shown on the page
+ * (`skipAuthHandler`) instead of sending the browser away: the page is opened to see what is
+ * wrong. "Erneut prüfen" also asks the app's own session again, and that one does leave through
+ * `/auth/continue` when the sign-in is gone.
  */
 async function checkSessionPath(): Promise<SessionCheck> {
   try {
-    await apiFetch(SESSION_CHECK_PATH);
+    await apiFetch(SESSION_CHECK_PATH, { skipAuthHandler: true });
     return "signed-in";
   } catch (error) {
     if (error instanceof AuthRequiredError) return error.status === 401 && error.code !== "unexpected_content" && error.code !== "login_redirect" ? "signed-out" : "login-page";
@@ -96,6 +97,7 @@ export function DevicePage({ environment }: { environment?: DeviceEnvironment })
   const [env] = useState(() => environment ?? browserEnvironment());
   const [installOpen, setInstallOpen] = useState(false);
   const info = useInfo();
+  const queryClient = useQueryClient();
   const worker = useQuery({ queryKey: ["device", "worker"], queryFn: env.serviceWorker, staleTime: 0, gcTime: 0 });
   const session = useQuery({ queryKey: ["device", "session-path"], queryFn: checkSessionPath, staleTime: 0, gcTime: 0, retry: false });
 
@@ -170,6 +172,7 @@ export function DevicePage({ environment }: { environment?: DeviceEnvironment })
             void worker.refetch();
             void session.refetch();
             void info.refetch();
+            void queryClient.invalidateQueries({ queryKey: SESSION_KEY });
           }}
           className={SECONDARY_BUTTON}
         >

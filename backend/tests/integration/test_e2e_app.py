@@ -280,17 +280,22 @@ async def test_next_build_switches_files_and_version(two_builds: httpx.AsyncClie
     # The old hashed file stays, as on a server between two releases.
     assert (await two_builds.get("/assets/a-1.js")).status_code == 200
     assert (await two_builds.get("/assets/a-2.js")).status_code == 200
-    switched = (await two_builds.get("/api/v1/info")).headers["x-bambubridge-version"]
+    info = await two_builds.get("/api/v1/info")
+    switched = info.headers["x-bambubridge-version"]
     assert switched == f"{e2e_app.VERSION}+{e2e_app.DEFAULT_NEXT_BUILD_ID}"
     assert switched != version
+    # The body says the same as the header (the device page shows it as the server's build).
+    assert info.json()["build"] == e2e_app.DEFAULT_NEXT_BUILD_ID
+    assert int(info.headers["content-length"]) == len(info.content)
     # Only API answers carry the header, as without the switch.
     assert "x-bambubridge-version" not in (await two_builds.get("/")).headers
 
     assert (await two_builds.post(e2e_app.RESET_PATH, headers=RESET)).status_code == 204
     assert (await two_builds.get("/")).text == "first shell"
     assert (await two_builds.get("/assets/a-2.js")).status_code == 404
-    back = (await two_builds.get("/api/v1/info")).headers["x-bambubridge-version"]
-    assert back == version
+    back_info = await two_builds.get("/api/v1/info")
+    assert back_info.headers["x-bambubridge-version"] == version
+    assert back_info.json()["build"] != e2e_app.DEFAULT_NEXT_BUILD_ID
 
 
 async def test_next_build_needs_its_header(two_builds: httpx.AsyncClient):

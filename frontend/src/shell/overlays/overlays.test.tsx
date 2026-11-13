@@ -1,13 +1,13 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { StrictMode, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../test-utils";
 import { AppComboBox } from "./AppComboBox";
 import { AppDialog } from "./AppDialog";
 import { AppSearchField } from "./AppSearchField";
 import { AppSheet } from "./AppSheet";
-import { useBackClosesOverlay } from "./useBackClosesOverlay";
+import { leaveOverlayHistory, useBackClosesOverlay } from "./useBackClosesOverlay";
 
 class FakeViewport extends EventTarget {
   height = 800;
@@ -97,7 +97,38 @@ describe("useBackClosesOverlay", () => {
     const back = vi.spyOn(window.history, "back");
     const { rerender } = renderWithProviders(<Probe open onClose={() => {}} />);
     rerender(<Probe open={false} onClose={() => {}} />);
-    expect(back).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(back).toHaveBeenCalledTimes(1));
+    back.mockRestore();
+  });
+
+  it("under StrictMode (effects run twice) it adds one entry and stays open", async () => {
+    const push = vi.spyOn(window.history, "pushState");
+    const back = vi.spyOn(window.history, "back");
+    const onClose = vi.fn();
+    render(
+      <StrictMode>
+        <Probe open onClose={onClose} />
+      </StrictMode>,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(back).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    push.mockRestore();
+    back.mockRestore();
+  });
+
+  it("an action that navigates drops the overlay's entry first, so Back afterwards goes to the page, not to a closed overlay", async () => {
+    window.history.replaceState({ __TSR_index: 4, key: "page" }, "", "/device");
+    const back = vi.spyOn(window.history, "back");
+    const { rerender } = renderWithProviders(<Probe open onClose={() => {}} />);
+    expect(window.history.state).toMatchObject({ bbOverlay: expect.any(Number) });
+    leaveOverlayHistory();
+    // The entry is the page's own again (the router's state, no overlay mark).
+    expect(window.history.state).toEqual({ __TSR_index: 4, key: "page" });
+    rerender(<Probe open={false} onClose={() => {}} />);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(back).not.toHaveBeenCalled();
     back.mockRestore();
   });
 

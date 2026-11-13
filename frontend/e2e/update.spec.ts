@@ -22,7 +22,9 @@ test("the server restarted on a new build: the open page loads the new version b
   await expect(appBuild).toContainText("e2e-next", { timeout: 20_000 });
   await expect(page).toHaveURL(/\/device$/);
   await expect(page.getByTestId("signed-in-user")).toBeAttached();
-  expect(await page.evaluate(() => sessionStorage.getItem("bb.reloadedFor"))).toMatch(/\+e2e-next$/);
+  const reloadedFor = await page.evaluate(() => JSON.parse(sessionStorage.getItem("bb.reloadedFor") ?? "[]") as string[]);
+  expect(reloadedFor).toHaveLength(1);
+  expect(reloadedFor[0]).toMatch(/\+e2e-next$/);
   // The new worker took over, and the page did not reload again after that.
   await page.waitForTimeout(1000);
   expect(loads).toHaveLength(1);
@@ -39,7 +41,7 @@ test("a reload for this version already happened: the banner offers it instead, 
   const version = (await page.request.get(`${BASE_URL}/api/v1/auth/session`)).headers()["x-bambubridge-version"] ?? "";
   expect(version).toMatch(/\+e2e-next$/);
   // As if the page had already reloaded once for this version and still came up on the old build.
-  await page.evaluate((v) => sessionStorage.setItem("bb.reloadedFor", v), version);
+  await page.evaluate((v) => sessionStorage.setItem("bb.reloadedFor", JSON.stringify([v])), version);
 
   await page.getByRole("button", { name: "Erneut prüfen" }).click();
   const banner = page.getByRole("status").filter({ hasText: "Neue Version" });
@@ -47,7 +49,15 @@ test("a reload for this version already happened: the banner offers it instead, 
   expect(await appBuild.textContent()).not.toContain("e2e-next");
   await shot(page, "update-banner", { fullPage: false });
 
-  await banner.getByRole("button", { name: "Jetzt neu laden" }).click();
+  // The banner sits above the page's end: scrolled to the bottom, the last control is still
+  // in view and not under the banner.
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  const recheck = page.getByRole("button", { name: "Erneut prüfen" });
+  await expect(recheck).toBeInViewport({ ratio: 1 });
+  const [control, note] = await Promise.all([recheck.boundingBox(), banner.boundingBox()]);
+  expect(control!.y + control!.height, "the last control ends above the banner").toBeLessThanOrEqual(note!.y);
+
+  await banner.getByRole("button", { name: "Neu laden" }).click();
   await expect(appBuild).toContainText("e2e-next", { timeout: 20_000 });
   await expect(page).toHaveURL(/\/device$/);
 });

@@ -52,7 +52,7 @@ export function AppComboBox({ label, options, selectedKey, onSelectionChange, de
           {description}
         </Text>
       ) : null}
-      <Popover maxHeight={maxHeight} shouldFlip containerPadding={EDGE_PX} offset={4} className="popover-panel w-(--trigger-width) overflow-y-auto overscroll-contain rounded-r2 border border-line-strong bg-surface text-ink">
+      <Popover maxHeight={maxHeight} shouldFlip containerPadding={EDGE_PX} offset={4} className="popover-panel w-(--trigger-width) overflow-y-auto overscroll-contain rounded-r2 border border-line-strong bg-surface text-ink shadow-popover">
         <ListBox className="py-1 outline-none" renderEmptyState={() => <p className="px-3 py-3 text-ink-2">{emptyText}</p>}>
           {(item: ComboOption) => (
             <ListBoxItem

@@ -18,9 +18,15 @@ test("a session revoked on the server: the next request leaves through /auth/con
   // The server forgets every session (the reset empties the database).
   expect((await page.request.post(RESET_PATH, { headers: RESET_HEADERS })).status()).toBe(204);
 
-  // The next request of the open page finds the sign-in gone.
+  // The device page shows the refused sign-in path as a diagnosis and stays.
   await openMain(page, "Einstellungen");
   await page.getByRole("link", { name: /Dieses Gerät/ }).click();
+  await expect(page.getByText("Erreichbar, nicht angemeldet (401)")).toBeVisible();
+  await expect(page).toHaveURL(/\/device$/);
+  expect(hops).toEqual([]);
+
+  // Checking again asks the app's own session too: it finds the sign-in gone and leaves.
+  await page.getByRole("button", { name: "Erneut prüfen" }).click();
 
   // The hop reached the server (not the worker's shell) and it answered: not signed in.
   await expect(page).toHaveURL(/\/sign-in\?redirect=%2Fdevice$/);
