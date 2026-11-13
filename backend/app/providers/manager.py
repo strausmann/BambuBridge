@@ -39,6 +39,13 @@ instance shows ``event rejected: contains a secret``. Fail closed: a value with 
 invisible character is refused as well (masking removes it). Declared limit: a secret
 split across several values is not detected.
 
+Declared limit: an admin can test whether a config value equals an instance secret (set a
+plain field such as ``label`` to a guess and watch for ``event rejected``). Every check of
+this kind answers that question, a rejected event as much as a 422 at write time or a
+masked value. The defence is the admin trust boundary (scope ``admin`` can replace the
+secret anyway) and the cost per guess: a configuration write and an apply each, against a
+secret of at least eight characters.
+
 A message too large to mask (``MAX_MASK_INPUT`` bytes) is replaced by a placeholder; a
 masked message is capped at ``MAX_STATUS_MESSAGE_LENGTH`` characters.
 """
