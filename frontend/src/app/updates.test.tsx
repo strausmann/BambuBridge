@@ -423,21 +423,20 @@ describe("a reload that does not happen", () => {
       useDirtyGuard(true);
       return <UpdateBanner />;
     }
-    const page = startPage(undefined, { reloadSettleMs: 60 });
+    const page = startPage(undefined, { reloadSettleMs: 300 });
     renderWithProviders(<Form />);
     await answerWith("9.9.9+next");
-    const press = async () => {
+    const press = async (times = 1) => {
       await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: "Neu laden" }));
+        for (let i = 0; i < times; i += 1) fireEvent.click(screen.getByRole("button", { name: "Neu laden" }));
         await new Promise((resolve) => setTimeout(resolve, 20));
       });
     };
-    // Two presses at once: one attempt.
-    await press();
-    await press();
+    // Two presses at once (in one task, well inside the settle window, however slow the runner): one attempt.
+    await press(2);
     expect(reloads).toEqual(["reload"]);
-    // No pagehide followed: after a moment the page counts as still here, and a press works again.
-    await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+    // No pagehide followed: once the settle window is over the page counts as still here, and a press works again.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 400)));
     await press();
     expect(reloads).toEqual(["reload", "reload"]);
     page.stop();
@@ -448,7 +447,7 @@ describe("a reload that does not happen", () => {
       useDirtyGuard(true);
       return <UpdateBanner />;
     }
-    const page = startPage(undefined, { reloadSettleMs: 60 });
+    const page = startPage(undefined, { reloadSettleMs: 300 });
     renderWithProviders(<Form />);
     await answerWith("9.9.9+next");
     await act(async () => {
@@ -456,7 +455,7 @@ describe("a reload that does not happen", () => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     });
     act(() => void window.dispatchEvent(new Event("pagehide")));
-    await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 400)));
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Neu laden" }));
       await new Promise((resolve) => setTimeout(resolve, 20));
