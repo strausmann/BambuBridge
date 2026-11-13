@@ -573,3 +573,23 @@ async def test_headers_beyond_the_budget_become_placeholders(db_session: AsyncSe
     assert headers["X-H1"] == "<omitted: 60003 bytes>"
     assert headers["X-H99"] == "<omitted: 60004 bytes>"
     assert entry.truncated is True
+
+
+@pytest.mark.parametrize("filled", [False, True], ids=["oversized-name", "budget-spent"])
+async def test_an_omitted_header_name_takes_its_value_with_it(
+    db_session: AsyncSession, filled: bool
+):
+    # The name no longer says "credential" once it is a placeholder: the value must not stay.
+    token = "zz" + "-made-up-token-" + "0042"
+    # Budget-spent: what is left fits the value but not the (longer) name.
+    left = len(token) + 4
+    headers = [("X-Fill", "f" * (MAX_HEADERS_INPUT - 6 - left))] if filled else []
+    name = "X-Authorization-Of-The-Peer" if filled else "Authorization" + "x" * MAX_MASK_INPUT
+    assert len(name) > left
+    headers.append((name, token))
+
+    entry = await _record(db_session, request=Message(headers=headers))
+
+    stored = json.dumps(entry.request_headers)
+    assert token not in stored and "made-up" not in stored
+    assert entry.truncated is True

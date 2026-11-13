@@ -152,7 +152,8 @@ class _Exchange:
         """Masked headers; a name that occurs more than once gets a list of its values.
 
         All headers of one side share ``MAX_HEADERS_INPUT`` bytes; a name or value that
-        does not fit what is left is stored as the placeholder, never cut.
+        does not fit what is left is stored as the placeholder, never cut. When the name is
+        the placeholder, so is its value: masking by name is no longer possible.
         """
         pairs = headers.items() if isinstance(headers, Mapping) else headers
         collected: dict[str, list[str]] = {}
@@ -161,16 +162,21 @@ class _Exchange:
             if count >= MAX_HEADERS:
                 self.truncated = True
                 break
-            parts: list[str] = []
-            for raw in (raw_name, raw_value):
-                text = _text(raw)
-                bounded = self._bounded(text, min(MAX_MASK_INPUT, budget))
-                if bounded is None:
-                    parts.append(omitted(_utf8_size(text)))
+            name_text, value_text = _text(raw_name), _text(raw_value)
+            name = self._bounded(name_text, min(MAX_MASK_INPUT, budget))
+            if name is None:
+                # Fail closed: a placeholder no longer says the name is a credential, so the
+                # value cannot be masked by its name and goes as well, whatever its size.
+                name = omitted(_utf8_size(name_text))
+                value = omitted(_utf8_size(value_text))
+            else:
+                budget -= _utf8_size(name)
+                bounded_value = self._bounded(value_text, min(MAX_MASK_INPUT, budget))
+                if bounded_value is None:
+                    value = omitted(_utf8_size(value_text))
                 else:
-                    budget -= _utf8_size(bounded)
-                    parts.append(bounded)
-            name, value = parts
+                    budget -= _utf8_size(bounded_value)
+                    value = bounded_value
             collected.setdefault(name, []).append(value)
         masked = self._masker.value(
             {name: values[0] if len(values) == 1 else values for name, values in collected.items()}

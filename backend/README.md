@@ -230,7 +230,8 @@ Every part is masked whole, and only the masked text is cut: a secret the masker
 larger than 65536 bytes of UTF-8 is not masked and not kept in part: it is stored as
 `<omitted: N bytes>` (and `truncated` is set), as binary bodies are stored as
 `<binary N bytes>`. The headers of one side share 65536 bytes; a name or value that does not
-fit what is left is stored as the placeholder too.
+fit what is left is stored as the placeholder too, and an omitted name takes its value with
+it.
 
 The limits of masking: it prefers hiding too much (a field called `monkey` is masked), it
 cannot find a secret that has neither a telling name, nor a schema mark, nor a known value,
