@@ -493,6 +493,29 @@ def test_the_text_rules_take_linear_time(unit: str, count: int):
     assert double / max(single, 1e-3) < 3.0, (single, double)
 
 
+def _pair_scan_seconds(masker: Masker, text: str) -> float:
+    import time
+
+    best = float("inf")
+    for _ in range(3):
+        started = time.perf_counter()
+        list(masker._pair_spans(text))
+        best = min(best, time.perf_counter() - started)
+    return best
+
+
+def test_the_pair_scan_alone_takes_linear_time():
+    # A direct guard for the pair scan, with sizes at which a cheap per-name pass over the
+    # text before it (a ``str.count`` over the prefix runs at C speed) still dominates:
+    # many names, far apart, so the scan's own work per name is small. Twice the input
+    # takes about twice the time (1.8 measured); such a quadratic pass makes it four.
+    masker = Masker()
+    unit = "n=" + "v" * 125 + "&"
+    single = _pair_scan_seconds(masker, unit * 8_192)
+    double = _pair_scan_seconds(masker, unit * 16_384)
+    assert double / max(single, 1e-3) < 3.0, (single, double)
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
