@@ -370,10 +370,12 @@ async def test_status_message_secret_across_the_old_pre_cut_is_masked(
     from app.providers.base import ProviderStatus
     from app.providers.demo.provider import DemoProvider
 
-    token = "Zq8vLw3Np5Rt7Ys9Ub2X"  # 20 characters, no part of it occurs elsewhere
-    message = "x" * 10 + (token + " ") * 94 + token + " tail"
-    assert message.index(token, 10 + 21 * 94) == 1984  # straddles 2000: 16 before, 4 after
-    assert len(message) == 2009
+    # Readable and obviously fake; no 6 characters of it occur elsewhere in a response.
+    token = "-".join(("zebra", "quokka", "ibis", "yak"))
+    copies = 90
+    message = "x" * 10 + (token + " ") * copies + token + " tail"
+    start = 10 + (len(token) + 1) * copies
+    assert start < 2000 < start + len(token)  # one copy straddles character 2000
 
     def leaky_status(self: DemoProvider) -> ProviderStatus:
         return ProviderStatus("connected", message, datetime.now(UTC))
