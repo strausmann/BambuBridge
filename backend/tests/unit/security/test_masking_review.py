@@ -1203,3 +1203,13 @@ def test_repeated_colon_values_that_start_with_a_quote_take_linear_time():
 def test_many_secret_named_multipart_parts_take_linear_time():
     part = '--b\nContent-Disposition: form-data; name="password"\n\nv\n'
     assert_linear(Masker().text, part * 256, part * 1_024)
+
+
+def test_the_codex_reproducers_of_the_earlier_threads_stay_masked():
+    # 01:34Z: a format character in a JSON field name (fixed in 55024a8).
+    assert Masker().body(json.dumps({"to​ken": REMOTE})) == '{"token":"***"}'
+    # 02:10Z: percent escapes around an encoded format character (fixed in 55c804d).
+    target = "https://peer/?q=remo%74e%26%238203%3B-credential"
+    assert "credential" not in Masker(known_secrets=[REMOTE]).target(target)
+    # 02:10Z: an escaped format character next to another \u escape (fixed in fd6aa05).
+    assert Masker(known_secrets=["abcd" + "efgh"]).text(r"a​bcdefgh") == "***"
