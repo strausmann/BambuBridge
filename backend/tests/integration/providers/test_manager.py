@@ -177,7 +177,10 @@ async def test_instance_with_undecryptable_secret_reports_needs_secret(
             assert r.status_code == 200
             body = r.json()
             assert body["status"]["state"] == "needs_secret"
-            assert "token" in body["status"]["message"]
+            # Undecryptable, not merely missing: the operator has to enter it again.
+            assert body["status"]["message"] == (
+                "stored secret cannot be decrypted, enter it again: token"
+            )
             assert body["secrets"] == {"token": {"set": True}}
             listed = await client_b.get(PROVIDERS_URL)
             assert listed.status_code == 200
