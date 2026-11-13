@@ -1,0 +1,480 @@
+"""Regression tests for the masking gaps found in review and in security audit run 6.
+
+Every payload is the one from the finding (or its shape with an obviously fake value).
+The oracle is the same throughout: the secret must not be readable in the output, in any
+spelling a standard decoder turns back into it.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import time
+from urllib.parse import quote
+
+import pytest
+
+from app.security.masking import MASK, Masker, is_sensitive_name, mask
+
+# --- item 1: names (review Important 1, audit H2) ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "access_code",
+        "dev_access_code",
+        "accessCode",
+        "access-code",
+        "passcode",
+        "passphrase",
+        "pass",
+        "user_pass",
+        "PASS",
+        "pw",
+        "userPW",
+        "pin",
+        "pin_code",
+        "pincode",
+        "pinCode",
+        "otp",
+        "totp",
+        "totp_seed",
+        "jwt",
+        "id_jwt",
+        "ticket",
+        "client_assertion",
+        "sig",
+        "sid",
+        "PHPSESSID",
+        "psk",
+        "wifi_psk",
+        "csrf",
+        "X-CSRF-Token",
+        "csrfmiddleware",
+        "SAMLResponse",
+    ],
+)
+def test_more_names_hold_a_credential(name: str):
+    assert is_sensitive_name(name)
+
+
+@pytest.mark.parametrize("name", ["compass", "spinner", "inside", "design", "output", "bypass"])
+def test_short_credential_words_count_as_words_only(name: str):
+    # "pass", "pin", "sid", "sig", "otp", "pw" are whole words of the name, not substrings.
+    assert not is_sensitive_name(name)
+
+
+def test_the_access_code_of_another_printer_in_a_device_list_is_masked():
+    body = '{"devices":[{"name":"p1","dev_access_code":"12345678"},{"accessCode":"87654321"}]}'
+
+    masked = Masker().body(body)
+
+    assert "12345678" not in masked and "87654321" not in masked
+    assert json.loads(masked) == {
+        "devices": [{"name": "p1", "dev_access_code": MASK}, {"accessCode": MASK}]
+    }
+    assert Masker().text("access_code=1234&n=1") == "access_code=***&n=1"
+
+
+# --- item 2: forms in free text (review Important 2, audit H5) -----------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "bad config " + repr({"user": "u", "password": "hunter22"}),
+        "bad config " + repr({"user": "u", "token": b"hunter22"}),
+        "bad config {'pin': 12345678, 'n': 1}",
+        "password: hunter22",
+        "login failed, password: hunter22, retry",
+        "password = hunter22",
+        'password = "hunter 22" next',
+        "password: 'hunter 22'",
+        'token="hunter22"',
+        "token=abc'hunter22",
+        'token=abc"hunter22',
+        "token=ab<hunter22>",
+        "Authorization: Token hunter22",
+        "Authorization: Bearer abcdefghijklmnophunter",
+        "Authorization: Bearer hunter",
+        "X-Api-Key: hunter22",
+        "Cookie: a=1; sid=hunter22",
+        "set-cookie: theme=dark; Path=/; hunter22",
+        "sid=hunter22",
+        "run: tool --password hunter22 --verbose",
+        'run: tool --password "hunter 22" --verbose',
+        "run: tool --api-key=hunter22",
+    ],
+)
+def test_a_value_after_a_secret_name_is_masked_in_any_free_text_form(text: str):
+    masked = Masker().text(text)
+
+    assert "hunter" not in masked, masked
+    assert MASK in masked
+
+
+def test_a_flag_inside_the_value_of_another_flag_is_still_masked():
+    # Found by the fuzz run: the bare value of the first flag swallowed the second one.
+    masked = Masker().text("run --access_code hunter21;--TOKEN hunter22 --x")
+
+    assert "hunter22" not in masked and "hunter21" not in masked
+    # A percent-encoded flag name counts as well, also inside another value (fuzz run).
+    assert "hunter22" not in Masker().text("pin=x<,--pass%77ord hunter22'user")
+
+
+def test_free_text_forms_keep_what_is_not_secret():
+    masker = Masker()
+    assert masker.text("password: hunter22\nuser: bob") == "password: ***\nuser: bob"
+    assert masker.text("run: tool --password hunter22 --verbose") == (
+        "run: tool --password *** --verbose"
+    )
+    assert (
+        masker.text("{'user': 'u', 'password': 'hunter22'}") == "{'user': 'u', 'password': '***'}"
+    )
+    assert masker.text("https://host.example.com:8443/a") == "https://host.example.com:8443/a"
+    assert masker.text("note: see below") == "note: see below"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Location: https://app.example.com/cb?next=https%3A%2F%2Fy.example.com%2F%3Ftoken%3Dhunter22",
+        "redirect=%2Fapi%3Fpassword%3Dhunter22%26n%3D1",
+        "next=%252Fapi%253Fpassword%253Dhunter22",  # encoded twice
+        "q=%7B%22password%22%3A%22hunter22%22%7D",
+        "a=1+password%3Dhunter22",
+    ],
+)
+def test_names_are_also_found_in_the_percent_decoded_text(text: str):
+    for masked in (Masker().text(text), Masker().target(text)):
+        assert "hunter22" not in masked, masked
+
+
+def test_a_known_secret_that_is_also_a_name_does_not_hide_the_value():
+    # Codex P1: masking the name first left the name rules nothing to recognise.
+    masker = Masker(known_secrets=["password"])
+
+    assert "remote-credential" not in masker.text("password=remote-credential")
+    assert "remote-credential" not in masker.target("/x?password=remote-credential&n=1")
+
+
+# --- item 3: userinfo (audit H4) ------------------------------------------------------------
+
+
+def test_userinfo_runs_to_the_last_at_sign_before_the_path():
+    masked = Masker().text("connect mqtt://user:pa@hunter22@broker.example.com:8883/t failed")
+
+    assert "hunter22" not in masked and "pa@" not in masked
+    assert masked == "connect mqtt://user:***@broker.example.com:8883/t failed"
+
+
+def test_a_userinfo_without_a_colon_is_masked_whole():
+    assert Masker().text("GET https://hunter22tok@host.example.com/x") == (
+        "GET https://***@host.example.com/x"
+    )
+
+
+def test_an_at_sign_after_the_host_is_no_userinfo():
+    text = "GET https://host.example.com/users/@me?x=a@b"
+    assert Masker().text(text) == text
+
+
+# --- item 4: known values in the spellings of other encoders (audit F1, review minor 3) ---
+
+S = "Tok3n/Ab+cd=ef/9Q"
+
+
+@pytest.mark.parametrize(
+    ("secret", "text"),
+    [
+        (S, '502 from upstream: {"error":"bad value","got":"Tok3n\\/Ab+cd=ef\\/9Q"}'),
+        (S, '{"a":1}\n{"note":"Tok3n\\/Ab+cd=ef\\/9Q"}\n'),
+        ("tok&en<9>Value", 'upstream: {"got":"tok\\u0026en\\u003c9\\u003eValue"}'),
+        ("Ab+Cd/Ef<Gh&Ij1234==", '{"note":"Ab\\u002BCd/Ef\\u003CGh\\u0026Ij1234=="}'),
+        ("Ab+cd\u00f6f-12xyz", "x Ab\\u002Bcd\\u00F6f-12xyz y"),
+        ("abc def!*'()xyz", "user=u&device=abc%20def!*'()xyz"),
+        ("abc def!*'()xyz", "user=u&device=abc+def%21*%27%28%29xyz"),
+        (S, "x Tok3n%2fAb%2Bcd%3Def%2F9Q y"),
+        (S, "x Tok3n\\x2fAb\\x2bcd=ef\\x2F9Q y"),
+        ("kn\u00f6wn-value-3", "x kn%C3%B6wn-value-3 y"),
+        ("kn\u00f6wn-value-3", "x kn%c3%b6wn-value-3 y"),
+        ("\U0001f600-emoji-key", 'x "\\ud83d\\ude00-emoji-key" y'),
+    ],
+    ids=[
+        "php-slash",
+        "ndjson",
+        "go-html-safe",
+        "dotnet-upper",
+        "dotnet-non-ascii",
+        "js-encodeURIComponent",
+        "js-URLSearchParams",
+        "percent-mixed-case",
+        "hex-escapes",
+        "percent-utf8-upper",
+        "percent-utf8-lower",
+        "surrogate-pair",
+    ],
+)
+def test_a_known_secret_is_masked_in_the_spelling_of_any_encoder(secret: str, text: str):
+    masked = Masker(known_secrets=[secret]).text(text)
+
+    assert MASK in masked
+    for fragment in (secret, "Tok3n", "9Q", "en<9>", "Ij1234", "def!", "f-12xyz", "emoji"):
+        if fragment in secret:
+            assert fragment not in masked, masked
+
+
+@pytest.mark.parametrize(
+    "secret",
+    ['pa"ss\\w\u00f6rd-12', 'it\'s "x" value', "abc\x01defgh", "kn\u00f6wn-value-3"],
+)
+def test_a_known_secret_is_masked_in_its_python_repr(secret: str):
+    masker = Masker(known_secrets=[secret])
+    for text in (
+        "bad config " + repr({"user": "u", "value": secret}),
+        "bad bytes " + repr(secret.encode()),
+        f"raised {ValueError(secret)!r}",
+    ):
+        masked = masker.text(text)
+        assert MASK in masked, text
+        assert secret not in masked
+        assert repr(secret)[1:-1] not in masked
+        assert repr(secret.encode())[2:-1] not in masked
+
+
+def test_a_long_known_secret_in_wrapped_base64_is_masked():
+    secret = "fake-" + "x0Y1z2" * 13  # 83 characters: base64.encodebytes wraps it
+    encoded = base64.encodebytes(secret.encode()).decode()
+    assert "\n" in encoded.rstrip("\n")
+
+    masked = Masker(known_secrets=[secret]).text("cfg:\n" + encoded)
+
+    assert masked.startswith("cfg:\n***")
+    assert secret.encode() not in _decode_base64_remains(masked)
+
+
+@pytest.mark.parametrize("prefix", [b"", b"a", b"ab"], ids=["aligned", "offset-1", "offset-2"])
+@pytest.mark.parametrize("wrap", [False, True], ids=["one-line", "wrapped"])
+def test_a_known_secret_inside_a_longer_base64_value_is_masked(prefix: bytes, wrap: bool):
+    secret = "fake-secret-value-0001"
+    data = prefix + b'{"user":"u","key_echo":"' + secret.encode() + b'","n":12345}'
+    encoded = (base64.encodebytes if wrap else base64.b64encode)(data).decode()
+
+    masked = Masker(known_secrets=[secret]).text(f"blob {encoded} end")
+
+    assert MASK in masked
+    assert secret.encode() not in _decode_base64_remains(masked)
+    for urlsafe in (base64.urlsafe_b64encode(data).decode(),):
+        assert secret.encode() not in _decode_base64_remains(
+            Masker(known_secrets=[secret]).text(urlsafe), urlsafe=True
+        )
+
+
+def _decode_base64_remains(text: str, *, urlsafe: bool = False) -> bytes:
+    """Everything left around the masks, decoded as base64 in each alignment."""
+    alphabet = "-_" if urlsafe else "+/"
+    keep = "".join(
+        c for c in text.replace(MASK, "") if c.isalnum() or c in alphabet or c == "="
+    ).replace("=", "")
+    out = b""
+    for skip in range(4):
+        part = keep[skip:]
+        part = part[: len(part) - len(part) % 4]
+        decode = base64.urlsafe_b64decode if urlsafe else base64.b64decode
+        out += decode(part + "")
+    return out
+
+
+def test_registered_secrets_are_stripped_of_surrounding_whitespace():
+    for entry in ("  fake-secret-value-0001 \n", b"\tfake-secret-value-0001 "):
+        masker = Masker(known_secrets=[entry])  # type: ignore[list-item]
+        assert masker.text("x fake-secret-value-0001 y") == "x *** y"
+
+
+def test_a_known_secret_with_many_backslashes_is_matched_in_linear_time():
+    secret = "\\" * 40
+    started = time.monotonic()
+    masked = Masker(known_secrets=[secret]).text("\\" * 65_536 + "x")
+    assert time.monotonic() - started < 5
+    assert masked.endswith("x") and "\\" * 40 not in masked
+
+
+def test_longest_secret_covers_the_longest_spelling():
+    masker = Masker(known_secrets=["\U0001f600" * 8])
+    assert masker.longest_secret >= len("\\ud83d\\ude00") * 8
+
+
+# --- item 5: JSON bodies (audit F2 and H1) --------------------------------------------------
+
+
+def test_a_repeated_name_cannot_hide_a_known_secret():
+    masker = Masker(known_secrets=[S])
+
+    masked = masker.body('{"note":"Tok3n\\/Ab+cd=ef\\/9Q","note":"x"}')
+
+    assert "Tok3n" not in masked
+    assert masked == '{"note":"***","note#2":"x"}'
+
+
+def test_a_known_secret_across_fields_of_a_rewritten_body_is_masked():
+    # The secret spans two values; masking "token" forces the rewrite, whose text is
+    # searched for known values once more.
+    secret = 'abcd1234","n":"wxyz'
+    masked = Masker(known_secrets=[secret]).body('{"token":"t","x":"abcd1234","n":"wxyz"}')
+
+    assert masked == '{"token":"***","x":"***"}'
+
+
+def test_a_name_encoded_three_times_is_found():
+    text = "next=" + quote(quote(quote("/api?password=hunter22", safe=""), safe=""), safe="")
+    assert "hunter22" not in Masker().text(text)
+
+
+def test_a_document_with_repeated_names_counts_as_changed():
+    assert Masker().body('{"a":1,"a":2,"a":3}') == '{"a":1,"a#2":2,"a#3":3}'
+    # Without repeats nothing changes and the text is kept as it came.
+    assert Masker().body('{ "a" : 1 }') == '{ "a" : 1 }'
+
+
+def test_a_byte_order_mark_does_not_keep_a_json_body_from_being_parsed():
+    masker = Masker(known_secrets=[S])
+
+    masked = masker.body('\ufeff{"data":{"note":"Tok3n\\/Ab+cd=ef\\/9Q"}}')
+
+    assert masked == '{"data":{"note":"***"}}'
+
+
+def test_a_body_is_masked_the_same_whether_or_not_another_field_was():
+    # "serial" is no secret word: only the leaf name of the path marks it here.
+    masker = Masker(secret_paths=["connection.serial"])
+
+    alone = masker.body('{"print":{"serial":"12345678"}}')
+    together = masker.body('{"token":"abc","print":{"serial":"12345678"}}')
+
+    assert "12345678" not in alone and "12345678" not in together
+    assert json.loads(together) == {"token": MASK, "print": {"serial": MASK}}
+
+
+# --- item 6: multipart form bodies (audit H3) ------------------------------------------------
+
+
+@pytest.mark.parametrize("newline", ["\r\n", "\n"], ids=["crlf", "lf"])
+def test_a_multipart_field_with_a_secret_name_is_masked(newline: str):
+    parts = [
+        "--XyZ",
+        'Content-Disposition: form-data; name="password"',
+        "",
+        "hunter22",
+        "--XyZ",
+        'content-disposition: form-data; name="user"',
+        "Content-Type: text/plain",
+        "",
+        "bob",
+        "--XyZ",
+        "Content-Disposition: form-data; name=api_key",
+        "",
+        "line one hunter22",
+        "line two hunter22",
+        "--XyZ--",
+        "",
+    ]
+    body = newline.join(parts)
+
+    masked = Masker().body(body)
+
+    assert "hunter22" not in masked
+    assert f"{newline}bob{newline}" in masked
+    assert masked.count(MASK) == 2
+
+
+# --- item 7: types (review minor 4, audit H7, H8) -------------------------------------------
+
+
+class _Opaque:
+    def __str__(self) -> str:
+        return "token=hunter22 and fake-secret-value-0001"
+
+
+def test_mask_of_an_unknown_type_fails_closed():
+    masked = mask({"a": _Opaque(), "b": [_Opaque()]}, known_secrets=["fake-secret-value-0001"])
+
+    assert masked == {"a": "token=*** and ***", "b": ["token=*** and ***"]}
+    assert mask(_Opaque()) == "token=*** and fake-secret-value-0001"
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        None,
+        12345678,
+        _Opaque(),
+        bytearray(b"fake-secret-value"),
+        b"\xff\xfe\xfd\xfc\xfb\xfa\xf9\xf8",
+    ],
+    ids=["none", "int", "object", "bytearray", "latin-1-bytes"],
+)
+def test_a_known_secret_that_is_not_text_is_refused(secret: object):
+    with pytest.raises(ValueError, match="known_secrets") as exc:
+        Masker(known_secrets=[secret])  # type: ignore[list-item]
+    assert "fake" not in str(exc.value)
+
+
+def test_a_non_ascii_known_secret_read_as_latin_1_is_masked():
+    secret = "kn\u00f6wn-v\u00e4lue-3"
+    as_latin_1 = secret.encode().decode("latin-1")
+
+    assert Masker(known_secrets=[secret]).text(f"x {as_latin_1} y") == "x *** y"
+
+
+# --- item 8: run time ------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a: " * 21_845,
+        "a = " * 16_384,
+        "'a':" * 16_384,
+        "--a " * 16_384,
+        "://" + "@" * 65_000,
+        "content-disposition: name=a\n" * 2_400,
+        'content-disposition: name="password"\n\n' * 1_600,
+        "%25" * 21_845,
+        "\\u0041" * 10_922,
+        "password: " * 6_553,
+        "{'password':" * 5_400,
+    ],
+    ids=[
+        "colons",
+        "spaced-pairs",
+        "repr-names",
+        "flags",
+        "at-signs",
+        "multipart-no-blank",
+        "multipart-no-boundary",
+        "percent",
+        "escapes",
+        "colon-chain",
+        "repr-chain",
+    ],
+)
+def test_the_new_rules_take_linear_time(text: str):
+    masker = Masker(known_secrets=["fake-secret-value-0001", "\\" * 12, "A" * 9 + "%"])
+    started = time.monotonic()
+    masker.text(text)
+    masker.body(text)
+    assert time.monotonic() - started < 5
+
+
+def test_quote_of_a_known_secret_is_still_masked_after_the_change():
+    # The spellings masked before this round stay masked (no rule was narrowed).
+    secret = 'p\u00e4ss w/rd+"x"&=?'
+    masker = Masker(known_secrets=[secret])
+    for spelled in (
+        quote(secret, safe=""),
+        quote(secret, safe="").lower(),
+        json.dumps(secret)[1:-1],
+        base64.b64encode(secret.encode()).decode(),
+    ):
+        assert masker.text(f"<{spelled}>") == "<***>"

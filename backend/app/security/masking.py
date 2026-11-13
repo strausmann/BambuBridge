@@ -3,27 +3,41 @@
 Three rules decide what becomes ``***``:
 
 1. **By name.** The value of a header, JSON field, query or form parameter whose name is
-   one of ``authorization``, ``cookie``, ``set-cookie``, ``x-bambubridge-key`` or contains
-   one of the words in ``SENSITIVE_WORDS`` (``token``, ``secret``, ``password``, ``key``
-   and a few more). Names are compared without regard to case.
+   one of ``authorization``, ``cookie``, ``set-cookie``, ``x-bambubridge-key``, contains
+   one of the words in ``SENSITIVE_WORDS`` (``token``, ``secret``, ``password``, ``key``,
+   ``access_code`` and more) or has one of ``SENSITIVE_NAME_WORDS`` (``pass``, ``pin``,
+   ``sid`` ...) as a word of its own (``user_pass``, ``userPW``). Names are compared without
+   regard to case.
 2. **By path.** JSON fields a provider marked with ``"x-secret": true`` in its schema
-   (:func:`secret_paths_from_schema`). A path matches wherever a field path *ends* with it,
-   so ``connection.access_code`` also covers the same object one level down in a message.
+   (:func:`secret_paths_from_schema`). The last segment of a path is what counts: every
+   field of that name is masked, wherever it stands, in parsed JSON and in text alike, so
+   that a body is never masked differently depending on what else is in it.
 3. **By value.** Every occurrence of a known secret value of at least
-   ``MIN_KNOWN_SECRET_LENGTH`` characters, as a substring, also in its percent-encoded,
-   base64 (whole value, with and without padding) and JSON-escaped forms.
+   ``MIN_KNOWN_SECRET_LENGTH`` characters (surrounding white space removed), in any
+   spelling an encoder writes: each character as itself or escaped (percent escape of its
+   UTF-8 bytes in either case, ``\\uXXXX`` in either case and as a surrogate pair, ``\\xNN``,
+   ``\\UXXXXXXXX``, the short escapes such as ``\\/`` and ``\\"``, ``+`` for a space), the
+   Python ``repr`` spellings, the UTF-8 bytes read as ISO 8859-1, and base64 or base64url of
+   its UTF-8 bytes, also as part of a longer base64 value in any of the three alignments and
+   wrapped over several lines.
 
 In text that is not parsed JSON (an address, an error message, a body in another format,
-broken JSON) the names are found by patterns: ``"name": value``, ``name=value`` with a
-quoted or bare value, the password in ``scheme://user:password@host`` and the credential
-after ``Bearer`` or ``Basic``. Each pattern is tried at every position of the same text and
-the union of what they find is masked, so no pattern depends on what another one left, and
-a pair inside the quoted value of a plain name (``a="x password=y"``) is found as well.
+broken JSON) the names are found by patterns: ``"name": value`` and ``'name': value`` (a
+Python dict), ``name=value`` and ``name = value`` with a quoted or bare value (a bare value
+ends at ``&`` or white space only), ``name: value`` (the rest of the line, as in a header
+line ``Authorization: Token x`` or ``Cookie: a=1; sid=x``), ``--name value`` (a command
+line), a multipart form field ``Content-Disposition: form-data; name="password"``, the user
+information in ``scheme://user:password@host`` (up to the last ``@``; without a colon the
+whole of it, a token given as the user name) and the credential after ``Bearer`` or
+``Basic``. Each pattern and the known values are looked for in the same text and the union
+of what they find is masked, so no pattern depends on what another one left. The same is
+then done once more on the percent-decoded text (and on that decoded again, for an address
+encoded into another one): if that finds anything, the decoded text is what is stored.
 
 Masking prefers hiding too much over showing a secret: a field called ``monkey`` is masked
 because its name contains ``key``. What it cannot do: find a secret nobody named or marked,
-find a known secret that was transformed in a way not listed above (hashed, base64 as part
-of a longer value, encoded twice), or keep the structure below a masked field.
+find a known secret that was transformed in a way not listed above (hashed, encrypted,
+escaped in two different ways at once), or keep the structure below a masked field.
 
 Nothing here logs, and no error message quotes a value.
 """
@@ -31,10 +45,11 @@ Nothing here logs, and no error message quotes a value.
 from __future__ import annotations
 
 import base64
+import bisect
 import json
 import re
 import unicodedata
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from typing import Any, cast
 from urllib.parse import quote, quote_plus, unquote, unquote_plus
 
@@ -42,48 +57,75 @@ MASK = "***"
 MIN_KNOWN_SECRET_LENGTH = 8
 
 SENSITIVE_HEADERS = frozenset({"authorization", "cookie", "set-cookie", "x-bambubridge-key"})
-# ``auth`` (``x-auth``, ``proxy-authorization``) but not the word ``author``.
+# Searched as substrings of the folded name. ``auth`` (``x-auth``, ``proxy-authorization``)
+# but not the word ``author``.
 SENSITIVE_WORDS = re.compile(
-    r"token|secret|passw|pwd|key|auth(?!ors?(?![a-z]))|cookie|credential|session|signature"
+    r"token|secret|passw|pwd|key|auth(?!ors?(?![a-z]))|cookie|credential|session|sessid"
+    r"|signature|access[_.\-\s]?code|passcode|passphrase|pin[_.\-\s]?code|totp|jwt|ticket"
+    r"|assertion|psk|csrf|xsrf|samlresponse"
 )
+# Short words that count only as a whole word of the name: as substrings they would hide
+# "compass", "spinner" or "inside".
+SENSITIVE_NAME_WORDS = frozenset({"pass", "pw", "pin", "otp", "sig", "sid"})
 
 NESTED_TOO_DEEPLY = "<not recorded: nested too deeply>"
 
+# Words of a name: ``userPW`` -> user, PW; ``X-CSRF-Token`` -> X, CSRF, Token.
+_NAME_WORD = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 _PERCENT_ESCAPE = re.compile(r"%[0-9A-F]{2}")
+# How often the text is percent-decoded to look for names and known values once more.
+_DECODE_ROUNDS = 3
+
 # The text rules below each name the spans of a text that hold a secret; ``Masker.text``
 # replaces the union of all spans. No rule works on the output of another one, so none can
 # take away what another needs to see (a name, a quote, a scheme word).
 
-# ``scheme://user:password@host``: the password.
-_USERINFO = re.compile(r"(?<=://)[^/?#@\s:]*:([^/?#@\s]*)@")
+# ``scheme://userinfo@host``: greedy up to the last ``@`` before the path.
+_USERINFO = re.compile(r"(?<=://)([^/?#\s]*)@")
 # ``Bearer <token>`` / ``Basic <credentials>``; a following all-lower-case word ("basic
 # authentication failed") is prose, not a credential. Tried at every position (lookahead),
 # so a scheme word inside the token of another one (``basic x=Bearer <token>``) counts too.
+# An explicit header line (``Authorization: Bearer <token>``) is masked by name instead,
+# whatever the token looks like.
 _AUTH_SCHEME = re.compile(
     r"(?=\b(?i:bearer|basic)\s+((?![a-z]+(?![A-Za-z0-9._~+/=-]))[A-Za-z0-9._~+/=-]{8,}))"
 )
-# ``"name": value`` in text that looks like JSON (also when it is cut off or broken), tried
-# at every quote, because in broken text any quote may be the one that opens a name. The
-# value is a string (possibly unterminated at the end of the text), the start of an object
-# or array, or a bare literal. The bound on the name keeps the scan linear.
-_JSON_FIELD = re.compile(
+# ``"name": value`` or ``'name': value`` in text that looks like JSON or a Python dict (also
+# when it is cut off or broken), tried at every quote, because in broken text any quote may
+# be the one that opens a name. The value is a string (possibly unterminated at the end of
+# the text, possibly with a Python prefix such as ``b'...'``), the start of an object or
+# array, or a bare literal. The bound on the name keeps the scan linear.
+_QUOTED_FIELD = re.compile(
     r"""(?=
-        "((?:[^"\\]|\\.){0,128})"\s*:\s*
-        (?: "((?:[^"\\]|\\.)*)("?) | ([\[{]) | ([^\s,}\]"]+) )
+        (["'])((?:(?!\1)[^\\]|\\.){0,128})\1\s*:\s*
+        (?: [bBrRuUfF]{0,2}(["'])((?:(?!\3)[^\\]|\\.)*)(\3)? | ([\[{]) | ([^\s,}\]"']+) )
     )""",
     re.VERBOSE,
 )
-# ``name=`` as in a query string, a form body or a message for people. The lookbehind makes
-# a name start only where a run of name characters starts, which keeps the scan linear.
-_PAIR_NAME = re.compile(r"(?<![A-Za-z0-9_.%\-\[\]])([A-Za-z0-9_.%\-\[\]]+)=")
-# The value after a secret name: quoted (possibly unterminated), a scheme word with what
-# follows it (``Authorization=Bearer <token>``), or bare up to the next ``&``, space, quote
-# or angle bracket.
-_PAIR_VALUE = re.compile(
-    r""""(?:[^"\\]|\\.)*"?|'[^']*'?|(?i:bearer|basic)\s+[^&\s"'<>]*|[^&\s"'<>]*"""
-)
+# ``name=`` or ``name:`` (with optional blanks around the sign) as in a query string, a form
+# body, a header line or a message for people. The lookbehind makes a name start only where
+# a run of name characters starts, which keeps the scan linear.
+_PAIR_NAME = re.compile(r"(?<![A-Za-z0-9_.%\-\[\]])([A-Za-z0-9_.%\-\[\]]+)[ \t]*([=:])[ \t]*")
+# The value after ``name=``: quoted (possibly unterminated), a scheme word with what follows
+# it (``Authorization=Bearer <token>``), or bare up to the next ``&`` or white space.
+_PAIR_VALUE = re.compile(r""""(?:[^"\\]|\\.)*"?|'[^']*'?|(?i:bearer|basic)\s+[^&\s]*|[^&\s]*""")
 # A value that is not a plain bare run: it starts with a quote or a scheme word.
 _PAIR_VALUE_START = re.compile(r"""["']|(?i:bearer|basic)\s""")
+# The value after ``name:``: the rest of the line.
+_LINE_REST = re.compile(r"[^\r\n]*")
+# ``--name value`` / ``-name value`` on a command line (``--name=value`` is a pair). Tried at
+# every position (lookahead): a flag inside the bare value of another one counts too.
+_FLAG = re.compile(
+    r"""(?=(?<![\w-])--?([A-Za-z%][\w.%-]{0,127})[ \t]+("(?:[^"\\]|\\.)*"?|'[^']*'?|[^\s]+))"""
+)
+# A part of a multipart form body: its Content-Disposition line names the field; the value
+# follows the blank line after the part's headers and ends before the next boundary line.
+_MULTIPART_PART = re.compile(
+    r"""(?im)^content-disposition:[^\r\n]*?\bname\*?=(?:"((?:[^"\\\r\n]|\\.)*)"|([^\s;"]+))
+        [^\r\n]*(?:\r?\n[^\r\n]+){0,32}\r?\n\r?\n""",
+    re.VERBOSE,
+)
+_BOUNDARY_LINE = re.compile(r"\r?\n--")
 _SURROGATE = re.compile("[\ud800-\udfff]")
 
 
@@ -93,56 +135,158 @@ def _fold(name: str) -> str:
 
 def is_sensitive_name(name: str) -> bool:
     """Whether a header, field or parameter of this name holds a credential (rule 1)."""
-    folded = _fold(name)
-    return folded in SENSITIVE_HEADERS or SENSITIVE_WORDS.search(folded) is not None
+    normalized = unicodedata.normalize("NFKC", name)
+    folded = normalized.casefold()
+    if folded in SENSITIVE_HEADERS or SENSITIVE_WORDS.search(folded) is not None:
+        return True
+    return any(word.casefold() in SENSITIVE_NAME_WORDS for word in _NAME_WORD.findall(normalized))
 
 
-def _secret_variants(secret: str) -> set[str]:
-    """The spellings of a known secret that are searched for."""
+# -- rule 3: the spellings of a known secret --------------------------------------------------
+
+_SHORT_ESCAPES = {
+    '"': '\\"',
+    "\\": "\\\\",
+    "/": "\\/",
+    "'": "\\'",
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+    "\b": "\\b",
+    "\f": "\\f",
+}
+
+
+def _char_forms(char: str) -> set[str]:
+    """Every spelling of one character that an encoder or ``repr`` writes."""
+    forms = {char}
+    data = char.encode("utf-8", "surrogatepass")
+    forms.add("".join(f"%{byte:02x}" for byte in data))
+    forms.add("".join(f"\\x{byte:02x}" for byte in data))
+    code = ord(char)
+    if code < 0x100:
+        forms.add(f"\\x{code:02x}")
+    if code > 0xFFFF:
+        forms.add(f"\\U{code:08x}")
+    units = char.encode("utf-16-be", "surrogatepass")
+    forms.add("".join(f"\\u{units[i]:02x}{units[i + 1]:02x}" for i in range(0, len(units), 2)))
+    if char == " ":
+        forms.add("+")
+    if char in _SHORT_ESCAPES:
+        forms.add(_SHORT_ESCAPES[char])
+    return forms
+
+
+def _form_pattern(form: str) -> str:
+    # Only escapes are matched without regard to case, never the character itself.
+    escaped = re.escape(form)
+    return f"(?i:{escaped})" if len(form) > 1 and form[0] in "%\\" else escaped
+
+
+def _char_pattern(char: str) -> str:
+    # Atomic, longest form first: no backtracking between overlapping forms (``\\`` and
+    # ``\\\\``, ``%`` and ``%25``), which keeps the search linear.
+    forms = sorted(_char_forms(char), key=lambda form: (-len(form), form))
+    return "(?>" + "|".join(_form_pattern(form) for form in forms) + ")"
+
+
+_LINE_BREAK = r"(?:\r?\n)?"
+
+
+def _wrapped(encoded: str) -> str:
+    """``encoded`` with an optional line break between any two characters."""
+    return _LINE_BREAK.join(re.escape(char) for char in encoded)
+
+
+def _base64_patterns(raw: bytes) -> tuple[list[str], int]:
+    """Patterns for base64 and base64url of ``raw``: the whole value, and the part that
+    only ``raw`` decides when it is in a longer value at each of the three alignments."""
+    patterns: list[str] = []
+    longest = 0
+    for encode in (base64.b64encode, base64.urlsafe_b64encode):
+        whole = encode(raw).decode("ascii").rstrip("=")
+        patterns.append(_wrapped(whole) + f"(?:{_LINE_BREAK}=){{0,2}}")
+        longest = max(longest, 3 * len(whole) + 6)
+        cores = set()
+        for offset in (0, 1, 2):
+            # Characters whose six bits all come from ``raw``, behind ``offset`` other bytes.
+            text = encode(b"\0" * offset + raw).decode("ascii")
+            first = -(-8 * offset // 6)
+            last = 8 * (offset + len(raw)) // 6
+            cores.add(text[first:last])
+        patterns += [_wrapped(core) for core in sorted(cores, key=lambda c: (-len(c), c))]
+    return patterns, longest
+
+
+def _literal_spellings(secret: str) -> set[str]:
+    """Whole-value spellings, for what the per-character pattern cannot take apart (a run
+    of backslashes in the secret itself, where the atomic groups take the wrong pair)."""
     raw = secret.encode("utf-8", "surrogatepass")
     percent = {quote(secret, safe=""), quote(secret, safe="/"), quote_plus(secret)}
     percent |= {_PERCENT_ESCAPE.sub(lambda m: m.group().lower(), p) for p in percent}
-    b64 = {base64.b64encode(raw).decode("ascii"), base64.urlsafe_b64encode(raw).decode("ascii")}
-    b64 |= {b.rstrip("=") for b in b64}
     escaped = {json.dumps(secret)[1:-1], json.dumps(secret, ensure_ascii=False)[1:-1]}
-    return {secret} | percent | b64 | escaped
+    reprs = {repr(secret)[1:-1], repr(raw)[2:-1]}
+    latin_1 = {raw.decode("latin-1")}
+    return {secret} | percent | escaped | reprs | latin_1
+
+
+def _secret_pattern(secret: str) -> tuple[str, int]:
+    """One alternation for all spellings of ``secret``, and the longest it can match."""
+    per_char = "".join(_char_pattern(char) for char in secret)
+    longest = sum(max(map(len, _char_forms(char))) for char in secret)
+    b64, b64_longest = _base64_patterns(secret.encode("utf-8", "surrogatepass"))
+    literals = sorted(_literal_spellings(secret), key=lambda v: (-len(v), v))
+    longest = max(longest, b64_longest, len(literals[0]))
+    return "|".join([*b64, per_char, *(re.escape(v) for v in literals)]), longest
+
+
+def _known_secret(entry: object) -> str:
+    if isinstance(entry, bytes):
+        try:
+            return entry.decode("utf-8").strip()
+        except UnicodeDecodeError:
+            raise ValueError("known_secrets must hold strings or UTF-8 bytes") from None
+    if isinstance(entry, str):
+        return entry.strip()
+    raise ValueError("known_secrets must hold strings or UTF-8 bytes")
+
+
+class _Pairs(list[tuple[str, Any]]):
+    """A JSON object as its (name, value) pairs, because a name occurs more than once."""
 
 
 class Masker:
     """The three rules for one set of secret paths and known secret values.
 
     Build it once per recorded exchange and use it for every part. ``secret_paths`` are
-    dotted field paths (``connection.access_code``); ``known_secrets`` are plaintext values
-    (bytes are read as UTF-8). A single string is taken as one entry. Other entries that are
-    not strings, empty paths and values shorter than ``MIN_KNOWN_SECRET_LENGTH`` are ignored.
+    dotted field paths (``connection.access_code``); ``known_secrets`` are plaintext values,
+    strings or UTF-8 bytes; anything else raises ``ValueError``. A single string is taken as
+    one entry. Values shorter than ``MIN_KNOWN_SECRET_LENGTH`` (after removing surrounding
+    white space) and secret paths that are not strings or empty are ignored.
     """
 
     def __init__(
         self, *, secret_paths: Collection[str] = (), known_secrets: Collection[str] = ()
     ) -> None:
-        paths: set[tuple[str, ...]] = set()
+        leaves: set[str] = set()
         for path in _entries(secret_paths):
             if isinstance(path, str):
-                parts = tuple(_fold(part) for part in path.split(".") if part)
+                parts = [part for part in path.split(".") if part]
                 if parts:
-                    paths.add(parts)
-        self._paths = frozenset(paths)
-        self._leaf_names = frozenset(path[-1] for path in paths)
-        variants: set[str] = set()
-        for secret in _entries(known_secrets):
-            if isinstance(secret, bytes):
-                try:
-                    secret = secret.decode("utf-8")
-                except UnicodeDecodeError:
-                    continue
-            if isinstance(secret, str) and len(secret) >= MIN_KNOWN_SECRET_LENGTH:
-                variants |= _secret_variants(secret)
-        # Longest first: at one position the longest spelling is the one that is replaced.
-        ordered = sorted(variants, key=lambda v: (-len(v), v))
-        self.longest_secret = len(ordered[0]) if ordered else 0
+                    leaves.add(_fold(parts[-1]))
+        self._leaf_names = frozenset(leaves)
+        secrets = {_known_secret(entry) for entry in _entries(known_secrets)}
+        # Longest first: at one position the longest secret is the one that is replaced.
+        ordered = sorted(
+            (s for s in secrets if len(s) >= MIN_KNOWN_SECRET_LENGTH), key=lambda s: (-len(s), s)
+        )
+        patterns = [_secret_pattern(secret) for secret in ordered]
+        self.longest_secret = max((longest for _, longest in patterns), default=0)
         # A lookahead finds overlapping occurrences too.
         self._known = (
-            re.compile("(?=(" + "|".join(re.escape(v) for v in ordered) + "))") if ordered else None
+            re.compile("(?=(" + "|".join(pattern for pattern, _ in patterns) + "))")
+            if patterns
+            else None
         )
 
     # -- rule 3: known values -----------------------------------------------
@@ -174,7 +318,7 @@ class Masker:
         return "".join(out)
 
     def _has_known(self, text: str) -> bool:
-        return self._known is not None and self._known.search(text) is not None
+        return next(self._known_spans(text), None) is not None
 
     # -- rules 1 and 2 on names ---------------------------------------------
 
@@ -182,40 +326,39 @@ class Masker:
         return is_sensitive_name(name) or _fold(name) in self._leaf_names
 
     def _is_secret_written_name(self, name: str) -> bool:
-        """For a name as written in text: judged as it stands and percent-decoded
-        (``pass%77ord``; but ``%bAuthorization`` must not decode its way out)."""
+        """For a name as written: judged as it stands and percent-decoded (``pass%77ord``;
+        but ``%bAuthorization`` must not decode its way out)."""
         return self._is_secret_name(name) or self._is_secret_name(unquote_plus(name))
 
-    def _at_secret_path(self, path: tuple[str, ...]) -> bool:
-        return any(path[-len(secret) :] == secret for secret in self._paths)
-
-    def _is_secret_json_name(self, raw: str) -> bool:
+    def _is_secret_quoted_name(self, raw: str, quote_char: str) -> bool:
         """``raw`` is the name as written between the quotes, escapes included."""
-        try:
-            name = json.loads(f'"{raw}"')
-        except ValueError:
-            name = raw
-        return self._is_secret_written_name(str(name))
+        name: object = raw
+        if quote_char == '"':
+            try:
+                name = json.loads(f'"{raw}"')
+            except ValueError:
+                name = raw
+        return self._is_secret_written_name(str(name)) or self._is_secret_written_name(raw)
 
-    def _json_spans(self, text: str) -> Iterator[tuple[int, int]]:
-        """Values of secret-named ``"name": value`` fields."""
-        for match in _JSON_FIELD.finditer(text):
-            if not self._is_secret_json_name(match.group(1)):
+    def _quoted_field_spans(self, text: str) -> Iterator[tuple[int, int]]:
+        """Values of secret-named ``"name": value`` / ``'name': value`` fields."""
+        for match in _QUOTED_FIELD.finditer(text):
+            if not self._is_secret_quoted_name(match.group(2), match.group(1)):
                 continue
-            if match.start(4) >= 0:
+            if match.start(6) >= 0:
                 # An object or array: a pattern cannot tell where it ends, the rest goes.
-                yield match.start(4), len(text)
-            elif match.start(5) >= 0:
-                if match.group(5) != "null":
-                    yield match.span(5)
-            elif match.group(3):
-                yield match.span(2)
+                yield match.start(6), len(text)
+            elif match.start(7) >= 0:
+                if match.group(7) not in ("null", "None"):
+                    yield match.span(7)
+            elif match.group(5) is not None:
+                yield match.span(4)
             else:
                 # A string that is never closed: it runs to the end of the text.
-                yield match.start(2), len(text)
+                yield match.start(4), len(text)
 
     def _pair_spans(self, text: str) -> Iterator[tuple[int, int]]:
-        """Values of secret-named ``name=value`` pairs.
+        """Values of secret-named ``name=value`` and ``name: value`` pairs.
 
         Every name is looked at, also one inside the value of another: a pair inside the
         value of a plain name (``a="x password=y"``, ``a=1;password=y``) is found, and so is
@@ -226,9 +369,11 @@ class Masker:
         bare_end = -1
         for match in _PAIR_NAME.finditer(text):
             start = match.end()
-            # A name that ends where a bare value ends was swallowed by that value; what
-            # follows it (a quoted string) is part of the secret.
-            swallowed = start == bare_end
+            if match.group(2) == ":" and text.startswith("//", match.end(2)):
+                continue  # ``scheme://``
+            # A name inside the bare value of a secret name was swallowed by that value;
+            # what follows it (a quoted string) is part of the secret.
+            swallowed = start <= bare_end
             if not swallowed and not self._is_secret_written_name(match.group(1)):
                 continue
             if start < bare_end and _PAIR_VALUE_START.match(text, start) is None:
@@ -236,24 +381,48 @@ class Masker:
                 # run ends. Not scanning again keeps a long chain of pairs linear.
                 yield start, bare_end
                 continue
+            pattern = _LINE_REST if match.group(2) == ":" else _PAIR_VALUE
             # Matches at every position, if only the empty string.
-            value = cast("re.Match[str]", _PAIR_VALUE.match(text, start))
-            if text[start : start + 1] not in ('"', "'"):
-                bare_end = value.end()
+            value = cast("re.Match[str]", pattern.match(text, start))
+            if text[start : start + 1] not in ('"', "'") or pattern is _LINE_REST:
+                bare_end = max(bare_end, value.end())
             yield value.span()
 
-    # -- public -------------------------------------------------------------
+    def _flag_spans(self, text: str) -> Iterator[tuple[int, int]]:
+        for match in _FLAG.finditer(text):
+            if self._is_secret_written_name(match.group(1)):
+                yield match.span(2)
 
-    def text(self, value: str) -> str:
-        """Mask free text: a body that is not JSON, an address, an error message."""
-        # Known values first: any other rule could cut one in two.
-        value = self._replace_known(value)
+    def _multipart_spans(self, text: str) -> Iterator[tuple[int, int]]:
+        boundaries: list[int] | None = None
+        for match in _MULTIPART_PART.finditer(text):
+            name = match.group(1) if match.group(1) is not None else match.group(2)
+            if not self._is_secret_written_name(name):
+                continue
+            if boundaries is None:
+                boundaries = [b.start() for b in _BOUNDARY_LINE.finditer(text)]
+            index = bisect.bisect_left(boundaries, match.end())
+            yield match.end(), boundaries[index] if index < len(boundaries) else len(text)
+
+    def _userinfo_spans(self, text: str) -> Iterator[tuple[int, int]]:
+        for match in _USERINFO.finditer(text):
+            userinfo = match.group(1)
+            if not userinfo:
+                continue
+            colon = userinfo.find(":")
+            # Without a colon the user name may be the token itself.
+            yield (match.start(1) + colon + 1 if colon >= 0 else match.start(1)), match.end(1)
+
+    def _mask_once(self, value: str) -> str:
         spans = sorted(
             {
-                *(match.span(1) for match in _USERINFO.finditer(value)),
+                *self._known_spans(value),
+                *self._userinfo_spans(value),
                 *(match.span(1) for match in _AUTH_SCHEME.finditer(value)),
-                *self._json_spans(value),
+                *self._quoted_field_spans(value),
                 *self._pair_spans(value),
+                *self._flag_spans(value),
+                *self._multipart_spans(value),
             }
         )
         out: list[str] = []
@@ -266,69 +435,110 @@ class Masker:
                 continue
             out += (value[position:start], MASK)
             position = masked_to = end
+        if not out:
+            return value
         out.append(value[position:])
         return "".join(out)
+
+    # -- public -------------------------------------------------------------
+
+    def text(self, value: str) -> str:
+        """Mask free text: a body that is not JSON, an address, an error message."""
+        out = self._mask_once(value)
+        decoders: tuple[Callable[[str], str], ...] = (unquote, unquote_plus)
+        for decode in decoders:
+            probe = out
+            for _ in range(_DECODE_ROUNDS):
+                # Without the NUL an escape can bring in: taken out later, it could join two
+                # halves of a secret.
+                decoded = decode(probe).replace("\x00", "")
+                if decoded == probe:
+                    break
+                masked = self._mask_once(decoded)
+                if masked != decoded:
+                    out = probe = masked
+                else:
+                    probe = decoded
+        return out
 
     def value(self, value: Any) -> Any:
         """A masked copy of a JSON-like value (dict, list, string, number ...).
 
         Dict keys become strings, tuples become lists and bytes become ``<binary N bytes>``.
-        ``None`` under a secret name stays ``None``. Raises ``RecursionError`` for a value
-        nested deeper than the interpreter allows.
+        ``None`` under a secret name stays ``None``. A value of any other type is masked as
+        its ``str()``. Raises ``RecursionError`` for a value nested deeper than the
+        interpreter allows.
         """
-        return self._value(value, ())
+        return self._value(value)
 
-    def _value(self, value: Any, path: tuple[str, ...]) -> Any:
+    def _items(self, items: Iterator[tuple[Any, Any]]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for key, item in items:
+            name = key if isinstance(key, str) else str(key)
+            if self._is_secret_written_name(name):
+                masked = None if item is None else MASK
+            else:
+                masked = self._value(item)
+            written = self.text(name)
+            if written in out:
+                # A repeated name (or two that mask the same): numbered, so no value is lost.
+                number = 2
+                while f"{written}#{number}" in out:
+                    number += 1
+                written = f"{written}#{number}"
+            out[written] = masked
+        return out
+
+    def _value(self, value: Any) -> Any:
         if isinstance(value, str):
             return self.text(value)
+        if isinstance(value, _Pairs):
+            return self._items(iter(value))
         if isinstance(value, Mapping):
-            out: dict[str, Any] = {}
-            for key, item in value.items():
-                name = key if isinstance(key, str) else str(key)
-                here = (*path, _fold(name))
-                if is_sensitive_name(name) or self._at_secret_path(here):
-                    masked = None if item is None else MASK
-                else:
-                    masked = self._value(item, here)
-                out[self.text(name)] = masked
-            return out
+            return self._items(iter(value.items()))
         if isinstance(value, list | tuple):
-            return [self._value(item, path) for item in value]
+            return [self._value(item) for item in value]
         if isinstance(value, bytes | bytearray | memoryview):
             return f"<binary {len(value)} bytes>"
-        if isinstance(value, int | float) and not isinstance(value, bool):
+        if value is None or isinstance(value, bool):
+            return value
+        if isinstance(value, int | float):
             return MASK if self._has_known(str(value)) else value
-        return value
+        # Fail closed: an unknown type is stored as its masked text, never as it is.
+        return self.text(str(value))
 
     def target(self, target: str) -> str:
         """Mask a request address (URL, path with query string, topic).
 
-        Besides :meth:`text`: a known secret that only shows after percent-decoding (any
-        spelling, for example every character escaped) makes the decoded address the one
-        that is masked and stored.
+        The same as :meth:`text`, which also looks at the percent-decoded address: a known
+        secret or a secret-named parameter that only shows after decoding (any spelling,
+        for example every character escaped) makes the decoded address the one stored.
         """
-        out = self.text(target)
-        for decode in (unquote, unquote_plus):
-            # Without the NUL an escape can bring in: taken out after masking, it could
-            # join two halves of a secret.
-            decoded = decode(out).replace("\x00", "")
-            if decoded != out and self._has_known(decoded):
-                out = self.text(decoded)
-        return out
+        return self.text(target)
 
     def body(self, text: str) -> str:
         """Mask a message body given as text.
 
-        A JSON object or array is masked field by field (rules 1 to 3 on the parsed
-        values, so an escape sequence cannot hide a secret) and written back as compact
-        JSON, but only if masking changed something: otherwise the text is kept as it
-        came and the text rules of :meth:`text` run over it, as they do for any other
-        body. A document nested too deeply to walk is replaced by a fixed note.
+        A JSON object or array (after a byte order mark and white space) is masked field by
+        field (rules 1 to 3 on the parsed values, so an escape sequence cannot hide a
+        secret) and written back as compact JSON if masking changed something or a name
+        occurs more than once in an object (the repeats are numbered, ``name#2``, so that
+        no value is lost and no parser can pick a different one). Otherwise the text is
+        kept as it came and the text rules of :meth:`text` run over it, as they do for any
+        other body. A document nested too deeply to walk is replaced by a fixed note.
         """
-        if text.lstrip()[:1] in ("{", "["):
+        stripped = text.lstrip("\ufeff \t\r\n")
+        if stripped[:1] in ("{", "["):
+
+            def pairs(items: list[tuple[str, Any]]) -> dict[str, Any] | _Pairs:
+                found = dict(items)
+                return found if len(found) == len(items) else _Pairs(items)
+
             try:
-                parsed = json.loads(text)
+                parsed = json.loads(stripped, object_pairs_hook=pairs)
                 masked = self.value(parsed)
+                # A ``_Pairs`` (a repeated name) is a list and never equals its masked dict:
+                # such a document always counts as changed.
                 if masked != parsed:
                     # Every string in it went through the text rules already. A surrogate
                     # that came in as an escape sequence cannot be stored as a character.
@@ -371,7 +581,8 @@ def mask(
 ) -> Any:
     """A masked copy of ``value``: headers, a JSON body, an address or any text.
 
-    See the module text for the rules and :class:`Masker` for the parts.
+    See the module text for the rules and :class:`Masker` for the parts. A value of a type
+    that is not JSON-like is masked as its ``str()``.
     """
     return Masker(secret_paths=secret_paths, known_secrets=known_secrets).value(value)
 

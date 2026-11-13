@@ -147,7 +147,8 @@ def test_mask_schema_marked_field_nested():
             "mqtt": {"user": "bblp", "phrase": MASK},
         },
         "accounts": [{"pin": MASK}, {"pin": MASK, "label": "b"}],
-        "pin": "not at the path",
+        # The leaf name of a path counts wherever it stands (and "pin" is a secret word).
+        "pin": MASK,
     }
     assert value["connection"]["access_code"] == "1234"  # type: ignore[index]  # a copy was masked
 
@@ -236,7 +237,8 @@ def test_free_text_rules():
     )
     assert masker.text("a?access_token=abc&page=2#frag") == "a?access_token=***&page=2#frag"
     assert masker.text("pass%77ord=abc&x=1") == "pass%77ord=***&x=1"
-    assert masker.text("Authorization: Bearer abc.DEF-123") == "Authorization: Bearer ***"
+    # A header line is masked by its name: everything after the colon goes.
+    assert masker.text("Authorization: Bearer abc.DEF-123") == "Authorization: ***"
     assert masker.text("sent basic dXNlcjpwYXNz") == "sent basic ***"
     assert masker.text("basic authentication failed") == "basic authentication failed"
     assert masker.text('{"password": "p\\"q", "n": 1') == '{"password": "***", "n": 1'
@@ -291,7 +293,8 @@ def test_body_masks_json_by_structure_and_keeps_other_text():
 def test_body_with_a_shadowed_duplicate_key_is_still_masked():
     masker = Masker(known_secrets=[SECRET])
     body = '{"a": "' + SECRET + '", "a": "x"}'  # a JSON parser keeps the last "a" only
-    assert masker.body(body) == '{"a": "***", "a": "x"}'
+    # Rewritten from its pairs, the repeat numbered: no parser can pick another value.
+    assert masker.body(body) == '{"a":"***","a#2":"x"}'
 
 
 def test_body_nested_too_deeply_is_not_recorded():
@@ -364,16 +367,18 @@ def test_secret_paths_from_schema_handles_combinators_and_cycles():
     assert secret_paths_from_schema({"properties": "not a mapping"}) == frozenset()
 
 
-def test_invalid_secret_paths_and_secrets_are_ignored():
+def test_invalid_secret_paths_and_short_secrets_are_ignored():
+    # Known secrets that are not text raise (test_masking_review.py); short ones are skipped.
     masker = Masker(
         secret_paths=["", "..", 5, "a.b"],  # type: ignore[list-item]
-        known_secrets=[None, 12345678, "short", SECRET],  # type: ignore[list-item]
+        known_secrets=["short", " short2 ", SECRET],
     )
     assert masker.value({"a": {"b": 1}, "t": SECRET}) == {"a": {"b": MASK}, "t": MASK}
 
 
 def test_two_adjacent_secrets_are_both_replaced():
-    assert mask(SECRET + OTHER, known_secrets=[SECRET, OTHER]) == "******"
+    # Touching spans share one mask.
+    assert mask(SECRET + OTHER, known_secrets=[SECRET, OTHER]) == "***"
 
 
 def test_a_quoted_value_and_separators_inside_a_value_are_masked_whole():
@@ -435,7 +440,8 @@ def test_a_single_string_is_one_secret_and_one_path_not_its_characters():
 
 def test_known_secrets_given_as_bytes_are_searched_as_text():
     assert mask(f"a {SECRET} b", known_secrets=[SECRET.encode()]) == "a *** b"  # type: ignore[list-item]
-    assert mask("a b", known_secrets=[b"\xff\xfe\xfd\xfc\xfb\xfa\xf9\xf8"]) == "a b"  # type: ignore[list-item]
+    with pytest.raises(ValueError, match="UTF-8"):
+        mask("a b", known_secrets=[b"\xff\xfe\xfd\xfc\xfb\xfa\xf9\xf8"])  # type: ignore[list-item]
 
 
 def test_a_json_field_name_with_a_broken_escape_is_judged_as_written():
@@ -462,13 +468,13 @@ def test_safe_prefix_looks_only_at_a_secret_across_the_cut():
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ('a="x password=hunter22"', 'a="x password=***"'),
-        ("a='x password=hunter22'", "a='x password=***'"),
+        ('a="x password=hunter22"', 'a="x password=***'),
+        ("a='x password=hunter22'", "a='x password=***"),
         ("a=\"b='c token=hunter22 d' e\" f", "a=\"b='c token=*** d' e\" f"),
         (
             'a="b=\\"c password=hunter22\\""',
-            'a="b=\\"c password=***""',
-        ),  # the backslash goes with the value
+            'a="b=\\"c password=***',
+        ),  # a bare value ends at white space or "&" only: the quotes go with it
         ("a=1;password=hunter22", "a=1;password=***"),
         ("a=x,token=hunter22&b=2", "a=x,token=***&b=2"),
         ("a=b=c=password=hunter22", "a=b=c=password=***"),
