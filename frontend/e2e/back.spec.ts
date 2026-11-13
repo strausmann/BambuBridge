@@ -3,6 +3,8 @@ import { expect, shot, signedInAt, test } from "./fixtures";
 
 // Every history write and popstate in the page, with its time, so that a failed Back shows in the
 // report what the history held (the router queues its own writes, so their order depends on timing).
+// The Back presses themselves are noted by the test (`goBack` below) with the same clock (`epoch`),
+// so the report shows where each one fell between the page's own entries.
 // Also a switch that holds animation frames back: with it the test decides that Back arrives
 // before the overlay has revealed itself, instead of hoping the machine is slow enough.
 test.beforeEach(async ({ page, browserName, hasTouch }) => {
@@ -16,7 +18,7 @@ test.beforeEach(async ({ page, browserName, hasTouch }) => {
     const log: unknown[] = [];
     (window as unknown as { __historyLog: unknown[] }).__historyLog = log;
     const record = (what: string) =>
-      log.push({ what, at: Math.round(performance.now()), length: history.length, path: location.pathname, state: history.state as unknown });
+      log.push({ what, at: Math.round(performance.now()), epoch: Math.round(performance.timeOrigin + performance.now()), length: history.length, path: location.pathname, state: history.state as unknown });
     for (const method of ["pushState", "replaceState"] as const) {
       const original = history[method].bind(history);
       history[method] = (...args: Parameters<History["pushState"]>) => {
@@ -43,10 +45,20 @@ test.beforeEach(async ({ page, browserName, hasTouch }) => {
   }
 });
 
+// Back presses by `goBack`: when the command went out and when it returned (wall clock, as `epoch`).
+const goBackMarks = new WeakMap<Page, { what: "goBack"; sentAt: number; returnedAt: number }[]>();
+
+/** `page.goBack()`, noted for the history log. Nothing is evaluated in the page first: no delay. */
+async function goBack(page: Page): Promise<void> {
+  const sentAt = Date.now();
+  await page.goBack();
+  goBackMarks.set(page, [...(goBackMarks.get(page) ?? []), { what: "goBack", sentAt, returnedAt: Date.now() }]);
+}
+
 test.afterEach(async ({ page }, testInfo) => {
   if (testInfo.status === testInfo.expectedStatus) return;
   const log = await page.evaluate(() => (window as unknown as { __historyLog?: unknown[] }).__historyLog ?? []).catch(() => []);
-  await testInfo.attach("history-log", { body: JSON.stringify(log, null, 2), contentType: "application/json" });
+  await testInfo.attach("history-log", { body: JSON.stringify({ page: log, goBack: goBackMarks.get(page) ?? [] }, null, 2), contentType: "application/json" });
 });
 
 test("Back closes an open sheet and stays on the page; the next Back leaves as before", async ({ page }) => {
@@ -59,7 +71,7 @@ test("Back closes an open sheet and stays on the page; the next Back leaves as b
   await expect(sheet).toBeVisible();
   await shot(page, "device-install-sheet", { fullPage: false });
 
-  await page.goBack();
+  await goBack(page);
   await expect(sheet).toHaveCount(0);
   await expect(page).toHaveURL(/\/device$/);
   await expect(page.getByRole("heading", { name: "Dieses Gerät" })).toBeVisible();
@@ -69,7 +81,7 @@ test("Back closes an open sheet and stays on the page; the next Back leaves as b
   await expect(sheet).toBeVisible();
   await page.getByRole("button", { name: "Fertig" }).click();
   await expect(sheet).toHaveCount(0);
-  await page.goBack();
+  await goBack(page);
   await expect(page).toHaveURL(/\/settings$/);
 });
 
@@ -96,22 +108,24 @@ test("Back before the sheet has revealed itself closes it all the same", async (
   // The window this test is about: the panel is still hidden, waiting for its frames.
   expect(await page.locator(".overlay-panel").evaluate((panel) => (panel as HTMLElement).style.clipPath)).toBe("inset(50%)");
 
-  await page.goBack();
+  await goBack(page);
   await expect(page).toHaveURL(/\/device$/);
   await page.evaluate(() => (window as unknown as Frames).__frames.release());
   await expect(sheet).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Dieses Gerät" })).toBeVisible();
-  await page.goBack();
+  await goBack(page);
   await expect(page).toHaveURL(/\/settings$/);
 });
 
-// The same without held frames: Back as soon as the sheet is there, as a quick thumb would.
-test("Back right after the sheet appeared closes it", async ({ page }) => {
+// The same without held frames: Back as soon as the sheet is there, as a quick thumb would. A smoke
+// test, not a regression test: whether Back lands inside the reveal window depends on the speed of
+// the machine, so it can pass on the unfixed code; the test above is the one that is red there.
+test("smoke: Back right after the sheet appeared closes it", async ({ page }) => {
   await freshDevicePage(page);
   await page.getByRole("button", { name: "Als App installieren" }).click();
   const sheet = page.getByRole("dialog", { name: "Als App installieren" });
   await expect(sheet).toBeAttached();
-  await page.goBack();
+  await goBack(page);
   await expect(sheet).toHaveCount(0);
   await expect(page).toHaveURL(/\/device$/);
 });

@@ -1,10 +1,23 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+// For looping this spec on a fast machine: HARNESS_CPU_THROTTLE=4 slows Chromium's main thread down.
+test.beforeEach(async ({ page, browserName }) => {
+  const throttle = Number(process.env.HARNESS_CPU_THROTTLE ?? 0);
+  if (throttle > 1 && browserName === "chromium") {
+    await (await page.context().newCDPSession(page)).send("Emulation.setCPUThrottlingRate", { rate: throttle });
+  }
+});
+
+/** Nothing is on its way in or out: no enter state is set and no transition or animation runs. */
+async function atRest(page: Page): Promise<void> {
+  await expect(page.locator("[data-entering]")).toHaveCount(0);
+  await page.waitForFunction(() => document.getAnimations().every((animation) => animation.playState !== "running"));
+}
+
 /** Inside the visible part of the page (the visual viewport: above the on-screen keyboard). */
 async function visible(page: Page, locator: Locator, what: string): Promise<void> {
   // Measured once the enter animations are over, not on their way in.
-  await expect(page.locator("[data-entering]")).toHaveCount(0);
-  await page.waitForFunction(() => document.getAnimations().every((animation) => animation.playState !== "running"));
+  await atRest(page);
   const box = await locator.boundingBox();
   expect(box, what).not.toBeNull();
   const view = await page.evaluate(() => {
@@ -51,25 +64,64 @@ for (const kind of ["sheet", "dialog"] as const) {
   });
 }
 
+/**
+ * The boxes of the field and of the list (the popover, the list's scrolling frame), taken once the
+ * layout has stopped moving: the same in three animation frames in a row. Both come from one
+ * snapshot, so nothing can move between the two measurements.
+ */
+async function settledBoxes(page: Page) {
+  return page.evaluate(
+    () =>
+      new Promise<{ field: DOMRectInit; popover: DOMRectInit; placement: string | null; view: number }>((resolve) => {
+        const read = () => {
+          const field = document.querySelector("input[role=combobox]")!.getBoundingClientRect();
+          const popover = document.querySelector("[role=listbox]")!.parentElement!;
+          const box = popover.getBoundingClientRect();
+          const round = (r: DOMRect) => ({ x: r.x, y: r.y, width: r.width, height: r.height });
+          return { field: round(field), popover: round(box), placement: popover.getAttribute("data-placement"), view: window.visualViewport!.height };
+        };
+        let last = JSON.stringify(read());
+        let same = 0;
+        const frame = () => {
+          const now = JSON.stringify(read());
+          same = now === last ? same + 1 : 0;
+          last = now;
+          if (same >= 3) resolve(JSON.parse(now));
+          else requestAnimationFrame(frame);
+        };
+        requestAnimationFrame(frame);
+      }),
+  );
+}
+
 test("the list flips above the field when there is no room below it", async ({ page }) => {
   await page.goto("/harness/overlays.html?open=sheet&low=1");
-  const field = page.getByRole("combobox", { name: "Drucker" });
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  // The sheet must have come to rest, with its fonts, before anything is scrolled or measured.
+  await atRest(page);
+  await page.evaluate(() => document.fonts.ready);
   // Scroll the content to its end: the field now sits at the bottom of the visible part.
-  await page.getByRole("dialog").evaluate((dialog) => {
-    const body = dialog.querySelector(".overflow-y-auto")!;
+  await dialog.evaluate((element) => {
+    const body = element.querySelector(".overflow-y-auto")!;
     body.scrollTop = body.scrollHeight;
   });
+  const field = page.getByRole("combobox", { name: "Drucker" });
+  // The click may scroll the content once more: Playwright tries another alignment when the first
+  // attempt finds the field covered. The field is therefore not at one fixed place when the list
+  // opens, and the test must not depend on which place it was.
   await field.click();
   const list = page.getByRole("listbox");
   await expect(list).toBeVisible();
-  // The popover (the list's scrolling frame) is what can be seen of the list.
+  // The popover (the list's scrolling frame) is what can be seen of the list. React Aria names the
+  // side it chose on the popover itself: waiting for "top" waits for the flip.
   const popover = list.locator("..");
+  await expect(popover).toHaveAttribute("data-placement", "top");
+  await atRest(page);
+  const { field: fieldBox, popover: popoverBox, view } = await settledBoxes(page);
+  expect(fieldBox.y! + fieldBox.height! + 160, "the field sits low enough that the list cannot open below").toBeGreaterThan(view);
+  expect(popoverBox.y! + popoverBox.height!, "list above the field").toBeLessThanOrEqual(fieldBox.y! + 0.5);
   await visible(page, popover, "list");
-  const fieldBox = (await field.boundingBox())!;
-  const popoverBox = (await popover.boundingBox())!;
-  const view = await page.evaluate(() => window.visualViewport!.height);
-  expect(fieldBox.y + fieldBox.height + 160, "the field sits low enough that the list cannot open below").toBeGreaterThan(view);
-  expect(popoverBox.y + popoverBox.height, "list above the field").toBeLessThanOrEqual(fieldBox.y + 0.5);
   await visible(page, page.getByRole("option").first(), "first match");
 });
 
