@@ -644,12 +644,14 @@ def test_a_secret_split_by_a_format_character_across_the_cut_leaves_no_fragment(
     masker = Masker(known_secrets=[SECRET_R2])
     spelled = SECRET_R2[:6] + ZWSP + ZWSP + SECRET_R2[6:14] + ZWSP + SECRET_R2[14:]
     limit = 100
-    text = "a " * ((limit + offset) // 2) + spelled + " tail"
+    # One format character also in the filler: the prefix comes from the text without it.
+    text = ZWSP + "a " * ((limit + offset) // 2) + spelled + " tail"
 
     prefix, cut = masker.safe_prefix(text, complete=True, limit=limit)
     out = masker.text(prefix)
 
     assert cut is True
+    assert ZWSP not in prefix  # cut on the text masking sees
     assert not any(fragment in out for fragment in _fragments(SECRET_R2)), out
 
 
@@ -693,4 +695,65 @@ def test_a_secret_with_a_run_of_backslashes_is_masked_in_a_mixed_spelling():
 
 def test_escapes_that_are_no_format_character_stay_as_they_are():
     text = "a &#9999999; b &#x110000; c &#43; d %41 e \\u0041 f \\xff g %ff"
+    assert Masker(known_secrets=[SECRET_R2]).text(text) == text
+
+
+# --- fix round 2, second follow-up: encoded format characters, completed ------------------
+
+
+def _split(secret: str, separator: str) -> str:
+    return secret[:5] + separator + secret[5:12] + separator + secret[12:]
+
+
+@pytest.mark.parametrize("offset", [-30, -20, -12, -6, 0])
+@pytest.mark.parametrize("separator", ["%E2%80%8B", "&#8203;", "\\u200b"])
+def test_a_secret_split_by_an_encoded_format_character_across_the_cut_leaves_no_fragment(
+    offset: int, separator: str
+):
+    masker = Masker(known_secrets=[SECRET_R2])
+    spelled = _split(SECRET_R2, separator)
+    limit = 200
+    text = "a " * ((limit + offset) // 2) + spelled + " tail"
+
+    prefix, cut = masker.safe_prefix(text, complete=True, limit=limit)
+    out = masker.text(prefix)
+
+    assert cut is True
+    assert not any(fragment in out for fragment in _fragments(SECRET_R2)), out
+
+
+def test_an_encoded_text_without_secrets_keeps_its_prefix():
+    masker = Masker(known_secrets=[SECRET_R2])
+    text = "q=" + "%41%42" * 200
+    prefix, _ = masker.safe_prefix(text, complete=True, limit=300)
+    assert prefix == text[:300]
+
+
+@pytest.mark.parametrize(
+    "spelled",
+    [
+        # One escape run: a format character between two plain characters of the secret.
+        SECRET_R2[:4] + "".join(f"\\x{b:02x}" for b in ("-" + ZWSP + "s").encode()) + SECRET_R2[6:],
+        SECRET_R2[:4] + "".join(f"%{b:02X}" for b in ("-" + ZWSP + "s").encode()) + SECRET_R2[6:],
+        SECRET_R2[:4] + "".join(f"%{b:02x}" for b in (ZWSP + "-s" + ZWSP).encode()) + SECRET_R2[6:],
+    ],
+    ids=["hex-run", "percent-run", "percent-run-two"],
+)
+def test_format_characters_inside_an_escape_run_are_dropped_one_by_one(spelled: str):
+    out = Masker(known_secrets=[SECRET_R2]).text(f"x {spelled} y")
+    assert not any(fragment in out for fragment in _fragments(SECRET_R2)), out
+
+
+@pytest.mark.parametrize(
+    "separator",
+    ["\\U0000200b", "\\U000E0001", "\\udb40\\udc01", "\\\\udb40\\\\udc01", "&#917505;"],
+    ids=["U-zwsp", "U-tag", "surrogate-pair", "surrogate-pair-twice", "tag-reference"],
+)
+def test_long_escapes_and_surrogate_pairs_of_format_characters_are_dropped(separator: str):
+    out = Masker(known_secrets=[SECRET_R2]).text(f"x {_split(SECRET_R2, separator)} y")
+    assert not any(fragment in out for fragment in _fragments(SECRET_R2)), out
+
+
+def test_a_surrogate_pair_of_a_visible_character_stays():
+    text = "smile \\ud83d\\ude00 and \\U0001F600 here"
     assert Masker(known_secrets=[SECRET_R2]).text(text) == text

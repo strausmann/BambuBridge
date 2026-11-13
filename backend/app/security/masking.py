@@ -26,7 +26,12 @@ Three rules decide what becomes ``***``:
    wrapped over several lines.
 
 Invisible format characters (Unicode category Cf: zero-width space, soft hyphen, byte order
-mark, word joiner ...) are removed from a text before anything is searched.
+mark, word joiner ...) are removed from a text before anything is searched, in every
+decoding round, and also where they are written as an escape (``&#8203;``, ``\\u200b``,
+``\\U000e0001``, a surrogate pair, percent or ``\\x`` bytes judged one UTF-8 character at a
+time). The first cut (:meth:`Masker.safe_prefix`) looks at the text the same way.
+Declared limit: a hostile peer obfuscating a known secret with encoded invisible characters
+beyond these cases is not caught.
 
 In text that is not parsed JSON (an address, an error message, a body in another format,
 broken JSON) the names are found by patterns: ``"name": value`` and ``'name': value`` (a
@@ -83,6 +88,10 @@ _NAME_WORD = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 _PERCENT_ESCAPE = re.compile(r"%[0-9A-F]{2}")
 # How often the text is percent-decoded to look for names and known values once more.
 _DECODE_ROUNDS = 3
+# ``safe_prefix``: how far around the cut it looks for a secret that only shows decoded (in
+# multiples of the longest spelling) and how often it moves the cut back at most.
+_CUT_REACH = 3
+_CUT_ROUNDS = 8
 
 # The text rules below each name the spans of a text that hold a secret; ``Masker.text``
 # replaces the union of all spans. No rule works on the output of another one, so none can
@@ -137,39 +146,114 @@ _BOUNDARY_LINE = re.compile(r"\r?\n--")
 _SURROGATE = re.compile("[\ud800-\udfff]")
 
 
-# A format character written as an escape or reference: HTML/XML numeric reference, JSON or
-# Python ``\\u``/``\\x`` escape (also escaped twice), or percent-encoded UTF-8.
+# A character written as an escape or reference: HTML/XML numeric reference, JSON or Python
+# ``\u``/``\U``/``\x`` escape (also escaped twice; a surrogate pair is one character), or a
+# run of percent-encoded bytes. Bounded and anchored at the start of a backslash run, so
+# that the search stays linear.
 _ENCODED_CHARACTER = re.compile(
-    r"(?i:&\#x0{0,8}([0-9a-f]{1,6});|&\#0{0,8}([0-9]{1,7});|(?<!\\)\\{1,8}u([0-9a-f]{4})"
-    r"|((?<!\\)(?:\\{1,8}x[0-9a-f]{2}){1,4})|((?:%[0-9a-f]{2}){1,4}))"
+    r"(?i:&\#x0{0,8}(?P<hexref>[0-9a-f]{1,6});|&\#0{0,8}(?P<decref>[0-9]{1,7});"
+    r"|(?<!\\)\\{1,8}(?-i:U)(?P<long>[0-9a-f]{8})"
+    r"|(?<!\\)\\{1,8}(?-i:u)(?P<unit>[0-9a-f]{4})(?:\\{1,8}(?-i:u)(?P<low>[0-9a-f]{4}))?"
+    r"|(?P<xrun>(?<!\\)(?:\\{1,8}x[0-9a-f]{2}){1,64})"
+    r"|(?P<prun>(?:%[0-9a-f]{2}){1,64}))"
 )
+_RUN_BYTE = re.compile(r"\\+[xX]([0-9a-fA-F]{2})|%([0-9a-fA-F]{2})")
+
+
+def _is_format(char: str) -> bool:
+    return unicodedata.category(char) == "Cf"
+
+
+def _code_point(digits: str) -> str | None:
+    code = int(digits, 16)
+    return chr(code) if code <= 0x10FFFF else None
+
+
+def _drop_format_bytes(run: str) -> str:
+    """An escape run without the format characters in it, judged one UTF-8 character at a
+    time (its length from the lead byte); a byte that starts no valid sequence stands for
+    the ISO 8859-1 character of that value (``\\xad`` in a Python ``repr``)."""
+    pieces = [
+        (match.group(), int(match.group(1) or match.group(2), 16))
+        for match in _RUN_BYTE.finditer(run)
+    ]
+    out: list[str] = []
+    i = 0
+    while i < len(pieces):
+        lead = pieces[i][1]
+        size = (
+            1
+            if lead < 0x80
+            else 2
+            if lead >> 5 == 0b110
+            else 3
+            if lead >> 4 == 0b1110
+            else 4
+            if lead >> 3 == 0b11110
+            else 0
+        )
+        chunk = pieces[i : i + size] if size else []
+        try:
+            char = (
+                bytes(value for _, value in chunk).decode("utf-8")
+                if chunk and len(chunk) == size
+                else None
+            )
+        except UnicodeDecodeError:
+            char = None
+        if char is None:
+            chunk, char = pieces[i : i + 1], chr(lead)
+        if not _is_format(char):
+            out += [written for written, _ in chunk]
+        i += len(chunk)
+    return "".join(out)
 
 
 def _encoded_character(match: re.Match[str]) -> str:
-    """The character an escape stands for, or ``""`` for a format character, else the
-    escape as it was."""
-    hex_ref, dec_ref, unicode_escape, hex_bytes, percent = match.groups()
-    try:
-        if hex_ref or dec_ref or unicode_escape:
-            chars = chr(int(hex_ref or unicode_escape, 16) if not dec_ref else int(dec_ref))
-        else:
-            hexes = re.findall(r"[0-9a-fA-F]{2}", (hex_bytes or percent).replace("x", " "))
-            data = bytes(int(h, 16) for h in hexes)
-            try:
-                chars = data.decode("utf-8")
-            except UnicodeDecodeError:
-                chars = data.decode("latin-1") if len(data) == 1 else ""
-    except ValueError, OverflowError:
-        return match.group()
-    if chars and all(unicodedata.category(char) == "Cf" for char in chars):
-        return ""
-    return match.group()
+    """``""`` for an escape of a format character, otherwise the escape as it was (runs:
+    without their format characters)."""
+    if match.group("xrun") or match.group("prun"):
+        return _drop_format_bytes(match.group())
+    if match.group("unit"):
+        high, low = int(match.group("unit"), 16), match.group("low")
+        if low is not None and 0xD800 <= high < 0xDC00 and 0xDC00 <= int(low, 16) < 0xE000:
+            pair = chr(0x10000 + ((high - 0xD800) << 10) + (int(low, 16) - 0xDC00))
+            return "" if _is_format(pair) else match.group()
+        first = match.group()[: match.start("low") - match.start()] if low else match.group()
+        rest = match.group()[len(first) :]
+        kept = "" if _is_format(chr(high)) else first
+        if rest:
+            kept += "" if _is_format(chr(int(low, 16))) else rest
+        return kept
+    digits = match.group("long") or match.group("hexref")
+    char = (
+        _code_point(digits)
+        if digits
+        else (chr(int(match.group("decref"))) if int(match.group("decref")) <= 0x10FFFF else None)
+    )
+    return "" if char is not None and _is_format(char) else match.group()
 
 
 def _drop_encoded_format(text: str) -> str:
     """``text`` without format characters written as escapes (``&#8203;``, ``%E2%80%8B``,
     ``\\u200b``): decoded, they would split a known secret just as the characters do."""
     return _ENCODED_CHARACTER.sub(_encoded_character, text)
+
+
+def _views(text: str) -> list[str]:
+    """``text`` as :meth:`Masker.text` looks at it: without format characters (also
+    written as escapes) and percent-decoded up to ``_DECODE_ROUNDS`` times."""
+    base = _drop_encoded_format(_FORMAT.sub("", text))
+    views = [base]
+    for decode in (unquote, unquote_plus):
+        probe = base
+        for _ in range(_DECODE_ROUNDS):
+            decoded = _drop_encoded_format(_FORMAT.sub("", decode(probe).replace("\x00", "")))
+            if decoded == probe:
+                break
+            views.append(decoded)
+            probe = decoded
+    return views
 
 
 def _format_characters() -> re.Pattern[str]:
@@ -714,13 +798,31 @@ class Masker:
         if complete and len(text) <= limit:
             return text, False
         cut = min(limit, len(text) if complete else max(0, len(text) - self.longest_secret))
-        for start, end in self._known_spans(text):
-            if start >= cut:
+        for _ in range(_CUT_ROUNDS):
+            for start, end in self._known_spans(text):
+                if start >= cut:
+                    break
+                if end > cut:
+                    cut = start
+                    break
+            # A secret that only shows once escapes are resolved (split by an encoded format
+            # character, percent-encoded): it may straddle the cut without a raw span. If
+            # the text around the cut holds more of them than the parts before and after
+            # it, one straddles, and the cut moves back by the widest it can be written.
+            reach = _CUT_REACH * self.longest_secret
+            start = max(0, cut - reach)
+            if self._known is None or start == cut:
                 break
-            if end > cut:
-                cut = start
+            around = self._count_known(text[start : cut + reach])
+            if around <= self._count_known(text[start:cut]) + self._count_known(
+                text[cut : cut + reach]
+            ):
                 break
+            cut = start
         return text[:cut], True
+
+    def _count_known(self, text: str) -> int:
+        return max(sum(1 for _ in self._known_spans(view)) for view in _views(text))
 
 
 def _entries(values: Collection[Any]) -> Collection[Any]:
