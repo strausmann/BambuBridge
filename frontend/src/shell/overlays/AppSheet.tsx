@@ -2,6 +2,7 @@ import { Dialog, Modal, ModalOverlay } from "react-aria-components";
 import type { OverlayProps } from "./AppDialog";
 import { OverlayBody, OverlayHeader } from "./OverlayHeader";
 import { useBackClosesOverlay } from "./useBackClosesOverlay";
+import { useOpenUntilRevealed } from "./useOpenUntilRevealed";
 import { useVisualViewport } from "./useVisualViewport";
 
 /**
@@ -13,9 +14,12 @@ export function AppSheet({ isOpen, onOpenChange, title, children, actions }: Ove
   const { short } = useVisualViewport();
   const close = () => onOpenChange(false);
   useBackClosesOverlay(isOpen, close);
+  const { open, onEnter, track } = useOpenUntilRevealed(isOpen);
   return (
     <ModalOverlay
-      isOpen={isOpen}
+      isOpen={open}
+      onEnter={onEnter}
+      ref={track}
       onOpenChange={onOpenChange}
       isDismissable
       data-short={short || undefined}
