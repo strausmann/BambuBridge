@@ -95,6 +95,12 @@ async def test_crud_roundtrip_records_the_acting_user(
     listed = (await admin_client.get(PROVIDERS_URL)).json()
     assert [i["id"] for i in listed] == [iid]
 
+    # Right after the create: a later PATCH rewrites the config and would hide a leak.
+    async with make_session_factory(engine)() as session:
+        stored = await session.get(ProviderInstance, uuid.UUID(iid))
+        assert stored is not None
+        assert stored.config == {"interval_seconds": 60, "label": "l"}  # no secret field
+
     r = await admin_client.patch(
         f"{PROVIDERS_URL}/{iid}", json={"name": "renamed", "config": {"label": "m"}}
     )
@@ -109,7 +115,6 @@ async def test_crud_roundtrip_records_the_acting_user(
         assert admin is not None and row is not None
         assert (row.created_by, row.updated_by) == (admin.id, admin.id)
         assert set(row.secrets) == {"token"}
-        assert "token" not in row.config  # secrets never land in the plain config
         assert TOKEN not in str(row.secrets)
 
     assert (await admin_client.delete(f"{PROVIDERS_URL}/{iid}")).status_code == 204
