@@ -1146,3 +1146,60 @@ def test_an_even_run_of_backslashes_before_an_escape_keeps_its_pairs():
     assert _drop_encoded_format("h" + "\\" * 16 + "u200bD") == "h" + "\\" * 16 + "u200bD"
     # After a first escape, the second keeps the escaped backslash in front of it.
     assert _drop_encoded_format("h\\u2060\\\\\\u2060D") == "h\\\\D"
+
+
+# --- open Codex threads (00:49Z multipart boundary, 11:59Z colon rescan) ----------------------
+
+
+@pytest.mark.parametrize("newline", ["\r\n", "\n"])
+def test_a_line_starting_with_two_hyphens_does_not_end_a_multipart_secret(newline: str):
+    first, second = "AAAAfirst" + "-made-up", "BBBBsecond" + "-made-up"
+    pem = newline.join(
+        [
+            "-----BEGIN PRIVATE KEY-----",
+            first,
+            "-----END PRIVATE KEY-----",
+            "-----BEGIN PRIVATE KEY-----",
+            second,
+            "-----END PRIVATE KEY-----",
+        ]
+    )
+    body = newline.join(
+        [
+            "--XyZ",
+            "Content-Type: text/plain",
+            'Content-Disposition: form-data; name="private_key"',
+            "",
+            pem,
+            "--XyZ",
+            'Content-Disposition: form-data; name="user"',
+            "",
+            "bob",
+            "--XyZ--",
+            "",
+        ]
+    )
+    masked = Masker().body(body)
+    assert first not in masked and second not in masked, masked
+    assert f"{newline}bob{newline}" in masked, masked
+
+
+def test_a_multipart_part_without_a_delimiter_before_it_is_masked_to_the_end():
+    body = 'Content-Disposition: form-data; name="password"\n\nhunter22\n--x\nmore-hunter22'
+    assert "hunter22" not in Masker().body(body)
+    # A delimiter before the part but none of the same boundary after it.
+    body = '--x\nContent-Disposition: form-data; name="password"\n\nhunter22\n--y\nhunter22'
+    assert "hunter22" not in Masker().body(body)
+
+
+@pytest.mark.timing
+def test_repeated_colon_values_that_start_with_a_quote_take_linear_time():
+    masker = Masker()
+    unit = 'token:" '
+    assert_linear(masker.text, unit * 2_048, unit * 8_192)
+
+
+@pytest.mark.timing
+def test_many_secret_named_multipart_parts_take_linear_time():
+    part = '--b\nContent-Disposition: form-data; name="password"\n\nv\n'
+    assert_linear(Masker().text, part * 256, part * 1_024)

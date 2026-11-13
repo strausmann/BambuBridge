@@ -226,7 +226,22 @@ _MULTIPART_PART = re.compile(
         [^\r\n]*(?:\r?\n[^\r\n]+){0,32}\r?\n\r?\n""",
     re.VERBOSE,
 )
-_BOUNDARY_LINE = re.compile(r"\r?\n--")
+# A multipart delimiter line: ``--`` and the boundary (the closing one ends with ``--``).
+_DELIMITER_LINE = re.compile(r"(?m)^--([^\r\n]*?)[ \t]*\r?$")
+
+
+def _delimiter_lines(text: str) -> tuple[list[int], list[str], dict[str, list[int]]]:
+    """Start and boundary of every delimiter-like line, and the starts by boundary."""
+    starts: list[int] = []
+    values: list[str] = []
+    by_value: dict[str, list[int]] = {}
+    for line in _DELIMITER_LINE.finditer(text):
+        starts.append(line.start())
+        values.append(line.group(1))
+        by_value.setdefault(line.group(1), []).append(line.start())
+    return starts, values, by_value
+
+
 _SURROGATE = re.compile("[\ud800-\udfff]")
 
 
@@ -731,6 +746,8 @@ class Masker:
         """
         # End of the bare run looked at last: no separator lies between its start and there.
         bare_end = -1
+        # End of the line looked at last for a ``name:`` value.
+        line_end = -1
         for match in _PAIR_NAME.finditer(text):
             start = match.end()
             if match.group(2) == ":" and text.startswith("//", match.end(2)):
@@ -740,6 +757,11 @@ class Masker:
             swallowed = start <= bare_end
             if not swallowed and not self._is_secret_written_name(match.group(1)):
                 continue
+            if match.group(2) == ":" and start < line_end:
+                # A value that is the rest of a line scanned before (``token:" token:"``
+                # ...): it ends where that line ends. Not scanning again keeps it linear.
+                yield start, line_end
+                continue
             if start < bare_end and _PAIR_VALUE_START.match(text, start) is None:
                 # Inside a bare run that was scanned before: the value ends where that
                 # run ends. Not scanning again keeps a long chain of pairs linear.
@@ -748,6 +770,8 @@ class Masker:
             pattern = _LINE_REST if match.group(2) == ":" else _PAIR_VALUE
             # Matches at every position, if only the empty string.
             value = cast("re.Match[str]", pattern.match(text, start))
+            if pattern is _LINE_REST:
+                line_end = value.end()
             if text[start : start + 1] not in ('"', "'") or pattern is _LINE_REST:
                 bare_end = max(bare_end, value.end())
             yield value.span()
@@ -758,15 +782,33 @@ class Masker:
                 yield match.span(2)
 
     def _multipart_spans(self, text: str) -> Iterator[tuple[int, int]]:
-        boundaries: list[int] | None = None
+        """Values of secret-named multipart form fields: from the blank line after the
+        part's headers to the next delimiter line of the same boundary (the ``--boundary``
+        line in front of the part). A line that merely starts with ``--`` (a PEM armour
+        line) does not end it; without a known boundary the value runs to the end."""
+        delimiters: tuple[list[int], list[str], dict[str, list[int]]] | None = None
+        closings: dict[str, list[int]] = {}
         for match in _MULTIPART_PART.finditer(text):
             name = match.group(1) if match.group(1) is not None else match.group(2)
             if not self._is_secret_written_name(name):
                 continue
-            if boundaries is None:
-                boundaries = [b.start() for b in _BOUNDARY_LINE.finditer(text)]
-            index = bisect.bisect_left(boundaries, match.end())
-            yield match.end(), boundaries[index] if index < len(boundaries) else len(text)
+            if delimiters is None:
+                delimiters = _delimiter_lines(text)
+            starts, values, by_value = delimiters
+            index = bisect.bisect_left(starts, match.start()) - 1
+            end = len(text)
+            if index >= 0:
+                boundary = values[index].removesuffix("--")
+                if boundary not in closings:
+                    closings[boundary] = sorted(
+                        by_value.get(boundary, []) + by_value.get(boundary + "--", [])
+                    )
+                closing = closings[boundary]
+                after = bisect.bisect_left(closing, match.end())
+                if after < len(closing):
+                    line = closing[after]
+                    end = line - 2 if text.startswith("\r\n", line - 2) else line - 1
+            yield match.end(), max(end, match.end())
 
     def _userinfo_spans(self, text: str) -> Iterator[tuple[int, int]]:
         for match in _USERINFO.finditer(text):
