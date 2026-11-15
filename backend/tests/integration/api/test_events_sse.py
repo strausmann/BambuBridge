@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import socket
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -419,9 +420,117 @@ async def test_slow_connection_is_ended(
             )
             for _ in range(3)
         )
-        assert hub.connection_count == 0
         blocks = await stream.until_end()
     assert blocks == [[f": {events_routes.END_TOO_SLOW}"]]
+
+    async def freed() -> bool:
+        return hub.connection_count == 0
+
+    await _until(freed)
+
+
+def _big_event(size: int = 256 * 1024) -> StreamEvent:
+    return StreamEvent(
+        id=uuid.uuid4(),
+        occurred_at=datetime.now(UTC),
+        type="integration.demo.tick",
+        source_instance_id=None,
+        schema_version=1,
+        correlation_id=None,
+        payload={"blob": "x" * size},
+    )
+
+
+# Far more than the socket buffers of both ends and uvicorn's write buffer hold (Linux
+# allows up to 4 MiB send and 6 MiB receive buffer by default), so a reader that stops
+# reading leaves the server blocked in ``send``.
+STALL_EVENTS = 100
+
+
+@contextlib.asynccontextmanager
+async def stalled_stream(
+    base_url: str, token: str
+) -> AsyncIterator[tuple[asyncio.StreamReader, asyncio.StreamWriter]]:
+    """A stream on a raw socket whose reader stops after ``: connected``."""
+    host, port = base_url.removeprefix("http://").split(":")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # A small receive window, so the server's writes back up early.
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    sock.setblocking(False)
+    await asyncio.get_running_loop().sock_connect(sock, (host, int(port)))
+    reader, writer = await asyncio.open_connection(sock=sock)
+    try:
+        writer.write(
+            f"GET {STREAM_URL} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+            f"{KEY_HEADER}: {token}\r\n\r\n".encode()
+        )
+        await writer.drain()
+        async with asyncio.timeout(STEP_TIMEOUT):
+            head = await reader.readuntil(b"\r\n\r\n")
+            assert head.startswith(b"HTTP/1.1 200"), head
+            assert b": connected" in await reader.readuntil(b": connected\n\n")
+        yield reader, writer
+    finally:
+        writer.transport.abort()
+
+
+async def _blocked_in_send(hub: sse.SseHub) -> None:
+    """Hand the open streams more than any socket buffers, and wait until they took it."""
+    hub.broadcast(_big_event() for _ in range(STALL_EVENTS))
+
+    async def drained() -> bool:
+        return all(not s._pending for s in hub._subscriptions)
+
+    await _until(drained)
+
+
+async def test_overflowed_stream_keeps_its_slot_until_the_response_ends(
+    app: FastAPI, server: str, read_token: str, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(sse, "MAX_CONNECTIONS_PER_PRINCIPAL", 1)
+    monkeypatch.setattr(sse, "SEND_TIMEOUT_SECONDS", 60.0)
+    hub: sse.SseHub = app.state.sse_hub
+    async with httpx.AsyncClient(base_url=server, timeout=STEP_TIMEOUT) as client:
+        async with stalled_stream(server, read_token):
+            await _blocked_in_send(hub)
+            monkeypatch.setattr(sse, "QUEUE_SIZE", 2)
+            # The stream is stuck in a send: these overflow its buffer.
+            hub.broadcast(_big_event(16) for _ in range(3))
+            # The response is still open and holds its buffered data: its slot counts.
+            assert hub.connection_count == 1
+            r = await client.get(STREAM_URL, headers={KEY_HEADER: read_token})
+            assert r.status_code == 429, r.text
+            assert r.json()["error_code"] == "too_many_streams"
+
+        async def freed() -> bool:
+            return hub.connection_count == 0
+
+        await _until(freed)
+        async with open_stream(server, read_token):
+            assert hub.connection_count == 1
+
+
+async def test_blocked_send_is_ended_after_the_send_timeout(
+    app: FastAPI,
+    server: str,
+    read_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    monkeypatch.setattr(sse, "SEND_TIMEOUT_SECONDS", 0.5)
+    hub: sse.SseHub = app.state.sse_hub
+    async with stalled_stream(server, read_token) as (reader, _writer):
+        await _blocked_in_send(hub)
+
+        async def freed() -> bool:
+            return hub.connection_count == 0
+
+        await _until(freed)
+        # The server closed the connection without the chunked end: the client sees a cut.
+        async with asyncio.timeout(STEP_TIMEOUT):
+            received = await reader.read()
+        assert not received.endswith(b"0\r\n\r\n")
+    assert "stream send timed out; ending the stream" in caplog.text
 
 
 async def test_pump_completes_deliveries_without_connections(

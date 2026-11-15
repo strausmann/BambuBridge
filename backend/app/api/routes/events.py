@@ -37,7 +37,8 @@ message per event (``id`` = event id, ``data`` = the event as JSON), a comment l
   database unavailable) ends the stream with ``END_RECHECK_FAILED``; the client reconnects.
 - **Ends.** Before the server ends a stream it sends a comment naming the reason
   (``END_UNAUTHORIZED``, ``END_RECHECK_FAILED``, ``END_TOO_SLOW``,
-  ``END_REPLAY_CONTINUES``).
+  ``END_REPLAY_CONTINUES``). A client that takes no data for ``sse.SEND_TIMEOUT_SECONDS``
+  while the server has data for it has its connection closed without such a comment.
 - **Limits.** At most ``sse.MAX_CONNECTIONS`` streams per process and
   ``sse.MAX_CONNECTIONS_PER_PRINCIPAL`` per caller; beyond that 429. The caller is the token
   (also through every browser session opened with it) or, for a session without a token,
@@ -47,18 +48,20 @@ message per event (``id`` = event id, ``data`` = the event as JSON), a comment l
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from starlette.background import BackgroundTask
+from starlette.types import Message, Send
 
 from app.api.errors import ApiError
 from app.api.pagination import (
@@ -285,6 +288,41 @@ async def _messages(
         hub.close(subscription)
 
 
+class _SendTimeoutError(Exception):
+    """A write to the client waited longer than ``sse.SEND_TIMEOUT_SECONDS``."""
+
+
+class EventStreamResponse(StreamingResponse):
+    """A streaming response whose every write has a deadline.
+
+    uvicorn's ``send`` (``h11_impl.py``, ``RequestResponseCycle.send``) waits in
+    ``flow.drain()`` while the transport's write buffer is above its high-water mark, that is
+    for as long as the client does not read; nothing else ends that wait. Here each write may
+    wait ``sse.SEND_TIMEOUT_SECONDS``. After that the response stops without its final chunk
+    and the generator is closed (its ``finally`` frees the slot, the background task again).
+    Returning from the application with an incomplete response makes uvicorn close the
+    connection (``run_asgi``: "ASGI callable returned without completing response",
+    ``transport.close()``). asyncio's ``close`` still lets the bytes already buffered go out
+    first; they are bounded by the socket buffers and the transport's high-water mark, and
+    neither a slot nor the generator waits for them.
+    """
+
+    async def stream_response(self, send: Send) -> None:
+        async def send_with_deadline(message: Message) -> None:
+            try:
+                async with asyncio.timeout(sse.SEND_TIMEOUT_SECONDS):
+                    await send(message)
+            except TimeoutError:
+                raise _SendTimeoutError from None
+
+        try:
+            await super().stream_response(send_with_deadline)
+        except _SendTimeoutError:
+            _log.warning("stream send timed out; ending the stream")
+            # The body is always ``_messages``: close it now instead of at garbage collection.
+            await cast(AsyncGenerator[str], self.body_iterator).aclose()
+
+
 @router.get(
     "/events/stream",
     summary="Stream events (server-sent events)",
@@ -329,7 +367,7 @@ async def stream_events(
     except BaseException:
         hub.close(subscription)
         raise
-    return StreamingResponse(
+    return EventStreamResponse(
         _messages(request, hub, subscription, replay),
         media_type="text/event-stream",
         headers=headers,

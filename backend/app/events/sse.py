@@ -17,7 +17,11 @@ event reaches the connections of the process that claimed it only. BambuBridge r
 process.
 
 **Slow clients.** Each connection buffers up to ``QUEUE_SIZE`` events. A connection that
-falls that far behind is ended; the client reconnects and resumes with ``Last-Event-ID``.
+falls that far behind gets no further events and is ended; the client reconnects and resumes
+with ``Last-Event-ID``. Its slot stays counted until its response has really ended (see
+:meth:`SseHub.close`): a response stuck in a write still holds a connection and buffered
+data. A write that waits longer than ``SEND_TIMEOUT_SECONDS`` for the client ends the
+response (see ``app.api.routes.events``).
 
 The numbers below are read at the time of use, so tests can shrink them.
 """
@@ -56,6 +60,9 @@ CLAIM_LIMIT = 100
 QUEUE_SIZE = 1000
 # How often a stream checks its caller's credentials again.
 REAUTH_SECONDS = 60.0
+# How long one write to a stream may wait for the client to take data; a stream whose
+# write waits longer is ended (see ``app.api.routes.events``).
+SEND_TIMEOUT_SECONDS = 30.0
 
 _log = logging.getLogger(__name__)
 
@@ -98,7 +105,7 @@ class Subscription:
 
     def push(self, event: StreamEvent) -> None:
         if self.overflowed:
-            return
+            return  # too far behind: the stream ends, nothing more is kept for it
         if len(self._pending) >= QUEUE_SIZE:
             self.overflowed = True
             self._pending.clear()
@@ -156,11 +163,11 @@ class SseHub:
             del self._per_principal[subscription.principal]
 
     def broadcast(self, events: Iterable[StreamEvent]) -> None:
+        # An overflowed subscription drops what it gets but stays registered: its response
+        # may be stuck in a write, and only the response's own end may free the slot.
         for event in events:
-            for subscription in list(self._subscriptions):
+            for subscription in self._subscriptions:
                 subscription.push(event)
-                if subscription.overflowed:
-                    self.close(subscription)
 
     async def pump_once(self) -> int:
         """Claim, send and complete one batch; returns how many deliveries it took."""
