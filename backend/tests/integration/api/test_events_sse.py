@@ -479,18 +479,22 @@ async def test_stream_limit_per_principal(
 
 
 def test_hub_counts_a_principal_once_per_close(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(sse, "MAX_CONNECTIONS_PER_PRINCIPAL", 1)
+    monkeypatch.setattr(sse, "MAX_CONNECTIONS_PER_PRINCIPAL", 2)
     hub = sse.SseHub(None)  # type: ignore[arg-type]  # no database needed here
     principal = ("key", uuid.uuid4())
     first = hub.open(principal)
-    with pytest.raises(sse.ConnectionLimitError):
-        hub.open(principal)
-    hub.close(first)
-    hub.close(first)  # closing twice must not hand out a second slot
     second = hub.open(principal)
     with pytest.raises(sse.ConnectionLimitError):
         hub.open(principal)
+    # Closed twice (generator end and background task) while ``second`` is still open: the
+    # caller has one free slot, not two.
+    hub.close(first)
+    hub.close(first)
+    third = hub.open(principal)
+    with pytest.raises(sse.ConnectionLimitError):
+        hub.open(principal)
     hub.close(second)
+    hub.close(third)
     assert hub.connection_count == 0
 
 
