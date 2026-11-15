@@ -620,7 +620,7 @@ export interface components {
             deliveries: components["schemas"]["DeliveryView"][];
             /**
              * Delivery Status
-             * @description Delivery state over all subscribers: failed = at least one delivery failed, pending = at least one is pending and none failed, done = all are done
+             * @description Delivery state over all subscribers, the live stream (sse) included: failed = at least one delivery failed, pending = at least one is pending and none failed, done = all are done
              * @enum {string}
              */
             delivery_status: "pending" | "done" | "failed";
@@ -678,7 +678,7 @@ export interface components {
             correlation_id: string | null;
             /**
              * Delivery Status
-             * @description Delivery state over all subscribers: failed = at least one delivery failed, pending = at least one is pending and none failed, done = all are done
+             * @description Delivery state over all subscribers, the live stream (sse) included: failed = at least one delivery failed, pending = at least one is pending and none failed, done = all are done
              * @enum {string}
              */
             delivery_status: "pending" | "done" | "failed";

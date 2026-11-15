@@ -34,8 +34,9 @@ class StreamEvent(BaseModel):
 class EventView(StreamEvent):
     delivery_status: DeliveryStatus = Field(
         description=(
-            "Delivery state over all subscribers: failed = at least one delivery failed, "
-            "pending = at least one is pending and none failed, done = all are done"
+            "Delivery state over all subscribers, the live stream (sse) included: failed = at "
+            "least one delivery failed, pending = at least one is pending and none failed, "
+            "done = all are done"
         )
     )
 

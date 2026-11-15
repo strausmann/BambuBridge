@@ -644,7 +644,7 @@
             "type": "array"
           },
           "delivery_status": {
-            "description": "Delivery state over all subscribers: failed = at least one delivery failed, pending = at least one is pending and none failed, done = all are done",
+            "description": "Delivery state over all subscribers, the live stream (sse) included: failed = at least one delivery failed, pending = at least one is pending and none failed, done = all are done",
             "enum": [
               "pending",
               "done",
@@ -773,7 +773,7 @@
             "title": "Correlation Id"
           },
           "delivery_status": {
-            "description": "Delivery state over all subscribers: failed = at least one delivery failed, pending = at least one is pending and none failed, done = all are done",
+            "description": "Delivery state over all subscribers, the live stream (sse) included: failed = at least one delivery failed, pending = at least one is pending and none failed, done = all are done",
             "enum": [
               "pending",
               "done",
