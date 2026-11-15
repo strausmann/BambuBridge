@@ -248,12 +248,15 @@ async def test_stream_unknown_last_event_id_signals_reset(
 
     await _until(completed)  # handed out before the client comes, so it is not live
     # An id that never existed (or was removed by retention), and one that is not an id.
+    newest = earlier
     for value in (str(uuid.uuid4()), "not-an-id"):
         async with open_stream(server, read_token, {"Last-Event-ID": value}) as stream:
             # The client cannot resume: it is told to load the list again, then it is live.
-            assert await stream.next_block() == ["event: reset", "data: {}"]
+            # The message carries the newest event id, so the browser resumes from there.
+            assert await stream.next_block() == [f"id: {newest}", "event: reset", "data: {}"]
             live = await _emit(app, sessions, n=2)
             assert (await stream.next_event())["id"] == str(live)
+        newest = live
 
 
 async def test_stream_known_last_event_id_sends_no_reset(
@@ -753,3 +756,59 @@ async def test_client_gone_before_the_body_frees_the_slot(
 
     await _until(slot_taken_and_freed)
     del reader
+
+
+async def test_reconnect_after_reset_gets_no_second_reset(
+    app: FastAPI,
+    server: str,
+    read_token: str,
+    sessions: async_sessionmaker[AsyncSession],  # noqa: F811
+):
+    newest = await _emit(app, sessions, n=1)
+
+    async def completed() -> bool:
+        return await _sse_status(sessions, newest) == "done"
+
+    await _until(completed)
+    async with open_stream(server, read_token, {"Last-Event-ID": str(uuid.uuid4())}) as stream:
+        block = await stream.next_block()
+        assert block[1] == "event: reset", block
+        # The id the browser keeps as its lastEventId after this message.
+        resume_from = block[0].removeprefix("id:").strip()
+    assert resume_from == str(newest)
+    async with open_stream(server, read_token, {"Last-Event-ID": resume_from}) as stream:
+        live = await _emit(app, sessions, n=2)
+        block = await stream.next_block()
+        assert block[0] == f"id: {live}", block  # no reset before it
+
+
+async def test_reset_without_events_clears_the_last_event_id(server: str, read_token: str):
+    # No event exists yet: an empty ``id`` field resets the browser's lastEventId, so the next
+    # reconnect sends none and is not reset again.
+    async with open_stream(server, read_token, {"Last-Event-ID": str(uuid.uuid4())}) as stream:
+        assert await stream.next_block() == ["id:", "event: reset", "data: {}"]
+
+
+async def test_stream_cap_shared_by_sessions_signed_in_with_one_token(
+    app: FastAPI,
+    browser: httpx.AsyncClient,
+    server: str,
+    read_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # The bypass end to end: sign in twice with the same token (two sessions), then try to
+    # open a stream with each.
+    monkeypatch.setattr(sse, "MAX_CONNECTIONS_PER_PRINCIPAL", 1)
+    name = ui_sessions.cookie_names(app.state.settings)[0]
+    cookies = []
+    for _ in range(2):
+        r = await browser.post("/api/v1/auth/session", json={"token": read_token})
+        assert r.status_code == 201, r.text
+        cookies.append({"Cookie": f"{name}={r.cookies[name]}"})
+    assert cookies[0] != cookies[1]
+    async with (
+        httpx.AsyncClient(base_url=server, timeout=STEP_TIMEOUT) as client,
+        client.stream("GET", STREAM_URL, headers=cookies[0]) as response,
+    ):
+        assert response.status_code == 200
+        assert await _cookie_status(server, cookies[1]) == 429

@@ -18,7 +18,9 @@ message per event (``id`` = event id, ``data`` = the event as JSON), a comment l
   with a small limit can meet 429 and continues after the wait the answer names. An id that
   is not an event (unknown, malformed, or removed by retention) cannot be resumed from: the
   stream sends one ``event: reset`` message (``data: {}``) and goes live, and the client
-  loads the list again with ``GET /api/v1/events``.
+  loads the list again with ``GET /api/v1/events``. The message's ``id`` is the newest
+  event at that moment (empty when there is none), so the next reconnect resumes from there
+  instead of being reset again.
 - **At least once.** An event can arrive twice (see :mod:`app.events.sse`); clients drop an
   ``id`` they have seen.
 - **Gaps.** Lists and replay follow ``(occurred_at, id)``. An event whose transaction
@@ -97,8 +99,17 @@ END_REPLAY_CONTINUES = "end: replay continues"
 RECONNECT_MS = 1000
 # The re-check could not be done (rate limit, database): the client may simply reconnect.
 END_RECHECK_FAILED = "end: re-check failed"
-# The message telling a client that its Last-Event-ID cannot be resumed from.
-RESET_MESSAGE = "event: reset\ndata: {}\n\n"
+
+
+def reset_message(newest: uuid.UUID | None) -> str:
+    """The message telling a client that its Last-Event-ID cannot be resumed from.
+
+    Its ``id`` is the newest event at this moment, so the browser's next reconnect resumes
+    from there instead of sending the stale id again; with no event at all an empty ``id``
+    clears the browser's lastEventId.
+    """
+    return f"id:{f' {newest}' if newest is not None else ''}\nevent: reset\ndata: {{}}\n\n"
+
 
 _BASE: dict[int | str, dict[str, Any]] = {
     code: {"model": ProblemDetail} for code in (401, 403, 429, 503)
@@ -177,6 +188,8 @@ class Replay:
     events: list[StreamEvent]
     # The id could not be resumed from: send ``event: reset`` first.
     reset: bool = False
+    # The newest event when the reset was decided (the ``id`` of the reset message).
+    newest: uuid.UUID | None = None
     # More than ``REPLAY_LIMIT`` were waiting: end after the batch.
     more: bool = False
 
@@ -185,15 +198,17 @@ async def _replay(factory: async_sessionmaker[AsyncSession], last_event_id: str 
     if not last_event_id:
         return Replay(events=[])
     try:
-        anchor = uuid.UUID(last_event_id.strip())
+        anchor: uuid.UUID | None = uuid.UUID(last_event_id.strip())
     except ValueError:
-        return Replay(events=[], reset=True)  # not one of our ids
+        anchor = None  # not one of our ids
     limit = REPLAY_LIMIT
     async with factory() as session:
         await connected(session)
-        events = await event_log.events_after(session, anchor, limit + 1)
-    if events is None:
-        return Replay(events=[], reset=True)  # unknown, or removed by retention
+        events = (
+            await event_log.events_after(session, anchor, limit + 1) if anchor is not None else None
+        )
+        if events is None:  # malformed, unknown, or removed by retention
+            return Replay(events=[], reset=True, newest=await event_log.newest_event_id(session))
     return Replay(
         events=[sse.stream_event(event) for event in events[:limit]], more=len(events) > limit
     )
@@ -234,7 +249,7 @@ async def _messages(
     try:
         yield ": connected\n\n"
         if replay.reset:
-            yield RESET_MESSAGE
+            yield reset_message(replay.newest)
         events, more = deque(replay.events), replay.more
         del replay  # the generator keeps only what it still sends
         sent: set[uuid.UUID] = set()

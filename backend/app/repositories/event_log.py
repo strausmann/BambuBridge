@@ -133,6 +133,13 @@ async def events_after(
     return list(rows)
 
 
+async def newest_event_id(session: AsyncSession) -> uuid.UUID | None:
+    """The id of the newest event by ``(occurred_at, id)``; ``None`` when there is none."""
+    return await session.scalar(
+        select(Event.id).order_by(Event.occurred_at.desc(), Event.id.desc()).limit(1)
+    )
+
+
 async def list_communication(
     session: AsyncSession,
     *,
