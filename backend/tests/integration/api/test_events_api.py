@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.events.communication import CommunicationRecorder, Message
 from app.models.event_delivery import EventDelivery
+from app.repositories import event_log
 from app.repositories import events as events_repo
 from tests.conftest import KEY_HEADER
 from tests.integration.events.conftest import (  # noqa: F401  (fixtures)
@@ -401,3 +402,19 @@ async def test_communication_filters_and_paging(
 async def test_unknown_communication_entry_404(admin_client: httpx.AsyncClient):
     r = await admin_client.get(f"{COMMUNICATION_URL}/{uuid.uuid4()}")
     _problem(r, 404, "communication_entry_not_found")
+
+
+async def test_failed_replay_frees_the_stream_slot(
+    app: FastAPI, client: httpx.AsyncClient, read_token: str, monkeypatch: pytest.MonkeyPatch
+):
+    # The replay runs before the response starts; when it fails, the slot must not leak.
+    async def broken(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("replay failed")
+
+    monkeypatch.setattr(event_log, "events_after", broken)
+    r = await client.get(
+        f"{EVENTS_URL}/stream",
+        headers={KEY_HEADER: read_token, "Last-Event-ID": str(uuid.uuid4())},
+    )
+    _problem(r, 500, "internal_error")
+    assert app.state.sse_hub.connection_count == 0
