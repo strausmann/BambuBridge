@@ -30,7 +30,7 @@ from app.models.api_key import ApiKey
 from app.models.event import Event
 from app.models.event_delivery import EventDelivery
 from app.schemas.events import StreamEvent
-from tests.conftest import KEY_HEADER
+from tests.conftest import KEY_HEADER, issue_token
 from tests.integration.events.conftest import (  # noqa: F401  (fixtures)
     SOURCE_A,
     current_partitions,
@@ -226,7 +226,7 @@ async def test_stream_resumes_after_last_event_id(
         assert (await stream.next_event())["id"] == str(live)
 
 
-async def test_stream_with_unknown_last_event_id_goes_live(
+async def test_stream_unknown_last_event_id_signals_reset(
     app: FastAPI,
     server: str,
     read_token: str,
@@ -238,10 +238,62 @@ async def test_stream_with_unknown_last_event_id_goes_live(
         return await _sse_status(sessions, earlier) == "done"
 
     await _until(completed)  # handed out before the client comes, so it is not live
+    # An id that never existed (or was removed by retention), and one that is not an id.
     for value in (str(uuid.uuid4()), "not-an-id"):
         async with open_stream(server, read_token, {"Last-Event-ID": value}) as stream:
+            # The client cannot resume: it is told to load the list again, then it is live.
+            assert await stream.next_block() == ["event: reset", "data: {}"]
             live = await _emit(app, sessions, n=2)
             assert (await stream.next_event())["id"] == str(live)
+
+
+async def test_stream_known_last_event_id_sends_no_reset(
+    app: FastAPI,
+    server: str,
+    read_token: str,
+    sessions: async_sessionmaker[AsyncSession],  # noqa: F811
+):
+    anchor = await _emit(app, sessions, n=1)
+
+    async def completed() -> bool:
+        return await _sse_status(sessions, anchor) == "done"
+
+    await _until(completed)
+    async with open_stream(server, read_token, {"Last-Event-ID": str(anchor)}) as stream:
+        live = await _emit(app, sessions, n=2)
+        block = await stream.next_block()
+        assert block[0] == f"id: {live}", block
+
+
+async def test_stream_replay_beyond_limit_continues_on_reconnect(
+    app: FastAPI,
+    server: str,
+    read_token: str,
+    sessions: async_sessionmaker[AsyncSession],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(events_routes, "REPLAY_LIMIT", 2)
+    anchor = await _emit(app, sessions, n=0)
+    later = [await _emit(app, sessions, n=i) for i in range(1, 6)]
+
+    async def all_completed() -> bool:
+        return all([await _sse_status(sessions, e) == "done" for e in (anchor, *later)])
+
+    await _until(all_completed)
+    last = anchor
+    for expected in (later[0:2], later[2:4]):
+        async with open_stream(server, read_token, {"Last-Event-ID": str(last)}) as stream:
+            got = [(await stream.next_event())["id"] for _ in expected]
+            assert got == [str(e) for e in expected]
+            # More are waiting: the stream ends instead of going live, and the browser
+            # reconnects with the last id it got.
+            assert await stream.until_end() == [[f": {events_routes.END_REPLAY_CONTINUES}"]]
+        last = expected[-1]
+    # The rest fits into one batch: sent, then live.
+    async with open_stream(server, read_token, {"Last-Event-ID": str(last)}) as stream:
+        assert (await stream.next_event())["id"] == str(later[4])
+        live = await _emit(app, sessions, n=9)
+        assert (await stream.next_event())["id"] == str(live)
 
 
 async def test_stream_sends_heartbeat(
@@ -395,3 +447,60 @@ async def test_pump_keeps_running_after_a_database_error(
         assert (await stream.next_event())["id"] == str(event_id)
     assert failures == 2
     assert "sse pump failed (OSError); retrying" in caplog.text
+
+
+async def test_stream_limit_per_principal(
+    app: FastAPI,
+    engine: AsyncEngine,
+    server: str,
+    read_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(sse, "MAX_CONNECTIONS_PER_PRINCIPAL", 1)
+    other_token = await issue_token(engine, "read", name="second reader")
+    hub: sse.SseHub = app.state.sse_hub
+    async with httpx.AsyncClient(base_url=server, timeout=STEP_TIMEOUT) as client:
+        async with open_stream(server, read_token):
+            r = await client.get(STREAM_URL, headers={KEY_HEADER: read_token})
+            assert r.status_code == 429, r.text
+            assert r.json()["error_code"] == "too_many_streams"
+            assert r.headers["retry-after"] == "5"
+            # Another token is another principal: its own budget.
+            async with open_stream(server, other_token):
+                assert hub.connection_count == 2
+
+        async def freed() -> bool:
+            return hub.connection_count == 0
+
+        await _until(freed)
+        # The slot of the first token is back.
+        async with open_stream(server, read_token):
+            assert hub.connection_count == 1
+
+
+def test_hub_counts_a_principal_once_per_close(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(sse, "MAX_CONNECTIONS_PER_PRINCIPAL", 1)
+    hub = sse.SseHub(None)  # type: ignore[arg-type]  # no database needed here
+    principal = ("key", uuid.uuid4())
+    first = hub.open(principal)
+    with pytest.raises(sse.ConnectionLimitError):
+        hub.open(principal)
+    hub.close(first)
+    hub.close(first)  # closing twice must not hand out a second slot
+    second = hub.open(principal)
+    with pytest.raises(sse.ConnectionLimitError):
+        hub.open(principal)
+    hub.close(second)
+    assert hub.connection_count == 0
+
+
+async def test_head_stream_does_not_hold_a_slot(app: FastAPI, server: str, read_token: str):
+    hub: sse.SseHub = app.state.sse_hub
+    async with httpx.AsyncClient(base_url=server, timeout=5.0) as client:
+        r = await client.head(STREAM_URL, headers={KEY_HEADER: read_token})
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/event-stream")
+        assert r.content == b""
+        assert hub.connection_count == 0
+        # HEAD still needs credentials, like GET.
+        assert (await client.head(STREAM_URL)).status_code == 401

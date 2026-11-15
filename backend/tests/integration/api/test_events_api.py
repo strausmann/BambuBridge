@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app.events import outbox
 from app.events.communication import CommunicationRecorder, Message
 from app.models.event_delivery import EventDelivery
 from app.repositories import event_log
@@ -418,3 +419,25 @@ async def test_failed_replay_frees_the_stream_slot(
     )
     _problem(r, 500, "internal_error")
     assert app.state.sse_hub.connection_count == 0
+
+
+async def test_delivery_error_is_masked_for_readers(
+    client: httpx.AsyncClient,
+    app: FastAPI,
+    read_token: str,
+    sessions: async_sessionmaker[AsyncSession],  # noqa: F811
+):
+    # A handler that puts a credential into its failure reason: read scope must not see it.
+    event_id = await _emit(app, sessions)
+    async with sessions() as session:
+        (delivery,) = await outbox.claim(session, "sse", "worker-1")
+        await session.commit()
+        assert await outbox.fail(
+            session, "worker-1", delivery.id, f"upstream refused: password={SECRET} token: {SECRET}"
+        )
+        await session.commit()
+    r = await client.get(f"{EVENTS_URL}/{event_id}", headers={KEY_HEADER: read_token})
+    assert r.status_code == 200, r.text
+    assert SECRET not in r.text
+    (stored,) = r.json()["deliveries"]
+    assert stored["last_error"].startswith("upstream refused: password=***")

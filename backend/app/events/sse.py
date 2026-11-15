@@ -28,7 +28,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Iterable
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -43,6 +43,9 @@ SUBSCRIBER = "sse"
 HEARTBEAT_SECONDS = 15.0
 # Open stream connections per process; one more is answered with 429.
 MAX_CONNECTIONS = 100
+# Open stream connections per caller (token or browser session), so that one caller cannot
+# take all of ``MAX_CONNECTIONS``; one more is answered with 429 too.
+MAX_CONNECTIONS_PER_PRINCIPAL = 10
 # How long the pump waits when the outbox had nothing for it.
 POLL_INTERVAL_SECONDS = 0.25
 # How long the pump waits after a database error before it tries again.
@@ -57,8 +60,13 @@ REAUTH_SECONDS = 60.0
 _log = logging.getLogger(__name__)
 
 
+# Who holds a stream: ``("key", <token id>)`` or ``("session", <browser session id>)``.
+Principal = tuple[str, uuid.UUID]
+
+
 class ConnectionLimitError(RuntimeError):
-    """``MAX_CONNECTIONS`` streams are open already."""
+    """``MAX_CONNECTIONS`` streams, or ``MAX_CONNECTIONS_PER_PRINCIPAL`` of one caller, are
+    open already."""
 
 
 def stream_event(event: Event) -> StreamEvent:
@@ -81,7 +89,8 @@ def format_event(event: StreamEvent) -> str:
 class Subscription:
     """The events waiting for one open connection."""
 
-    def __init__(self) -> None:
+    def __init__(self, principal: Principal) -> None:
+        self.principal = principal
         self._pending: deque[StreamEvent] = deque()
         self._ready = asyncio.Event()
         self.overflowed = False
@@ -115,6 +124,7 @@ class SseHub:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = session_factory
         self._subscriptions: set[Subscription] = set()
+        self._per_principal: Counter[Principal] = Counter()
         self._task: asyncio.Task[None] | None = None
         # The lease owner of this process's claims.
         self._worker = f"sse-{uuid.uuid4()}"
@@ -123,24 +133,33 @@ class SseHub:
     def connection_count(self) -> int:
         return len(self._subscriptions)
 
-    def open(self) -> Subscription:
-        """Register a connection; ``ConnectionLimitError`` beyond ``MAX_CONNECTIONS``."""
+    def open(self, principal: Principal) -> Subscription:
+        """Register a connection of ``principal``; ``ConnectionLimitError`` beyond
+        ``MAX_CONNECTIONS`` in all or ``MAX_CONNECTIONS_PER_PRINCIPAL`` for this caller."""
         if len(self._subscriptions) >= MAX_CONNECTIONS:
             raise ConnectionLimitError
-        subscription = Subscription()
+        if self._per_principal[principal] >= MAX_CONNECTIONS_PER_PRINCIPAL:
+            raise ConnectionLimitError
+        subscription = Subscription(principal)
         self._subscriptions.add(subscription)
+        self._per_principal[principal] += 1
         return subscription
 
     def close(self, subscription: Subscription) -> None:
         """Unregister a connection; closing twice changes nothing."""
-        self._subscriptions.discard(subscription)
+        if subscription not in self._subscriptions:
+            return
+        self._subscriptions.remove(subscription)
+        self._per_principal[subscription.principal] -= 1
+        if self._per_principal[subscription.principal] <= 0:
+            del self._per_principal[subscription.principal]
 
     def broadcast(self, events: Iterable[StreamEvent]) -> None:
         for event in events:
             for subscription in list(self._subscriptions):
                 subscription.push(event)
                 if subscription.overflowed:
-                    self._subscriptions.discard(subscription)
+                    self.close(subscription)
 
     async def pump_once(self) -> int:
         """Claim, send and complete one batch; returns how many deliveries it took."""

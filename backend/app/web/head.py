@@ -6,11 +6,17 @@ HEAD-based monitors would see the service as broken. This pure ASGI middleware h
 status and headers (``Content-Length`` included) stay those of the ``GET``. A ``405`` whose
 ``Allow`` names ``GET`` also names ``HEAD``. ``HEAD`` is safe in the same way ``GET`` is, so
 authentication, rate limits and every other check run unchanged.
+
+The scope of such a request carries ``HEAD_SCOPE_KEY``, so a route whose ``GET`` never ends
+(the event stream) can answer the headers alone instead of running its body for nobody.
 """
 
 from __future__ import annotations
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+# Set (``True``) in the scope of a ``HEAD`` request that is handed on as ``GET``.
+HEAD_SCOPE_KEY = "bambubridge.head"
 
 
 def _with_head_allowed(message: Message) -> Message:
@@ -37,7 +43,7 @@ class HeadAsGetMiddleware:
             return
         head = scope["method"] == "HEAD"
         if head:
-            scope = {**scope, "method": "GET"}
+            scope = {**scope, "method": "GET", HEAD_SCOPE_KEY: True}
 
         async def head_send(message: Message) -> None:
             if message["type"] == "http.response.start":

@@ -64,6 +64,7 @@ from app.events.validation import check_subscriber, check_worker, is_delivery_id
 from app.models.event import Event
 from app.models.event_delivery import EventDelivery
 from app.repositories import events as events_repo
+from app.security.masking import mask
 
 MAX_ATTEMPTS = 10
 MAX_ERROR_LENGTH = 2000
@@ -230,14 +231,18 @@ async def fail(session: AsyncSession, worker: str, id: int, error: str) -> bool:
 
     The delivery becomes due again after ``2^attempts`` seconds (2 s after the first
     failure, 512 s after the ninth); the tenth attempt sets it to ``failed`` for good.
-    ``error`` is stored in ``last_error``: the first 2000 characters, NUL characters removed
-    and surrogate code points replaced by U+FFFD, because PostgreSQL text cannot hold them.
-    Pass a short reason, never payload contents or secrets.
+    ``error`` is stored in ``last_error``: NUL characters removed and surrogate code points
+    replaced by U+FFFD (PostgreSQL text cannot hold them), secrets found by name masked
+    (:func:`app.security.masking.mask`: ``password=...``, ``Authorization: ...``, ``Bearer``
+    credentials and the like; ``read`` callers see the text in the event API), then cut to
+    2000 characters. Masking is a safety net, not a licence: pass a short reason, never
+    payload contents or secrets.
     """
     check_worker(worker)
     if not is_delivery_id(id):
         raise ValueError("id must be a delivery id (integer)")
-    reason = make_storable(error)[:MAX_ERROR_LENGTH]
+    # Masked before it is cut, as in the communication log: ``read`` sees it in the event API.
+    reason = mask(make_storable(error))[:MAX_ERROR_LENGTH]
     result = await session.execute(
         _FAIL, {"id": id, "worker": worker, "error": reason, "max_attempts": MAX_ATTEMPTS}
     )
