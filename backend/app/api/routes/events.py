@@ -23,11 +23,16 @@ message per event (``id`` = event id, ``data`` = the event as JSON), a comment l
   earlier time and is missed by a page or replay that has passed that time; the live stream
   still sends it.
 - **Credentials.** The stream holds no database connection while it runs: credentials are
-  checked in short sessions of their own, at the start and every ``sse.REAUTH_SECONDS``. A
-  check runs when a message or a heartbeat is due, so a revoked token or session ends its
-  streams within about ``sse.REAUTH_SECONDS + sse.HEARTBEAT_SECONDS``.
+  checked in short sessions of their own, at the start and every ``sse.REAUTH_SECONDS``
+  from the moment it opened, during the replay too (before the next event once the interval
+  has passed). Otherwise a check runs when a message or a heartbeat is due, so a revoked
+  token or session ends its streams within about ``sse.REAUTH_SECONDS +
+  sse.HEARTBEAT_SECONDS``. Re-checks do not count against the token's request limit. A
+  re-check that cannot be done (rate limit of failed checks, database unavailable) ends the
+  stream with ``END_RECHECK_FAILED``; the client reconnects.
 - **Ends.** Before the server ends a stream it sends a comment naming the reason
-  (``END_UNAUTHORIZED``, ``END_TOO_SLOW``, ``END_REPLAY_CONTINUES``).
+  (``END_UNAUTHORIZED``, ``END_RECHECK_FAILED``, ``END_TOO_SLOW``,
+  ``END_REPLAY_CONTINUES``).
 - **Limits.** At most ``sse.MAX_CONNECTIONS`` streams per process and
   ``sse.MAX_CONNECTIONS_PER_PRINCIPAL`` per token or browser session; beyond that 429. A
   ``HEAD`` request gets the headers only and takes no slot.
@@ -37,6 +42,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
@@ -78,6 +84,8 @@ REPLAY_LIMIT = 1000
 END_UNAUTHORIZED = "end: credentials no longer valid"
 END_TOO_SLOW = "end: client too slow"
 END_REPLAY_CONTINUES = "end: replay continues"
+# The re-check could not be done (rate limit, database): the client may simply reconnect.
+END_RECHECK_FAILED = "end: re-check failed"
 # The message telling a client that its Last-Event-ID cannot be resumed from.
 RESET_MESSAGE = "event: reset\ndata: {}\n\n"
 
@@ -175,38 +183,63 @@ async def _replay(factory: async_sessionmaker[AsyncSession], last_event_id: str 
     )
 
 
+async def _recheck(request: Request) -> str | None:
+    """Check the caller again; ``None`` if still valid, else the end comment to send."""
+    try:
+        await reauthenticate(request, "read")
+    except ApiError as exc:
+        # 401/403: the credentials are gone. 429, 503 and the rest: the check itself failed.
+        return END_UNAUTHORIZED if exc.status in (401, 403) else END_RECHECK_FAILED
+    except Exception:  # a database error the error handlers would answer with 500
+        return END_RECHECK_FAILED
+    return None
+
+
 async def _messages(
     request: Request,
     hub: sse.SseHub,
     subscription: sse.Subscription,
     replay: Replay,
 ) -> AsyncIterator[str]:
+    # The re-check clock runs from the moment the stream opened, replay included: a client
+    # that reads a long replay slowly must not keep receiving after its token was revoked.
+    next_check = time.monotonic() + sse.REAUTH_SECONDS
+
+    async def due_check_fails() -> str | None:
+        nonlocal next_check
+        if time.monotonic() < next_check:
+            return None
+        reason = await _recheck(request)
+        next_check = time.monotonic() + sse.REAUTH_SECONDS
+        return reason
+
     try:
         yield ": connected\n\n"
         if replay.reset:
             yield RESET_MESSAGE
+        events, more = deque(replay.events), replay.more
+        del replay  # the generator keeps only what it still sends
         sent: set[uuid.UUID] = set()
-        for event in replay.events:
+        while events:
+            if (reason := await due_check_fails()) is not None:
+                yield f": {reason}\n\n"
+                return
+            event = events.popleft()  # sent events are released as the replay goes on
             sent.add(event.id)
             yield sse.format_event(event)
-        if replay.more:
+        if more:
             # The browser reconnects with the last id it got and gets the next batch.
             yield f": {END_REPLAY_CONTINUES}\n\n"
             return
-        checked = time.monotonic()
         while True:
             arrived = await subscription.wait(sse.HEARTBEAT_SECONDS)
             if subscription.overflowed:
                 # Too far behind: the client resumes with Last-Event-ID.
                 yield f": {END_TOO_SLOW}\n\n"
                 return
-            if time.monotonic() - checked >= sse.REAUTH_SECONDS:
-                try:
-                    await reauthenticate(request, "read")
-                except ApiError:
-                    yield f": {END_UNAUTHORIZED}\n\n"
-                    return
-                checked = time.monotonic()
+            if (reason := await due_check_fails()) is not None:
+                yield f": {reason}\n\n"
+                return
             if not arrived:
                 yield ": heartbeat\n\n"
                 continue

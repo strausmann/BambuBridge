@@ -67,13 +67,24 @@ def decode_cursor(cursor: str) -> tuple[datetime, UUID]:
         raise _invalid_cursor() from None
     if occurred_at.tzinfo is None:
         raise _invalid_cursor()
-    return occurred_at.astimezone(UTC), key
+    try:
+        return occurred_at.astimezone(UTC), key
+    except OverflowError:  # in UTC before year 1 or after year 9999
+        raise _invalid_cursor() from None
 
 
 def check_range(start: datetime | None, end: datetime | None) -> tuple[datetime | None, ...]:
     """Both bounds in UTC; ``from`` must lie before ``to`` (422 ``invalid_range``)."""
-    start_utc = start.astimezone(UTC) if start is not None else None
-    end_utc = end.astimezone(UTC) if end is not None else None
+    try:
+        start_utc = start.astimezone(UTC) if start is not None else None
+        end_utc = end.astimezone(UTC) if end is not None else None
+    except OverflowError:  # in UTC before year 1 or after year 9999
+        raise ApiError(
+            422,
+            "invalid_range",
+            "Invalid time range",
+            detail="The time lies outside the years 1 to 9999 in UTC.",
+        ) from None
     if start_utc is not None and end_utc is not None and start_utc >= end_utc:
         raise ApiError(
             422, "invalid_range", "Invalid time range", detail="'from' must be before 'to'."

@@ -441,3 +441,27 @@ async def test_delivery_error_is_masked_for_readers(
     assert SECRET not in r.text
     (stored,) = r.json()["deliveries"]
     assert stored["last_error"].startswith("upstream refused: password=***")
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("from", "0001-01-01T00:00:00+01:00"),
+        ("to", "9999-12-31T23:59:59-01:00"),
+    ],
+)
+async def test_time_beyond_the_utc_range_is_422(
+    client: httpx.AsyncClient, admin_token: str, name: str, value: str
+):
+    # In UTC these fall before year 1 or after year 9999: Python cannot represent them.
+    for url in (EVENTS_URL, COMMUNICATION_URL):
+        r = await client.get(url, params={name: value}, headers={KEY_HEADER: admin_token})
+        _problem(r, 422, "invalid_range")
+
+
+async def test_cursor_beyond_the_utc_range_is_422(client: httpx.AsyncClient, read_token: str):
+    cursor = base64.urlsafe_b64encode(f"0001-01-01T00:00:00+01:00|{uuid.uuid4()}".encode())
+    r = await client.get(
+        EVENTS_URL, params={"cursor": cursor.decode()}, headers={KEY_HEADER: read_token}
+    )
+    _problem(r, 422, "invalid_cursor")

@@ -24,11 +24,15 @@ from fastapi import FastAPI
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app.api.errors import ApiError
 from app.api.routes import events as events_routes
+from app.auth import sessions as ui_sessions
+from app.entrypoint import server_options
 from app.events import sse
 from app.models.api_key import ApiKey
 from app.models.event import Event
 from app.models.event_delivery import EventDelivery
+from app.repositories import users as users_repo
 from app.schemas.events import StreamEvent
 from tests.conftest import KEY_HEADER, issue_token
 from tests.integration.events.conftest import (  # noqa: F401  (fixtures)
@@ -45,6 +49,8 @@ STEP_TIMEOUT = 15.0
 @pytest_asyncio.fixture
 async def server(app: FastAPI) -> AsyncIterator[str]:
     """The app on a free loopback port, with the SSE pump running; yields the base URL."""
+    # The options of the production server (h11 with its header bound, proxy headers, no
+    # server header), so the stream is tested on the HTTP implementation it runs on.
     config = uvicorn.Config(
         app,
         host="127.0.0.1",
@@ -52,6 +58,7 @@ async def server(app: FastAPI) -> AsyncIterator[str]:
         lifespan="off",
         log_level="warning",
         timeout_graceful_shutdown=2,
+        **server_options("127.0.0.1"),
     )
     server = uvicorn.Server(config)
     task = asyncio.create_task(server.serve())
@@ -508,3 +515,121 @@ async def test_head_stream_does_not_hold_a_slot(app: FastAPI, server: str, read_
         assert hub.connection_count == 0
         # HEAD still needs credentials, like GET.
         assert (await client.head(STREAM_URL)).status_code == 401
+
+
+async def _disable_all_tokens(sessions: async_sessionmaker[AsyncSession]) -> None:  # noqa: F811
+    async with sessions() as session:
+        await session.execute(update(ApiKey).values(enabled=False))
+        await session.commit()
+
+
+async def test_stream_reauth_applies_during_replay(
+    app: FastAPI,
+    server: str,
+    read_token: str,
+    sessions: async_sessionmaker[AsyncSession],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+):
+    anchor = await _emit(app, sessions, n=0)
+    later = [await _emit(app, sessions, n=i) for i in range(1, 6)]
+
+    async def all_completed() -> bool:
+        return all([await _sse_status(sessions, e) == "done" for e in (anchor, *later)])
+
+    await _until(all_completed)
+    # Every re-check is due (interval 0), and the token is revoked while the replay runs:
+    # right after the second re-check has let an event through. A replay that is not
+    # re-checked would send all five events first.
+    monkeypatch.setattr(sse, "REAUTH_SECONDS", 0.0)
+    real = events_routes.reauthenticate
+    calls = 0
+
+    async def revoking(request: Any, need: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            await _disable_all_tokens(sessions)
+        return await real(request, need, **kwargs)
+
+    monkeypatch.setattr(events_routes, "reauthenticate", revoking)
+    async with open_stream(server, read_token, {"Last-Event-ID": str(anchor)}) as stream:
+        blocks = await stream.until_end()
+    events = [b for b in blocks if b[0].startswith("id: ")]
+    assert len(events) == 2, blocks
+    assert blocks[-1] == [f": {events_routes.END_UNAUTHORIZED}"], blocks
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ApiError(429, "rate_limited", "Rate limit exceeded"),
+        ApiError(503, "database_unavailable", "Database unavailable"),
+        RuntimeError("driver failed"),
+    ],
+    ids=["rate-limited", "database-unavailable", "other-error"],
+)
+async def test_failed_recheck_ends_with_its_own_reason(
+    server: str, read_token: str, monkeypatch: pytest.MonkeyPatch, error: BaseException
+):
+    monkeypatch.setattr(sse, "HEARTBEAT_SECONDS", 0.1)
+    monkeypatch.setattr(sse, "REAUTH_SECONDS", 0.2)
+
+    async def failing(*_args: Any, **_kwargs: Any) -> Any:
+        raise error
+
+    monkeypatch.setattr(events_routes, "reauthenticate", failing)
+    async with open_stream(server, read_token) as stream:
+        blocks = await stream.until_end()
+    # Not "credentials no longer valid": the credentials were not found invalid.
+    assert blocks[-1] == [f": {events_routes.END_RECHECK_FAILED}"], blocks
+
+
+async def test_rechecks_do_not_count_against_the_token_request_limit(
+    engine: AsyncEngine, server: str, monkeypatch: pytest.MonkeyPatch
+):
+    token = await issue_token(engine, "read", name="slow reader", rate_limit_per_minute=2)
+    monkeypatch.setattr(sse, "HEARTBEAT_SECONDS", 0.05)
+    monkeypatch.setattr(sse, "REAUTH_SECONDS", 0.05)
+    async with open_stream(server, token) as stream:
+        started = time.monotonic()
+        # Far more re-checks than the token's two requests a minute; the stream stays open.
+        while time.monotonic() - started < 1.0:
+            assert await stream.next_block() == [": heartbeat"]
+
+
+async def test_stream_limit_per_browser_session(
+    app: FastAPI,
+    engine: AsyncEngine,
+    server: str,
+    read_token: str,
+    sessions: async_sessionmaker[AsyncSession],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # A browser session without a token (like an SSO sign-in) has no request limit: the
+    # stream cap is what bounds it.
+    monkeypatch.setattr(sse, "MAX_CONNECTIONS_PER_PRINCIPAL", 1)
+    async with sessions() as session:
+        user = await users_repo.get_or_create_admin(session)
+        await session.commit()
+        _, cookie = await ui_sessions.create_session(session, user_id=user.id, scope="read")
+    name = ui_sessions.cookie_names(app.state.settings)[0]
+    # Sent by hand: the client talks plain http to the test server, so it would hold back a
+    # ``__Host-`` cookie.
+    cookie_header = {"Cookie": f"{name}={cookie}"}
+
+    async def stream_status(headers: dict[str, str]) -> int:
+        async with (
+            httpx.AsyncClient(base_url=server, timeout=STEP_TIMEOUT) as client,
+            client.stream("GET", STREAM_URL, headers=headers) as response,
+        ):
+            return response.status_code
+
+    async with (
+        httpx.AsyncClient(base_url=server, timeout=STEP_TIMEOUT) as client,
+        client.stream("GET", STREAM_URL, headers=cookie_header) as first,
+    ):
+        assert first.status_code == 200
+        assert await stream_status(cookie_header) == 429
+        # A token of the same user is another principal.
+        async with open_stream(server, read_token):
+            pass
