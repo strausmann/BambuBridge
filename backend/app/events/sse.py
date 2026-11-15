@@ -154,7 +154,12 @@ class SseHub:
         return subscription
 
     def close(self, subscription: Subscription) -> None:
-        """Unregister a connection; closing twice changes nothing."""
+        """Unregister a connection; closing twice changes nothing.
+
+        Call it on the event loop only: the set and the Counter are not guarded against
+        other threads (see :meth:`aclose` for callers that would run a sync function in a
+        worker thread).
+        """
         if subscription not in self._subscriptions:
             return
         self._subscriptions.remove(subscription)
@@ -162,11 +167,17 @@ class SseHub:
         if self._per_principal[subscription.principal] <= 0:
             del self._per_principal[subscription.principal]
 
+    async def aclose(self, subscription: Subscription) -> None:
+        """:meth:`close` as a coroutine, for a ``BackgroundTask``: Starlette awaits a
+        coroutine on the event loop but runs a plain function in a worker thread."""
+        self.close(subscription)
+
     def broadcast(self, events: Iterable[StreamEvent]) -> None:
         # An overflowed subscription drops what it gets but stays registered: its response
-        # may be stuck in a write, and only the response's own end may free the slot.
+        # may be stuck in a write, and only the response's own end may free the slot. A
+        # snapshot, so a connection that closes meanwhile cannot break the loop.
         for event in events:
-            for subscription in self._subscriptions:
+            for subscription in list(self._subscriptions):
                 subscription.push(event)
 
     async def pump_once(self) -> int:

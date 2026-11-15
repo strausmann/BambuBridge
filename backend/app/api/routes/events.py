@@ -41,9 +41,11 @@ message per event (``id`` = event id, ``data`` = the event as JSON), a comment l
   while the server has data for it has its connection closed without such a comment.
 - **Limits.** At most ``sse.MAX_CONNECTIONS`` streams per process and
   ``sse.MAX_CONNECTIONS_PER_PRINCIPAL`` per caller; beyond that 429. The caller is the token
-  (also through every browser session opened with it) or, for a session without a token,
-  the user. A
-  ``HEAD`` request gets the headers only and takes no slot.
+  (also through every browser session opened with it) or, for a browser session without a
+  token, its user: the streams of all such sessions of one user share one budget. In the
+  single-user release every single sign-on identity is linked to the same user, so all
+  sign-on sessions together get ``sse.MAX_CONNECTIONS_PER_PRINCIPAL`` streams. A ``HEAD``
+  request gets the headers only and takes no slot.
 """
 
 from __future__ import annotations
@@ -371,8 +373,9 @@ async def stream_events(
         _messages(request, hub, subscription, replay),
         media_type="text/event-stream",
         headers=headers,
-        # Also when the body never started (the client left at once): free the slot.
-        background=BackgroundTask(hub.close, subscription),
+        # Also when the body never started (the client left at once): free the slot. A
+        # coroutine, so it runs on the event loop and not in a worker thread.
+        background=BackgroundTask(hub.aclose, subscription),
     )
 
 

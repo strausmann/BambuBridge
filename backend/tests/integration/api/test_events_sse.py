@@ -12,6 +12,8 @@ import contextlib
 import json
 import logging
 import socket
+import sys
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -865,6 +867,60 @@ async def test_client_gone_before_the_body_frees_the_slot(
 
     await _until(slot_taken_and_freed)
     del reader
+
+
+async def test_background_close_runs_on_the_event_loop(app: FastAPI, server: str, read_token: str):
+    # The hub's set and Counter are only safe on the loop thread: the close by the background
+    # task (the path of a client that left before the body) must not run in a worker thread.
+    hub: sse.SseHub = app.state.sse_hub
+    loop_thread = threading.get_ident()
+    original_close = hub.close
+    # (caller, thread) of every close; the generator's own close is called from ``_messages``.
+    calls: list[tuple[str, int]] = []
+
+    def recording_close(subscription: sse.Subscription) -> None:
+        calls.append((sys._getframe(1).f_code.co_name, threading.get_ident()))
+        original_close(subscription)
+
+    hub.close = recording_close  # type: ignore[method-assign]
+    host, port = server.removeprefix("http://").split(":")
+    reader, writer = await asyncio.open_connection(host, int(port))
+    writer.write(
+        f"GET {STREAM_URL} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+        f"{KEY_HEADER}: {read_token}\r\n\r\n".encode()
+    )
+    await writer.drain()
+    writer.close()
+    await writer.wait_closed()
+
+    async def background_closed() -> bool:
+        return any(caller != "_messages" for caller, _ in calls)
+
+    await _until(background_closed)
+    assert {thread for _, thread in calls} == {loop_thread}, calls
+    assert hub.connection_count == 0
+    del reader
+
+
+def test_broadcast_tolerates_a_close_during_its_loop(monkeypatch: pytest.MonkeyPatch):
+    hub = sse.SseHub(None)  # type: ignore[arg-type]  # no database needed here
+    first = hub.open(("key", uuid.uuid4()))
+    second = hub.open(("key", uuid.uuid4()))
+    closing = {first: second, second: first}
+
+    def push_and_close_the_other(subscription: sse.Subscription) -> Any:
+        real_push = subscription.push
+
+        def push(event: StreamEvent) -> None:
+            real_push(event)
+            hub.close(closing[subscription])
+
+        return push
+
+    for subscription in (first, second):
+        subscription.push = push_and_close_the_other(subscription)  # type: ignore[method-assign]
+    hub.broadcast([_big_event(16)])
+    assert hub.connection_count == 0
 
 
 async def test_reconnect_after_reset_gets_no_second_reset(
