@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -32,6 +33,7 @@ from app.events import sse
 from app.models.api_key import ApiKey
 from app.models.event import Event
 from app.models.event_delivery import EventDelivery
+from app.repositories import api_keys as api_keys_repo
 from app.repositories import users as users_repo
 from app.schemas.events import StreamEvent
 from tests.conftest import KEY_HEADER, issue_token
@@ -294,7 +296,10 @@ async def test_stream_replay_beyond_limit_continues_on_reconnect(
             assert got == [str(e) for e in expected]
             # More are waiting: the stream ends instead of going live, and the browser
             # reconnects with the last id it got.
-            assert await stream.until_end() == [[f": {events_routes.END_REPLAY_CONTINUES}"]]
+            # ``retry`` makes the browser reconnect at once instead of after its default delay.
+            assert await stream.until_end() == [
+                [f"retry: {events_routes.RECONNECT_MS}", f": {events_routes.END_REPLAY_CONTINUES}"]
+            ]
         last = expected[-1]
     # The rest fits into one batch: sent, then live.
     async with open_stream(server, read_token, {"Last-Event-ID": str(last)}) as stream:
@@ -569,7 +574,11 @@ async def test_stream_reauth_applies_during_replay(
     ids=["rate-limited", "database-unavailable", "other-error"],
 )
 async def test_failed_recheck_ends_with_its_own_reason(
-    server: str, read_token: str, monkeypatch: pytest.MonkeyPatch, error: BaseException
+    server: str,
+    read_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    error: BaseException,
 ):
     monkeypatch.setattr(sse, "HEARTBEAT_SECONDS", 0.1)
     monkeypatch.setattr(sse, "REAUTH_SECONDS", 0.2)
@@ -578,10 +587,18 @@ async def test_failed_recheck_ends_with_its_own_reason(
         raise error
 
     monkeypatch.setattr(events_routes, "reauthenticate", failing)
-    async with open_stream(server, read_token) as stream:
-        blocks = await stream.until_end()
+    with caplog.at_level(logging.WARNING, logger="app.api.routes.events"):
+        async with open_stream(server, read_token) as stream:
+            blocks = await stream.until_end()
     # Not "credentials no longer valid": the credentials were not found invalid.
     assert blocks[-1] == [f": {events_routes.END_RECHECK_FAILED}"], blocks
+    unexpected = "stream re-check failed (RuntimeError)"
+    if isinstance(error, ApiError):
+        assert unexpected not in caplog.text  # an answer of the check, not a failure of it
+    else:
+        # The class only: an exception message can carry row values.
+        assert unexpected in caplog.text
+        assert "driver failed" not in caplog.text
 
 
 async def test_rechecks_do_not_count_against_the_token_request_limit(
@@ -633,3 +650,106 @@ async def test_stream_limit_per_browser_session(
         # A token of the same user is another principal.
         async with open_stream(server, read_token):
             pass
+
+
+async def _cookie_status(server: str, cookie_header: dict[str, str]) -> int:
+    async with (
+        httpx.AsyncClient(base_url=server, timeout=STEP_TIMEOUT) as client,
+        client.stream("GET", STREAM_URL, headers=cookie_header) as response,
+    ):
+        return response.status_code
+
+
+async def _session_cookie(
+    app: FastAPI,
+    sessions: async_sessionmaker[AsyncSession],  # noqa: F811
+    *,
+    api_key_id: uuid.UUID | None = None,
+) -> dict[str, str]:
+    """A ``Cookie`` header for a new browser session of the admin user."""
+    async with sessions() as session:
+        user = await users_repo.get_or_create_admin(session)
+        await session.commit()
+        _, token = await ui_sessions.create_session(
+            session, user_id=user.id, scope="read", api_key_id=api_key_id
+        )
+    name = ui_sessions.cookie_names(app.state.settings)[0]
+    return {"Cookie": f"{name}={token}"}
+
+
+async def test_stream_cap_shared_by_sessions_of_one_token(
+    app: FastAPI,
+    server: str,
+    sessions: async_sessionmaker[AsyncSession],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Signing in with the same token again opens a new session; it must not bring new slots.
+    monkeypatch.setattr(sse, "MAX_CONNECTIONS_PER_PRINCIPAL", 1)
+    async with sessions() as session:
+        owner = await users_repo.get_or_create_admin(session)
+        key, plaintext = await api_keys_repo.create(
+            session, owner_user_id=owner.id, name="signs in twice", scope="read"
+        )
+        await session.commit()
+    first = await _session_cookie(app, sessions, api_key_id=key.id)
+    second = await _session_cookie(app, sessions, api_key_id=key.id)
+    assert first != second
+    async with (
+        httpx.AsyncClient(base_url=server, timeout=STEP_TIMEOUT) as client,
+        client.stream("GET", STREAM_URL, headers=first) as response,
+    ):
+        assert response.status_code == 200
+        assert await _cookie_status(server, second) == 429
+        # The token itself shares the budget of the sessions opened with it.
+        r = await client.get(STREAM_URL, headers={KEY_HEADER: plaintext})
+        assert r.status_code == 429
+
+
+async def test_stream_cap_shared_by_sessions_of_one_user(
+    app: FastAPI,
+    server: str,
+    sessions: async_sessionmaker[AsyncSession],  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Every single sign-on opens a new session without a token: they share the user's budget.
+    monkeypatch.setattr(sse, "MAX_CONNECTIONS_PER_PRINCIPAL", 1)
+    first = await _session_cookie(app, sessions)
+    second = await _session_cookie(app, sessions)
+    async with (
+        httpx.AsyncClient(base_url=server, timeout=STEP_TIMEOUT) as client,
+        client.stream("GET", STREAM_URL, headers=first) as response,
+    ):
+        assert response.status_code == 200
+        assert await _cookie_status(server, second) == 429
+
+
+async def test_client_gone_before_the_body_frees_the_slot(
+    app: FastAPI, server: str, read_token: str
+):
+    # The client sends the request and hangs up before any byte of the answer.
+    hub: sse.SseHub = app.state.sse_hub
+    original_open = hub.open
+    opened = 0
+
+    def counting_open(principal: sse.Principal) -> sse.Subscription:
+        nonlocal opened
+        subscription = original_open(principal)
+        opened += 1
+        return subscription
+
+    hub.open = counting_open  # type: ignore[method-assign]
+    host, port = server.removeprefix("http://").split(":")
+    reader, writer = await asyncio.open_connection(host, int(port))
+    request_head = (
+        f"GET {STREAM_URL} HTTP/1.1\r\nHost: {host}:{port}\r\n{KEY_HEADER}: {read_token}\r\n\r\n"
+    )
+    writer.write(request_head.encode())
+    await writer.drain()
+    writer.close()
+    await writer.wait_closed()
+
+    async def slot_taken_and_freed() -> bool:
+        return opened >= 1 and hub.connection_count == 0
+
+    await _until(slot_taken_and_freed)
+    del reader

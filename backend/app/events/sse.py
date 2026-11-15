@@ -43,8 +43,8 @@ SUBSCRIBER = "sse"
 HEARTBEAT_SECONDS = 15.0
 # Open stream connections per process; one more is answered with 429.
 MAX_CONNECTIONS = 100
-# Open stream connections per caller (token or browser session), so that one caller cannot
-# take all of ``MAX_CONNECTIONS``; one more is answered with 429 too.
+# Open stream connections per caller (a token, or the user of a session without a token), so
+# that one caller cannot take all of ``MAX_CONNECTIONS``; one more is answered with 429 too.
 MAX_CONNECTIONS_PER_PRINCIPAL = 10
 # How long the pump waits when the outbox had nothing for it.
 POLL_INTERVAL_SECONDS = 0.25
@@ -60,7 +60,8 @@ REAUTH_SECONDS = 60.0
 _log = logging.getLogger(__name__)
 
 
-# Who holds a stream: ``("key", <token id>)`` or ``("session", <browser session id>)``.
+# Who holds a stream: ``("key", <token id>)`` (a token, also through the browser sessions
+# opened with it) or ``("user", <user id>)`` (browser sessions without a token).
 Principal = tuple[str, uuid.UUID]
 
 

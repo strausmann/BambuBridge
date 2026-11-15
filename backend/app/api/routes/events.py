@@ -12,10 +12,13 @@ message per event (``id`` = event id, ``data`` = the event as JSON), a comment l
 
 - **Resume.** With ``Last-Event-ID`` it first sends the events after that one, oldest
   first. More than ``REPLAY_LIMIT`` waiting: it sends that many and ends the stream with the
-  comment ``END_REPLAY_CONTINUES``; the browser reconnects with the last id it got and gets
-  the next batch. An id that is not an event (unknown, malformed, or removed by retention)
-  cannot be resumed from: the stream sends one ``event: reset`` message (``data: {}``) and
-  goes live, and the client loads the list again with ``GET /api/v1/events``.
+  comment ``END_REPLAY_CONTINUES`` and ``retry: RECONNECT_MS``; the browser reconnects at
+  once with the last id it got and gets the next batch. Each such reconnect is a new
+  request and counts against the token's request limit, so a long backlog read by a token
+  with a small limit can meet 429 and continues after the wait the answer names. An id that
+  is not an event (unknown, malformed, or removed by retention) cannot be resumed from: the
+  stream sends one ``event: reset`` message (``data: {}``) and goes live, and the client
+  loads the list again with ``GET /api/v1/events``.
 - **At least once.** An event can arrive twice (see :mod:`app.events.sse`); clients drop an
   ``id`` they have seen.
 - **Gaps.** Lists and replay follow ``(occurred_at, id)``. An event whose transaction
@@ -24,22 +27,25 @@ message per event (``id`` = event id, ``data`` = the event as JSON), a comment l
   still sends it.
 - **Credentials.** The stream holds no database connection while it runs: credentials are
   checked in short sessions of their own, at the start and every ``sse.REAUTH_SECONDS``
-  from the moment it opened, during the replay too (before the next event once the interval
-  has passed). Otherwise a check runs when a message or a heartbeat is due, so a revoked
-  token or session ends its streams within about ``sse.REAUTH_SECONDS +
-  sse.HEARTBEAT_SECONDS``. Re-checks do not count against the token's request limit. A
-  re-check that cannot be done (rate limit of failed checks, database unavailable) ends the
-  stream with ``END_RECHECK_FAILED``; the client reconnects.
+  counted from the moment the response body starts, during the replay too (before the next
+  event once the interval has passed). Otherwise a check runs when a message or a heartbeat
+  is due, so a revoked token or session ends its streams within about
+  ``sse.REAUTH_SECONDS + sse.HEARTBEAT_SECONDS``. Re-checks do not count against the
+  token's request limit. A re-check that cannot be done (rate limit of failed checks,
+  database unavailable) ends the stream with ``END_RECHECK_FAILED``; the client reconnects.
 - **Ends.** Before the server ends a stream it sends a comment naming the reason
   (``END_UNAUTHORIZED``, ``END_RECHECK_FAILED``, ``END_TOO_SLOW``,
   ``END_REPLAY_CONTINUES``).
 - **Limits.** At most ``sse.MAX_CONNECTIONS`` streams per process and
-  ``sse.MAX_CONNECTIONS_PER_PRINCIPAL`` per token or browser session; beyond that 429. A
+  ``sse.MAX_CONNECTIONS_PER_PRINCIPAL`` per caller; beyond that 429. The caller is the token
+  (also through every browser session opened with it) or, for a session without a token,
+  the user. A
   ``HEAD`` request gets the headers only and takes no slot.
 """
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from collections import deque
@@ -72,6 +78,8 @@ from app.schemas.events import DeliveryView, EventDetail, EventPage, EventView, 
 from app.schemas.problem import ProblemDetail
 from app.web.head import HEAD_SCOPE_KEY
 
+_log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1", tags=["events"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -84,6 +92,9 @@ REPLAY_LIMIT = 1000
 END_UNAUTHORIZED = "end: credentials no longer valid"
 END_TOO_SLOW = "end: client too slow"
 END_REPLAY_CONTINUES = "end: replay continues"
+# How soon (milliseconds) the browser reconnects after ``END_REPLAY_CONTINUES`` (SSE
+# ``retry``); without it the browser waits its own default of a few seconds.
+RECONNECT_MS = 1000
 # The re-check could not be done (rate limit, database): the client may simply reconnect.
 END_RECHECK_FAILED = "end: re-check failed"
 # The message telling a client that its Last-Event-ID cannot be resumed from.
@@ -103,11 +114,16 @@ def _event_view(row: event_log.EventRow) -> EventView:
 
 
 def _principal(auth: AuthContext) -> sse.Principal:
-    """Whose stream budget a connection counts against: its browser session or its token."""
-    if auth.kind == "session" and auth.session_id is not None:
-        return ("session", auth.session_id)
+    """Whose stream budget a connection counts against.
+
+    A token, also through every browser session opened with it (signing in again opens a new
+    session, never a new budget); a session without a token (single sign-on) counts against
+    its user, because each sign-on opens another session.
+    """
     if auth.key_id is not None:
         return ("key", auth.key_id)
+    if auth.kind == "session" and auth.user_id is not None:
+        return ("user", auth.user_id)
     raise ApiError(403, "insufficient_scope", "Insufficient scope")  # pragma: no cover
 
 
@@ -190,7 +206,9 @@ async def _recheck(request: Request) -> str | None:
     except ApiError as exc:
         # 401/403: the credentials are gone. 429, 503 and the rest: the check itself failed.
         return END_UNAUTHORIZED if exc.status in (401, 403) else END_RECHECK_FAILED
-    except Exception:  # a database error the error handlers would answer with 500
+    except Exception as exc:  # a database error the error handlers would answer with 500
+        # The class only, as in the pump: a driver message can quote row values.
+        _log.warning("stream re-check failed (%s); ending the stream", type(exc).__name__)
         return END_RECHECK_FAILED
     return None
 
@@ -229,7 +247,7 @@ async def _messages(
             yield sse.format_event(event)
         if more:
             # The browser reconnects with the last id it got and gets the next batch.
-            yield f": {END_REPLAY_CONTINUES}\n\n"
+            yield f"retry: {RECONNECT_MS}\n: {END_REPLAY_CONTINUES}\n\n"
             return
         while True:
             arrived = await subscription.wait(sse.HEARTBEAT_SECONDS)
