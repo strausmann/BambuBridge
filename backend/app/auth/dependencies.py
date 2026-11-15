@@ -28,7 +28,7 @@ from uuid import UUID
 
 from fastapi import Depends, Request, Security
 from fastapi.security import APIKeyHeader
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.errors import ApiError
 from app.auth import csrf
@@ -43,7 +43,7 @@ from app.auth.tokens import (
     verify_token,
 )
 from app.config import Settings
-from app.db.session import get_session
+from app.db.session import connected, get_session
 from app.repositories import api_keys as api_keys_repo
 
 # The request's own session (FastAPI caches it per request, so the route gets the same one):
@@ -292,8 +292,52 @@ def key_security(need: Scope) -> Any:
     return Security(_key_header, scopes=[need])
 
 
-def require_scope(need: Scope) -> Callable[..., Awaitable[AuthContext]]:
-    """Dependency factory: the caller must hold at least ``need``."""
+async def authenticate_own_session(request: Request, key: str | None, need: Scope) -> AuthContext:
+    """``authenticate_request`` in a short database session of its own.
+
+    The session is closed (its connection back in the pool) before this returns. For routes
+    that keep a response open for long (``require_scope(..., own_session=True)``) and for
+    checking such a caller again while the response runs (``reauthenticate``).
+    """
+    factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
+    async with factory() as session:
+        await connected(session)
+        context = await authenticate_request(request, session, key, need)
+        await session.commit()
+    return context
+
+
+async def reauthenticate(request: Request, need: Scope) -> AuthContext:
+    """Check the credentials of ``request`` again (token header, then session cookie).
+
+    A long-running response (a server-sent event stream) calls this from time to time, so a
+    token or session that was disabled, revoked or expired meanwhile ends it. Raises
+    ``ApiError`` like ``require_scope``.
+    """
+    return await authenticate_own_session(request, request.headers.get(KEY_HEADER), need)
+
+
+def require_scope(
+    need: Scope, *, own_session: bool = False
+) -> Callable[..., Awaitable[AuthContext]]:
+    """Dependency factory: the caller must hold at least ``need``.
+
+    By default the check uses the request's session (``SessionDep``), which stays open until
+    the response is sent. ``own_session=True`` checks in a short session of its own instead
+    and holds no database connection afterwards: for streaming routes, whose response stays
+    open for minutes or hours. Such a route must not depend on ``SessionDep`` either; it
+    opens short sessions itself.
+    """
+    if own_session:
+
+        async def own_session_dependency(
+            request: Request,
+            key: Annotated[str | None, Security(_key_header, scopes=[need])] = None,
+        ) -> AuthContext:
+            return await authenticate_own_session(request, key, need)
+
+        setattr(own_session_dependency, SCOPE_MARKER, need)
+        return own_session_dependency
 
     async def dependency(
         request: Request,
