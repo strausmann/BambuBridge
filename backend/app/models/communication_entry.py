@@ -25,6 +25,8 @@ class CommunicationEntry(Base):
     __table_args__ = (
         CheckConstraint("direction IN ('outbound', 'inbound')", name="direction"),
         Index("ix_communication_log_instance_id_occurred_at", "instance_id", "occurred_at"),
+        # The newest-first keyset list of the communication API.
+        Index("ix_communication_log_occurred_at_id", "occurred_at", "id"),
         {"postgresql_partition_by": "RANGE (occurred_at)"},
     )
 
