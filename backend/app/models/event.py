@@ -23,6 +23,8 @@ class Event(Base):
     __table_args__ = (
         Index("ix_events_source_instance_id_occurred_at", "source_instance_id", "occurred_at"),
         Index("ix_events_type_occurred_at", "type", "occurred_at"),
+        # The newest-first keyset list of the event API (``ORDER BY occurred_at, id``).
+        Index("ix_events_occurred_at_id", "occurred_at", "id"),
         # Serves the duplicate lookup of ``emit``; only events with a key are in it.
         Index(
             "ix_events_dedup",

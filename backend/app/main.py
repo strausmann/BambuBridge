@@ -13,7 +13,16 @@ from fastapi import FastAPI
 from sqlalchemy.exc import DBAPIError
 
 from app.api.errors import CONNECTION_ERRORS, DatabaseUnavailableError, register_error_handlers
-from app.api.routes import api_keys, auth_continue, auth_session, health, providers, system
+from app.api.routes import (
+    api_keys,
+    auth_continue,
+    auth_session,
+    communication,
+    events,
+    health,
+    providers,
+    system,
+)
 from app.api.routes import settings as settings_routes
 
 # ``identity`` registers the built-in identity providers before any setting is validated.
@@ -28,6 +37,7 @@ from app.db.session import connected, make_session_factory
 from app.events.partitions import PartitionMaintenance
 from app.events.retention import RetentionMaintenance
 from app.events.service import EventService
+from app.events.sse import SseHub
 from app.providers.manager import ProviderManager
 from app.providers.registry import ProviderRegistry
 from app.repositories import api_keys as api_keys_repo
@@ -101,8 +111,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         await retention_maintenance.start()
         # After the partitions: running instances emit events right away.
         await app.state.provider_manager.start()
+        # Hands new events to the open streams (and completes the ``sse`` deliveries).
+        await app.state.sse_hub.start()
         yield
     finally:
+        await app.state.sse_hub.stop()
         await app.state.provider_manager.stop()
         await retention_maintenance.stop()
         app.state.retention_maintenance = None
@@ -138,6 +151,7 @@ def create_app(settings: Settings, *, web_dist_dir: Path | None = None) -> FastA
         app.state.provider_registry,
         app.state.event_service,
     )
+    app.state.sse_hub = SseHub(app.state.session_factory)
     app.state.partition_maintenance = None
     app.state.retention_maintenance = None
     app.state.session_keys = ui_sessions.session_keys(settings)
@@ -165,6 +179,8 @@ def create_app(settings: Settings, *, web_dist_dir: Path | None = None) -> FastA
         api_keys.router,
         settings_routes.router,
         providers.router,
+        events.router,
+        communication.router,
     ):
         app.include_router(router)
     if web_dist_dir is not None:

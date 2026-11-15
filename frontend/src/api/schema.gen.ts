@@ -79,6 +79,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/communication": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List communication log entries */
+        get: operations["list_communication_api_v1_communication_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/communication/{entry_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a communication log entry */
+        get: operations["get_communication_api_v1_communication__entry_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List events */
+        get: operations["list_events_api_v1_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/events/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stream events (server-sent events) */
+        get: operations["stream_events_api_v1_events_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/events/{event_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get an event with its deliveries */
+        get: operations["get_event_api_v1_events__event_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/info": {
         parameters: {
             query?: never;
@@ -412,6 +497,170 @@ export interface components {
             /** Note */
             note?: string | null;
         };
+        /** CommunicationDetail */
+        CommunicationDetail: {
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "outbound" | "inbound";
+            /** Duration Ms */
+            duration_ms: number;
+            /** Error */
+            error: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Instance Id
+             * Format: uuid
+             */
+            instance_id: string;
+            /** Method */
+            method: string;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Request Body */
+            request_body: string | null;
+            /** Request Headers */
+            request_headers: {
+                [key: string]: unknown;
+            };
+            /** Response Body */
+            response_body: string | null;
+            /** Response Headers */
+            response_headers: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @description Status code of the answer; null without an answer
+             */
+            status: number | null;
+            /** Target */
+            target: string;
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** CommunicationPage */
+        CommunicationPage: {
+            /**
+             * Items
+             * @description Newest first
+             */
+            items: components["schemas"]["CommunicationSummary"][];
+            /**
+             * Next Cursor
+             * @description Pass as ``cursor`` for the next (older) page; null on the last page
+             */
+            next_cursor: string | null;
+        };
+        /** CommunicationSummary */
+        CommunicationSummary: {
+            /**
+             * Direction
+             * @enum {string}
+             */
+            direction: "outbound" | "inbound";
+            /** Duration Ms */
+            duration_ms: number;
+            /** Error */
+            error: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Instance Id
+             * Format: uuid
+             */
+            instance_id: string;
+            /** Method */
+            method: string;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /**
+             * Status
+             * @description Status code of the answer; null without an answer
+             */
+            status: number | null;
+            /** Target */
+            target: string;
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** DeliveryView */
+        DeliveryView: {
+            /** Attempts */
+            attempts: number;
+            /** Last Error */
+            last_error: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "done" | "failed";
+            /** Subscriber */
+            subscriber: string;
+        };
+        /** EventDetail */
+        EventDetail: {
+            /** Correlation Id */
+            correlation_id: string | null;
+            /** Deliveries */
+            deliveries: components["schemas"]["DeliveryView"][];
+            /**
+             * Delivery Status
+             * @description Delivery state over all subscribers, the live stream (sse) included: failed = at least one delivery failed, pending = at least one is pending and none failed, done = all are done
+             * @enum {string}
+             */
+            delivery_status: "pending" | "done" | "failed";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Schema Version */
+            schema_version: number;
+            /**
+             * Source Instance Id
+             * @description The provider instance the event came from; null for the bridge itself
+             */
+            source_instance_id: string | null;
+            /** Type */
+            type: string;
+        };
+        /** EventPage */
+        EventPage: {
+            /**
+             * Items
+             * @description Newest first
+             */
+            items: components["schemas"]["EventView"][];
+            /**
+             * Next Cursor
+             * @description Pass as ``cursor`` for the next (older) page; null on the last page
+             */
+            next_cursor: string | null;
+        };
         /** EventTypeView */
         EventTypeView: {
             /** Name */
@@ -422,6 +671,40 @@ export interface components {
             };
             /** Schema Version */
             schema_version: number;
+        };
+        /** EventView */
+        EventView: {
+            /** Correlation Id */
+            correlation_id: string | null;
+            /**
+             * Delivery Status
+             * @description Delivery state over all subscribers, the live stream (sse) included: failed = at least one delivery failed, pending = at least one is pending and none failed, done = all are done
+             * @enum {string}
+             */
+            delivery_status: "pending" | "done" | "failed";
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Schema Version */
+            schema_version: number;
+            /**
+             * Source Instance Id
+             * @description The provider instance the event came from; null for the bridge itself
+             */
+            source_instance_id: string | null;
+            /** Type */
+            type: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1188,6 +1471,384 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    list_communication_api_v1_communication_get: {
+        parameters: {
+            query?: {
+                /** @description Earliest time (inclusive), ISO 8601 with a zone */
+                from?: string | null;
+                /** @description Latest time (exclusive), ISO 8601 with a zone */
+                to?: string | null;
+                /** @description Provider instance */
+                instance?: string | null;
+                /** @description Status code, class (4xx) or 'none' */
+                status?: string | null;
+                /** @description ``next_cursor`` of the previous page */
+                cursor?: string | null;
+                /** @description Page size */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommunicationPage"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_communication_api_v1_communication__entry_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entry_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommunicationDetail"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    list_events_api_v1_events_get: {
+        parameters: {
+            query?: {
+                /** @description Earliest time (inclusive), ISO 8601 with a zone */
+                from?: string | null;
+                /** @description Latest time (exclusive), ISO 8601 with a zone */
+                to?: string | null;
+                /** @description Source provider instance */
+                source?: string | null;
+                /** @description Exact event type */
+                type?: string | null;
+                /** @description Delivery state over all subscribers (see EventView) */
+                status?: ("pending" | "done" | "failed") | null;
+                /** @description ``next_cursor`` of the previous page */
+                cursor?: string | null;
+                /** @description Page size */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventPage"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    stream_events_api_v1_events_stream_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Resume after this event id (sent by the browser on reconnect) */
+                "Last-Event-ID"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A ``text/event-stream`` of events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Too Many Requests */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+        };
+    };
+    get_event_api_v1_events__event_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                event_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventDetail"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProblemDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description Too Many Requests */

@@ -28,7 +28,7 @@ from uuid import UUID
 
 from fastapi import Depends, Request, Security
 from fastapi.security import APIKeyHeader
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.errors import ApiError
 from app.auth import csrf
@@ -43,7 +43,7 @@ from app.auth.tokens import (
     verify_token,
 )
 from app.config import Settings
-from app.db.session import get_session
+from app.db.session import connected, get_session
 from app.repositories import api_keys as api_keys_repo
 
 # The request's own session (FastAPI caches it per request, so the route gets the same one):
@@ -157,9 +157,18 @@ def _record_failure(
 
 
 async def authenticate_token(
-    request: Request, session: AsyncSession, presented: str, need: Scope
+    request: Request,
+    session: AsyncSession,
+    presented: str,
+    need: Scope,
+    *,
+    count_request: bool = True,
 ) -> AuthContext:
-    """Check an API token from the header and return its context (or raise ``ApiError``)."""
+    """Check an API token from the header and return its context (or raise ``ApiError``).
+
+    ``count_request=False`` checks without counting a request against the token's limit (the
+    periodic re-check of a stream that is already open, see ``reauthenticate``).
+    """
     limiter: SlidingWindowRateLimiter = request.app.state.rate_limiter
     failures: SlidingWindowRateLimiter = request.app.state.failed_auth_limiter
     client_failures: SlidingWindowRateLimiter = request.app.state.failed_auth_client_limiter
@@ -200,9 +209,10 @@ async def authenticate_token(
         raise _unauthorized("token_expired", "API token expired")
     if not owner.enabled:
         raise _unauthorized("owner_disabled", "Owner of the API token is disabled")
-    allowed, retry_after = limiter.hit(key.id, limit=key.rate_limit_per_minute)
-    if not allowed:
-        raise _rate_limited(retry_after)
+    if count_request:
+        allowed, retry_after = limiter.hit(key.id, limit=key.rate_limit_per_minute)
+        if not allowed:
+            raise _rate_limited(retry_after)
     if await api_keys_repo.touch_last_used(session, key.id):
         await session.commit()
     effective = lower_scope(cast(Scope, key.scope), cast(Scope, owner.role))
@@ -237,9 +247,17 @@ def has_credentials(request: Request, key: str | None) -> bool:
 
 
 async def authenticate_session(
-    request: Request, session: AsyncSession, token: str, need: Scope
+    request: Request,
+    session: AsyncSession,
+    token: str,
+    need: Scope,
+    *,
+    count_request: bool = True,
 ) -> AuthContext:
-    """Check the browser session ``token`` (cookie) and return its context."""
+    """Check the browser session ``token`` (cookie) and return its context.
+
+    ``count_request`` as in ``authenticate_token``.
+    """
     settings: Settings = request.app.state.settings
     valid = await ui_sessions.load_valid(
         session, token, request.app.state.settings_store, request.app.state.session_keys
@@ -249,7 +267,7 @@ async def authenticate_session(
     if csrf.is_unsafe(request):
         csrf.check_origin(request, ui_sessions.public_origin(settings))
         csrf.check_token(request, csrf.derive_token(request.app.state.session_keys.csrf, token))
-    if valid.api_key is not None:
+    if valid.api_key is not None and count_request:
         # A session opened with a token shares the token's request limit.
         limiter: SlidingWindowRateLimiter = request.app.state.rate_limiter
         allowed, retry_after = limiter.hit(
@@ -270,14 +288,21 @@ async def authenticate_session(
 
 
 async def authenticate_request(
-    request: Request, session: AsyncSession, key: str | None, need: Scope
+    request: Request,
+    session: AsyncSession,
+    key: str | None,
+    need: Scope,
+    *,
+    count_request: bool = True,
 ) -> AuthContext:
     """Token header, then session cookie, then 401."""
     if key:
-        return await authenticate_token(request, session, key, need)
+        return await authenticate_token(request, session, key, need, count_request=count_request)
     token = session_cookie(request)
     if token is not None:
-        return await authenticate_session(request, session, token, need)
+        return await authenticate_session(
+            request, session, token, need, count_request=count_request
+        )
     raise _not_authenticated()
 
 
@@ -292,8 +317,61 @@ def key_security(need: Scope) -> Any:
     return Security(_key_header, scopes=[need])
 
 
-def require_scope(need: Scope) -> Callable[..., Awaitable[AuthContext]]:
-    """Dependency factory: the caller must hold at least ``need``."""
+async def authenticate_own_session(
+    request: Request, key: str | None, need: Scope, *, count_request: bool = True
+) -> AuthContext:
+    """``authenticate_request`` in a short database session of its own.
+
+    The session is closed (its connection back in the pool) before this returns. For routes
+    that keep a response open for long (``require_scope(..., own_session=True)``) and for
+    checking such a caller again while the response runs (``reauthenticate``).
+    """
+    factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
+    async with factory() as session:
+        await connected(session)
+        context = await authenticate_request(
+            request, session, key, need, count_request=count_request
+        )
+        await session.commit()
+    return context
+
+
+async def reauthenticate(request: Request, need: Scope) -> AuthContext:
+    """Check the credentials of ``request`` again (token header, then session cookie).
+
+    A long-running response (a server-sent event stream) calls this from time to time, so a
+    token or session that was disabled, revoked or expired meanwhile ends it. Raises
+    ``ApiError`` like ``require_scope``. A re-check does not count as a request against the
+    token's limit: the stream was counted once when it opened, and a token with a small
+    limit must not lose its stream to its own re-checks. A failed token check still counts
+    against the budget of failed checks, as on every route.
+    """
+    return await authenticate_own_session(
+        request, request.headers.get(KEY_HEADER), need, count_request=False
+    )
+
+
+def require_scope(
+    need: Scope, *, own_session: bool = False
+) -> Callable[..., Awaitable[AuthContext]]:
+    """Dependency factory: the caller must hold at least ``need``.
+
+    By default the check uses the request's session (``SessionDep``), which stays open until
+    the response is sent. ``own_session=True`` checks in a short session of its own instead
+    and holds no database connection afterwards: for streaming routes, whose response stays
+    open for minutes or hours. Such a route must not depend on ``SessionDep`` either; it
+    opens short sessions itself.
+    """
+    if own_session:
+
+        async def own_session_dependency(
+            request: Request,
+            key: Annotated[str | None, Security(_key_header, scopes=[need])] = None,
+        ) -> AuthContext:
+            return await authenticate_own_session(request, key, need)
+
+        setattr(own_session_dependency, SCOPE_MARKER, need)
+        return own_session_dependency
 
     async def dependency(
         request: Request,

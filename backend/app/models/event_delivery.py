@@ -28,6 +28,8 @@ class EventDelivery(Base):
         CheckConstraint("status = 'pending' OR claimed_by IS NULL", name="lease_pending"),
         # The order in which ``claim`` hands deliveries out.
         Index("ix_event_deliveries_claim", "subscriber", "status", "event_occurred_at", "id"),
+        # The deliveries of one event: the delivery state of the event API.
+        Index("ix_event_deliveries_event", "event_id", "event_occurred_at"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)

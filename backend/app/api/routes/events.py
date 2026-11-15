@@ -1,0 +1,404 @@
+"""Events: ``GET /api/v1/events``, ``/api/v1/events/{event_id}`` and the live stream.
+
+All three need ``read``. Times in the query are ISO 8601 **with** a zone (a time without one
+is refused with 422) and compared in UTC; ``from`` is inclusive, ``to`` exclusive. Lists are
+newest first, paged with ``cursor`` (see :mod:`app.api.pagination`). ``delivery_status``
+covers every subscriber, the live stream (``sse``) included: an event is ``pending`` until
+the stream pump has handed it out too.
+
+``GET /api/v1/events/stream`` is a server-sent event stream (``text/event-stream``): one
+message per event (``id`` = event id, ``data`` = the event as JSON), a comment line after
+``sse.HEARTBEAT_SECONDS`` without a message.
+
+- **Resume.** With ``Last-Event-ID`` it first sends the events after that one, oldest
+  first. More than ``REPLAY_LIMIT`` waiting: it sends that many and ends the stream with the
+  comment ``END_REPLAY_CONTINUES`` and ``retry: RECONNECT_MS``; the browser reconnects at
+  once with the last id it got and gets the next batch. Each such reconnect is a new
+  request and counts against the token's request limit, so a long backlog read by a token
+  with a small limit can meet 429 and continues after the wait the answer names. An id that
+  is not an event (unknown, malformed, or removed by retention) cannot be resumed from: the
+  stream sends one ``event: reset`` message (``data: {}``) and goes live, and the client
+  loads the list again with ``GET /api/v1/events``. The message's ``id`` is the newest
+  event at that moment (empty when there is none), so the next reconnect resumes from there
+  instead of being reset again.
+- **At least once.** An event can arrive twice (see :mod:`app.events.sse`); clients drop an
+  ``id`` they have seen.
+- **Gaps.** Lists and replay follow ``(occurred_at, id)``. An event whose transaction
+  commits after a later one was read (a long transaction of another source) carries the
+  earlier time and is missed by a page or replay that has passed that time; the live stream
+  still sends it.
+- **Credentials.** The stream holds no database connection while it runs: credentials are
+  checked in short sessions of their own, at the start and every ``sse.REAUTH_SECONDS``
+  counted from the moment the response body starts, during the replay too (before the next
+  event once the interval has passed). Otherwise a check runs when a message or a heartbeat
+  is due, so a revoked token or session ends its streams within about
+  ``sse.REAUTH_SECONDS + sse.HEARTBEAT_SECONDS``. Re-checks do not count against the
+  token's request limit. A re-check that cannot be done (rate limit of failed checks,
+  database unavailable) ends the stream with ``END_RECHECK_FAILED``; the client reconnects.
+- **Ends.** Before the server ends a stream it sends a comment naming the reason
+  (``END_UNAUTHORIZED``, ``END_RECHECK_FAILED``, ``END_TOO_SLOW``,
+  ``END_REPLAY_CONTINUES``). A client that takes no data for ``sse.SEND_TIMEOUT_SECONDS``
+  while the server has data for it has its connection closed without such a comment.
+- **Limits.** At most ``sse.MAX_CONNECTIONS`` streams per process and
+  ``sse.MAX_CONNECTIONS_PER_PRINCIPAL`` per caller; beyond that 429. The caller is the token
+  (also through every browser session opened with it) or, for a browser session without a
+  token, its user: the streams of all such sessions of one user share one budget. In the
+  single-user release every single sign-on identity is linked to the same user, so all
+  sign-on sessions together get ``sse.MAX_CONNECTIONS_PER_PRINCIPAL`` streams. A ``HEAD``
+  request gets the headers only and takes no slot.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+import uuid
+from collections import deque
+from collections.abc import AsyncGenerator, AsyncIterator
+from dataclasses import dataclass
+from typing import Annotated, Any, Literal, cast
+
+from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi.responses import Response, StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from starlette.background import BackgroundTask
+from starlette.types import Message, Send
+
+from app.api.errors import ApiError
+from app.api.pagination import (
+    DEFAULT_LIMIT,
+    CursorQuery,
+    FromQuery,
+    LimitQuery,
+    ToQuery,
+    check_range,
+    decode_cursor,
+    encode_cursor,
+)
+from app.auth.dependencies import AuthContext, reauthenticate, require_scope
+from app.db.session import connected, get_session
+from app.events import sse
+from app.events.service import MAX_EVENT_TYPE_LENGTH
+from app.repositories import event_log
+from app.schemas.events import DeliveryView, EventDetail, EventPage, EventView, StreamEvent
+from app.schemas.problem import ProblemDetail
+from app.web.head import HEAD_SCOPE_KEY
+
+_log = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1", tags=["events"])
+
+SessionDep = Annotated[AsyncSession, Depends(get_session)]
+ReadDep = Annotated[AuthContext, Depends(require_scope("read"))]
+StreamReadDep = Annotated[AuthContext, Depends(require_scope("read", own_session=True))]
+
+# Events replayed after ``Last-Event-ID`` before the stream goes live.
+REPLAY_LIMIT = 1000
+# The comment a stream sends before the server ends it, naming the reason.
+END_UNAUTHORIZED = "end: credentials no longer valid"
+END_TOO_SLOW = "end: client too slow"
+END_REPLAY_CONTINUES = "end: replay continues"
+# How soon (milliseconds) the browser reconnects after ``END_REPLAY_CONTINUES`` (SSE
+# ``retry``); without it the browser waits its own default of a few seconds.
+RECONNECT_MS = 1000
+# The re-check could not be done (rate limit, database): the client may simply reconnect.
+END_RECHECK_FAILED = "end: re-check failed"
+
+
+def reset_message(newest: uuid.UUID | None) -> str:
+    """The message telling a client that its Last-Event-ID cannot be resumed from.
+
+    Its ``id`` is the newest event at this moment, so the browser's next reconnect resumes
+    from there instead of sending the stale id again; with no event at all an empty ``id``
+    clears the browser's lastEventId.
+    """
+    return f"id:{f' {newest}' if newest is not None else ''}\nevent: reset\ndata: {{}}\n\n"
+
+
+_BASE: dict[int | str, dict[str, Any]] = {
+    code: {"model": ProblemDetail} for code in (401, 403, 429, 503)
+}
+_LIST_PROBLEMS = {**_BASE, 422: {"model": ProblemDetail}}
+
+
+def _event_view(row: event_log.EventRow) -> EventView:
+    return EventView(
+        **sse.stream_event(row.event).model_dump(),
+        delivery_status=row.delivery_status,  # type: ignore[arg-type]
+    )
+
+
+def _principal(auth: AuthContext) -> sse.Principal:
+    """Whose stream budget a connection counts against.
+
+    A token, also through every browser session opened with it (signing in again opens a new
+    session, never a new budget); a session without a token (single sign-on) counts against
+    its user, because each sign-on opens another session.
+    """
+    if auth.key_id is not None:
+        return ("key", auth.key_id)
+    if auth.kind == "session" and auth.user_id is not None:
+        return ("user", auth.user_id)
+    raise ApiError(403, "insufficient_scope", "Insufficient scope")  # pragma: no cover
+
+
+def _not_found() -> ApiError:
+    return ApiError(404, "event_not_found", "Event not found")
+
+
+@router.get(
+    "/events",
+    summary="List events",
+    response_model=EventPage,
+    responses=_LIST_PROBLEMS,
+)
+async def list_events(
+    session: SessionDep,
+    _auth: ReadDep,
+    start: FromQuery = None,
+    end: ToQuery = None,
+    source: Annotated[uuid.UUID | None, Query(description="Source provider instance")] = None,
+    type: Annotated[  # noqa: A002  # the query parameter
+        str | None, Query(max_length=MAX_EVENT_TYPE_LENGTH, description="Exact event type")
+    ] = None,
+    status: Annotated[
+        Literal["pending", "done", "failed"] | None,
+        Query(description="Delivery state over all subscribers (see EventView)"),
+    ] = None,
+    cursor: CursorQuery = None,
+    limit: LimitQuery = DEFAULT_LIMIT,
+) -> EventPage:
+    start_utc, end_utc = check_range(start, end)
+    key = decode_cursor(cursor) if cursor is not None else None
+    rows = await event_log.list_events(
+        session,
+        start=start_utc,
+        end=end_utc,
+        source=source,
+        type=type,
+        status=status,
+        cursor=key,
+        limit=limit,
+    )
+    page = rows[:limit]
+    next_cursor = (
+        encode_cursor(page[-1].event.occurred_at, page[-1].event.id) if len(rows) > limit else None
+    )
+    return EventPage(items=[_event_view(row) for row in page], next_cursor=next_cursor)
+
+
+@dataclass(frozen=True)
+class Replay:
+    events: list[StreamEvent]
+    # The id could not be resumed from: send ``event: reset`` first.
+    reset: bool = False
+    # The newest event when the reset was decided (the ``id`` of the reset message).
+    newest: uuid.UUID | None = None
+    # More than ``REPLAY_LIMIT`` were waiting: end after the batch.
+    more: bool = False
+
+
+async def _replay(factory: async_sessionmaker[AsyncSession], last_event_id: str | None) -> Replay:
+    if not last_event_id:
+        return Replay(events=[])
+    try:
+        anchor: uuid.UUID | None = uuid.UUID(last_event_id.strip())
+    except ValueError:
+        anchor = None  # not one of our ids
+    limit = REPLAY_LIMIT
+    async with factory() as session:
+        await connected(session)
+        events = (
+            await event_log.events_after(session, anchor, limit + 1) if anchor is not None else None
+        )
+        if events is None:  # malformed, unknown, or removed by retention
+            return Replay(events=[], reset=True, newest=await event_log.newest_event_id(session))
+    return Replay(
+        events=[sse.stream_event(event) for event in events[:limit]], more=len(events) > limit
+    )
+
+
+async def _recheck(request: Request) -> str | None:
+    """Check the caller again; ``None`` if still valid, else the end comment to send."""
+    try:
+        await reauthenticate(request, "read")
+    except ApiError as exc:
+        # 401/403: the credentials are gone. 429, 503 and the rest: the check itself failed.
+        return END_UNAUTHORIZED if exc.status in (401, 403) else END_RECHECK_FAILED
+    except Exception as exc:  # a database error the error handlers would answer with 500
+        # The class only, as in the pump: a driver message can quote row values.
+        _log.warning("stream re-check failed (%s); ending the stream", type(exc).__name__)
+        return END_RECHECK_FAILED
+    return None
+
+
+async def _messages(
+    request: Request,
+    hub: sse.SseHub,
+    subscription: sse.Subscription,
+    replay: Replay,
+) -> AsyncIterator[str]:
+    # The re-check clock runs from the moment the stream opened, replay included: a client
+    # that reads a long replay slowly must not keep receiving after its token was revoked.
+    next_check = time.monotonic() + sse.REAUTH_SECONDS
+
+    async def due_check_fails() -> str | None:
+        nonlocal next_check
+        if time.monotonic() < next_check:
+            return None
+        reason = await _recheck(request)
+        next_check = time.monotonic() + sse.REAUTH_SECONDS
+        return reason
+
+    try:
+        yield ": connected\n\n"
+        if replay.reset:
+            yield reset_message(replay.newest)
+        events, more = deque(replay.events), replay.more
+        del replay  # the generator keeps only what it still sends
+        sent: set[uuid.UUID] = set()
+        while events:
+            if (reason := await due_check_fails()) is not None:
+                yield f": {reason}\n\n"
+                return
+            event = events.popleft()  # sent events are released as the replay goes on
+            sent.add(event.id)
+            yield sse.format_event(event)
+        if more:
+            # The browser reconnects with the last id it got and gets the next batch.
+            yield f"retry: {RECONNECT_MS}\n: {END_REPLAY_CONTINUES}\n\n"
+            return
+        while True:
+            arrived = await subscription.wait(sse.HEARTBEAT_SECONDS)
+            if subscription.overflowed:
+                # Too far behind: the client resumes with Last-Event-ID.
+                yield f": {END_TOO_SLOW}\n\n"
+                return
+            if (reason := await due_check_fails()) is not None:
+                yield f": {reason}\n\n"
+                return
+            if not arrived:
+                yield ": heartbeat\n\n"
+                continue
+            for event in subscription.drain():
+                # Replayed and live can overlap for events written while the stream opened.
+                if event.id in sent:
+                    continue
+                yield sse.format_event(event)
+    finally:
+        hub.close(subscription)
+
+
+class _SendTimeoutError(Exception):
+    """A write to the client waited longer than ``sse.SEND_TIMEOUT_SECONDS``."""
+
+
+class EventStreamResponse(StreamingResponse):
+    """A streaming response whose every write has a deadline.
+
+    uvicorn's ``send`` (``h11_impl.py``, ``RequestResponseCycle.send``) waits in
+    ``flow.drain()`` while the transport's write buffer is above its high-water mark, that is
+    for as long as the client does not read; nothing else ends that wait. Here each write may
+    wait ``sse.SEND_TIMEOUT_SECONDS``. After that the response stops without its final chunk
+    and the generator is closed (its ``finally`` frees the slot, the background task again).
+    Returning from the application with an incomplete response makes uvicorn close the
+    connection (``run_asgi``: "ASGI callable returned without completing response",
+    ``transport.close()``). asyncio's ``close`` still lets the bytes already buffered go out
+    first; they are bounded by the socket buffers and the transport's high-water mark, and
+    neither a slot nor the generator waits for them.
+    """
+
+    async def stream_response(self, send: Send) -> None:
+        async def send_with_deadline(message: Message) -> None:
+            try:
+                async with asyncio.timeout(sse.SEND_TIMEOUT_SECONDS):
+                    await send(message)
+            except TimeoutError:
+                raise _SendTimeoutError from None
+
+        try:
+            await super().stream_response(send_with_deadline)
+        except _SendTimeoutError:
+            _log.warning("stream send timed out; ending the stream")
+            # The body is always ``_messages``: close it now instead of at garbage collection.
+            await cast(AsyncGenerator[str], self.body_iterator).aclose()
+
+
+@router.get(
+    "/events/stream",
+    summary="Stream events (server-sent events)",
+    response_class=StreamingResponse,
+    responses={
+        **_BASE,
+        200: {
+            "description": "A ``text/event-stream`` of events",
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        },
+    },
+)
+async def stream_events(
+    request: Request,
+    auth: StreamReadDep,
+    last_event_id: Annotated[
+        str | None,
+        Header(
+            alias="Last-Event-ID",
+            max_length=200,
+            description="Resume after this event id (sent by the browser on reconnect)",
+        ),
+    ] = None,
+) -> Response:
+    headers = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
+    if request.scope.get(HEAD_SCOPE_KEY):
+        # The headers of the stream, without a stream: a HEAD client must not hold a slot.
+        return Response(media_type="text/event-stream", headers=headers)
+    hub: sse.SseHub = request.app.state.sse_hub
+    try:
+        subscription = hub.open(_principal(auth))
+    except sse.ConnectionLimitError:
+        raise ApiError(
+            429,
+            "too_many_streams",
+            "Too many open streams",
+            detail="Try again later.",
+            headers={"Retry-After": "5"},
+        ) from None
+    try:
+        replay = await _replay(request.app.state.session_factory, last_event_id)
+    except BaseException:
+        hub.close(subscription)
+        raise
+    return EventStreamResponse(
+        _messages(request, hub, subscription, replay),
+        media_type="text/event-stream",
+        headers=headers,
+        # Also when the body never started (the client left at once): free the slot. A
+        # coroutine, so it runs on the event loop and not in a worker thread.
+        background=BackgroundTask(hub.aclose, subscription),
+    )
+
+
+@router.get(
+    "/events/{event_id}",
+    summary="Get an event with its deliveries",
+    response_model=EventDetail,
+    responses={**_BASE, 404: {"model": ProblemDetail}},
+)
+async def get_event(event_id: uuid.UUID, session: SessionDep, _auth: ReadDep) -> EventDetail:
+    row = await event_log.get_event(session, event_id)
+    if row is None:
+        raise _not_found()
+    deliveries = await event_log.deliveries_of(session, row.event)
+    return EventDetail(
+        **_event_view(row).model_dump(),
+        deliveries=[
+            DeliveryView(
+                subscriber=d.subscriber,
+                status=d.status,  # type: ignore[arg-type]
+                attempts=d.attempts,
+                last_error=d.last_error,
+            )
+            for d in deliveries
+        ],
+    )
