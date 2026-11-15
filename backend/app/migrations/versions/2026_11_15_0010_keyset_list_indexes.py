@@ -5,6 +5,11 @@ keys are ``(id, occurred_at)`` and cannot serve that order, so an unfiltered pag
 the whole table. Created on the partitioned parents: PostgreSQL creates the index on every
 existing partition and on each one created later.
 
+Locking: building the index takes a SHARE lock on the parent and on each partition while it
+is built, which blocks writes (events, communication log) for that time. ``CREATE INDEX
+CONCURRENTLY`` is not possible on a partitioned parent. On a large installation run the
+upgrade at a quiet moment.
+
 Revision ID: 0010
 Revises: 0009
 Create Date: 2026-11-15
