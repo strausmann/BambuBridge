@@ -62,8 +62,43 @@ async def test_info_is_public_and_minimal(client: httpx.AsyncClient):
     r = await client.get("/api/v1/info")
     assert r.status_code == 200
     body = r.json()
-    assert set(body) == {"name", "version", "build"}
+    assert set(body) == {"name", "version", "build", "bootstrap_open"}
     assert body["name"] == "BambuBridge"
+
+
+async def test_info_reports_bootstrap_open_until_an_admin_token_exists(
+    client: httpx.AsyncClient, admin_token: str
+):
+    # The key is configured by the fixture and the admin token already exists: closed.
+    assert admin_token
+    assert (await client.get("/api/v1/info")).json()["bootstrap_open"] is False
+
+
+async def test_info_reports_bootstrap_open_on_a_fresh_install(client: httpx.AsyncClient):
+    assert (await client.get("/api/v1/info")).json()["bootstrap_open"] is True
+
+
+async def test_info_reports_bootstrap_closed_without_a_configured_key(settings: Settings):
+    application = create_app(settings_variant(settings, bootstrap_admin_key=""))
+    try:
+        transport = httpx.ASGITransport(app=application)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            assert (await c.get("/api/v1/info")).json()["bootstrap_open"] is False
+    finally:
+        await application.state.engine.dispose()
+
+
+async def test_info_still_answers_when_the_database_is_down(settings: Settings):
+    # A hint for the sign-in page only; the server enforces bootstrap itself. Unknown -> open.
+    application = create_app(settings_variant(settings, database_url=DEAD_DATABASE_URL))
+    try:
+        transport = httpx.ASGITransport(app=application)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.get("/api/v1/info")
+        assert r.status_code == 200
+        assert r.json()["bootstrap_open"] is True
+    finally:
+        await application.state.engine.dispose()
 
 
 async def test_readiness_is_bounded_when_the_database_stalls(
