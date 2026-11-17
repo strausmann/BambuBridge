@@ -11,7 +11,7 @@ import { AppSheet } from "../../shell/overlays/AppSheet";
 import { FIELD, FOCUS, PRIMARY_BUTTON, SECONDARY_BUTTON } from "../../shell/ui";
 import { PROVIDERS_KEY, field, type ProbeResult, type ProviderInstance, type ProviderType } from "../common/api";
 import { Badge, useErrorText } from "../common/ui";
-import { SchemaForm, schemaDefaults, schemaFields, type ConfigValue, type SecretState } from "./SchemaForm";
+import { SchemaForm, schemaDefaults, schemaErrors, schemaFields, type ConfigValue, type SecretState } from "./SchemaForm";
 
 const typeKey = (type: Pick<ProviderType, "kind" | "type_name">) => `${type.kind}/${type.type_name}`;
 
@@ -108,6 +108,7 @@ function Fields({ type, instance, onDone }: { type: ProviderType; instance?: Pro
     onError: fail,
   });
 
+  const invalid = schemaErrors(schema, config).length > 0;
   const busy = save.isPending || test.isPending;
   const begin = () => {
     setMessage(null);
@@ -149,7 +150,7 @@ function Fields({ type, instance, onDone }: { type: ProviderType; instance?: Pro
       <div className="flex flex-wrap justify-end gap-3">
         <BusyButton
           busy={test.isPending}
-          isDisabled={busy}
+          isDisabled={busy || invalid}
           onPress={() => {
             begin();
             test.mutate();
@@ -158,7 +159,7 @@ function Fields({ type, instance, onDone }: { type: ProviderType; instance?: Pro
         >
           {t`Verbindung testen`}
         </BusyButton>
-        <BusyButton type="submit" busy={save.isPending} isDisabled={busy || name.trim() === ""} className={PRIMARY_BUTTON}>
+        <BusyButton type="submit" busy={save.isPending} isDisabled={busy || invalid || name.trim() === ""} className={PRIMARY_BUTTON}>
           {t`Speichern`}
         </BusyButton>
       </div>

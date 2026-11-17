@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../test-utils";
-import { SchemaForm, schemaDefaults, schemaFields, type ConfigValue, type JsonSchema, type SecretState } from "./SchemaForm";
+import { SchemaForm, schemaDefaults, schemaErrors, schemaFields, type ConfigValue, type JsonSchema, type SecretState } from "./SchemaForm";
 
 const SCHEMA: JsonSchema = {
   type: "object",
@@ -43,7 +43,7 @@ describe("SchemaForm", () => {
     expect(screen.getByRole("spinbutton", { name: /Interval/ })).toHaveAttribute("max", "3600");
     expect(screen.getByRole("checkbox", { name: "Feature" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Mode" })).toBeInTheDocument();
-    expect(screen.getByLabelText(/Token/)).toHaveAttribute("type", "password");
+    expect(screen.getByLabelText(/Token/, { selector: "input" })).toHaveAttribute("type", "password");
   });
 
   it("reports typed text, numbers, checkbox and choice", async () => {
@@ -73,7 +73,7 @@ describe("SchemaForm", () => {
     const user = userEvent.setup();
     const spy = vi.fn();
     renderWithProviders(<Harness spy={spy} secretState={{ token: "set" }} />);
-    const token = screen.getByLabelText(/Token/);
+    const token = screen.getByLabelText(/Token/, { selector: "input" });
     expect(token).toHaveValue("");
     expect(screen.getByTestId("secret-state-token")).toHaveTextContent("gesetzt");
     await user.type(token, "abc");
@@ -93,9 +93,45 @@ describe("SchemaForm", () => {
     expect(screen.getByTestId("secret-state-token")).toHaveTextContent(text);
   });
 
+  it("a stored secret can be removed explicitly (null), and the removal can be taken back", async () => {
+    const user = userEvent.setup();
+    const spy = vi.fn();
+    renderWithProviders(<Harness spy={spy} secretState={{ token: "set" }} />);
+    await user.click(screen.getByRole("button", { name: "Token: entfernen" }));
+    expect(spy).toHaveBeenLastCalledWith({ token: null });
+    expect(screen.getByTestId("secret-state-token")).toHaveTextContent("wird entfernt");
+    expect(screen.getByLabelText(/^Token/, { selector: "input" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Entfernen abbrechen" }));
+    expect(spy).toHaveBeenLastCalledWith({});
+    expect(screen.getByTestId("secret-state-token")).toHaveTextContent("gesetzt");
+  });
+
+  it("offers no removal for a secret that is not set", () => {
+    renderWithProviders(<Harness secretState={{ token: "unset" }} />);
+    expect(screen.queryByRole("button", { name: "Token: entfernen" })).not.toBeInTheDocument();
+  });
+
+  it("an invalid number is held in the field with a message, not dropped", async () => {
+    const user = userEvent.setup();
+    const spy = vi.fn();
+    renderWithProviders(<Harness spy={spy} initial={{ interval_seconds: 30 }} />);
+    const field = screen.getByRole("spinbutton", { name: /Interval/ });
+    await user.clear(field);
+    await user.type(field, "1.5");
+    expect(field).toHaveValue(1.5);
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("Bitte eine ganze Zahl eingeben.")).toBeInTheDocument();
+    // The raw text stays in the value, so the form can see it is not a number and refuse to send it.
+    expect(spy).toHaveBeenLastCalledWith({ interval_seconds: "1.5" });
+    await user.clear(field);
+    await user.type(field, "7");
+    expect(field).not.toHaveAttribute("aria-invalid", "true");
+    expect(spy).toHaveBeenLastCalledWith({ interval_seconds: 7 });
+  });
+
   it("never prints a secret value it was given", () => {
     renderWithProviders(<Harness initial={{ token: "super-secret-value" }} />);
-    expect(screen.getByLabelText(/Token/)).toHaveValue("super-secret-value");
+    expect(screen.getByLabelText(/Token/, { selector: "input" })).toHaveValue("super-secret-value");
     expect(document.body.textContent).not.toContain("super-secret-value");
   });
 
@@ -110,6 +146,16 @@ describe("SchemaForm", () => {
   it("says so for a schema without fields", () => {
     renderWithProviders(<Harness schema={{ type: "object", properties: {} }} />);
     expect(screen.getByText("Dieser Typ hat keine Einstellungen.")).toBeInTheDocument();
+  });
+});
+
+describe("schemaErrors", () => {
+  it("names the fields that cannot be sent: not a whole number, outside the bounds", () => {
+    expect(schemaErrors(SCHEMA, { interval_seconds: "1.5" })).toEqual(["interval_seconds"]);
+    expect(schemaErrors(SCHEMA, { interval_seconds: 99999 })).toEqual(["interval_seconds"]);
+    expect(schemaErrors(SCHEMA, { interval_seconds: 0 })).toEqual(["interval_seconds"]);
+    expect(schemaErrors(SCHEMA, { interval_seconds: 30, label: "x" })).toEqual([]);
+    expect(schemaErrors(SCHEMA, {})).toEqual([]);
   });
 });
 

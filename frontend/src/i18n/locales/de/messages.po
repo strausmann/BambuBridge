@@ -27,6 +27,11 @@ msgstr "„Zum Home-Bildschirm“ wählen und „Hinzufügen“ tippen."
 msgid "{0} ms"
 msgstr "{0} ms"
 
+#. placeholder {0}: spec.title
+#: src/features/providers/SchemaForm.tsx
+msgid "{0}: entfernen"
+msgstr "{0}: entfernen"
+
 #: src/features/settings/SettingsForm.tsx
 msgid "{label}: auf Standard zurücksetzen"
 msgstr "{label}: auf Standard zurücksetzen"
@@ -260,6 +265,10 @@ msgid "Bis"
 msgstr "Bis"
 
 #: src/features/providers/SchemaForm.tsx
+msgid "Bitte eine ganze Zahl eingeben."
+msgstr "Bitte eine ganze Zahl eingeben."
+
+#: src/features/providers/SchemaForm.tsx
 msgid "Bitte wählen"
 msgstr "Bitte wählen"
 
@@ -490,10 +499,12 @@ msgstr "Entdoppelung von Ereignissen"
 msgid "Entferne <0>BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY</0> aus dem Container; der Schlüssel wirkt nicht mehr, sobald dieses Token existiert."
 msgstr "Entferne <0>BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY</0> aus dem Container; der Schlüssel wirkt nicht mehr, sobald dieses Token existiert."
 
+#: src/features/providers/SchemaForm.tsx
 #: src/features/settings/SettingsForm.tsx
 msgid "Entfernen"
 msgstr "Entfernen"
 
+#: src/features/providers/SchemaForm.tsx
 #: src/features/settings/SettingsForm.tsx
 msgid "Entfernen abbrechen"
 msgstr "Entfernen abbrechen"
@@ -1146,6 +1157,7 @@ msgstr "Wie dieser Browser die BambuBridge sieht. Hilfreich für eine Fehlermeld
 msgid "Wie lange Ereignisse und Kommunikation bleiben"
 msgstr "Wie lange Ereignisse und Kommunikation bleiben"
 
+#: src/features/providers/SchemaForm.tsx
 #: src/features/settings/SettingsForm.tsx
 msgid "wird entfernt"
 msgstr "wird entfernt"

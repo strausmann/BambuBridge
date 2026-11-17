@@ -61,7 +61,7 @@ describe("providers page", () => {
     // Defaults come from the schema; the secret starts empty.
     expect(within(sheet).getByRole("textbox", { name: "Label" })).toHaveValue("demo");
     expect(within(sheet).getByRole("spinbutton", { name: /Interval/ })).toHaveValue(30);
-    await user.type(within(sheet).getByLabelText(/^Token/), "s3cret-value");
+    await user.type(within(sheet).getByLabelText(/^Token/, { selector: "input" }), "s3cret-value");
 
     await user.click(within(sheet).getByRole("button", { name: "Verbindung testen" }));
     expect(await within(sheet).findByTestId("probe-result")).toHaveTextContent("Verbindung in Ordnung");
@@ -87,7 +87,7 @@ describe("providers page", () => {
     await user.click(await within(await screen.findByRole("article", { name: "Workshop demo" })).findByRole("button", { name: "Bearbeiten" }));
     const sheet = await screen.findByRole("dialog");
 
-    expect(within(sheet).getByLabelText(/^Token/)).toHaveValue("");
+    expect(within(sheet).getByLabelText(/^Token/, { selector: "input" })).toHaveValue("");
     expect(within(sheet).getByTestId("secret-state-token")).toHaveTextContent("gesetzt");
     const interval = within(sheet).getByRole("spinbutton", { name: /Interval/ });
     await user.clear(interval);
@@ -98,6 +98,36 @@ describe("providers page", () => {
     const patch = calls.find((call) => call.method === "PATCH")!;
     expect(patch.body).toEqual({ name: "Workshop demo", enabled: true, config: { interval_seconds: 5, label: "demo" } });
     expect(JSON.stringify(patch.body)).not.toContain("token");
+  });
+
+  it("removes a stored secret on request: the change sends null for it", async () => {
+    const user = userEvent.setup();
+    const calls = answers({ [`PATCH /api/v1/providers/${DEMO_INSTANCE.id}`]: () => jsonResponse({ ...DEMO_INSTANCE, secrets: { token: { set: false } } }) });
+    renderApp("/providers");
+    await user.click(await within(await screen.findByRole("article", { name: "Workshop demo" })).findByRole("button", { name: "Bearbeiten" }));
+    const sheet = await screen.findByRole("dialog");
+    await user.click(within(sheet).getByRole("button", { name: "Token: entfernen" }));
+    await user.click(within(sheet).getByRole("button", { name: "Speichern" }));
+    await waitFor(() => expect(calls.some((call) => call.method === "PATCH")).toBe(true));
+    expect(calls.find((call) => call.method === "PATCH")!.body).toEqual({ name: "Workshop demo", enabled: true, config: { interval_seconds: 30, label: "demo", token: null } });
+  });
+
+  it("an invalid number blocks saving and testing, and the message says why", async () => {
+    const user = userEvent.setup();
+    const calls = answers();
+    renderApp("/providers");
+    await user.click(await within(await screen.findByRole("article", { name: "Workshop demo" })).findByRole("button", { name: "Bearbeiten" }));
+    const sheet = await screen.findByRole("dialog");
+    const interval = within(sheet).getByRole("spinbutton", { name: /Interval/ });
+    await user.clear(interval);
+    await user.type(interval, "2.5");
+    expect(within(sheet).getByText("Bitte eine ganze Zahl eingeben.")).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: "Speichern" })).toBeDisabled();
+    expect(within(sheet).getByRole("button", { name: "Verbindung testen" })).toBeDisabled();
+    expect(calls.some((call) => call.method === "PATCH" || call.path.endsWith("/test"))).toBe(false);
+    await user.clear(interval);
+    await user.type(interval, "3");
+    expect(within(sheet).getByRole("button", { name: "Speichern" })).toBeEnabled();
   });
 
   it("names a taken name and an unreadable stored secret, and asks for the secret again", async () => {
