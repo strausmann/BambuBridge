@@ -77,3 +77,28 @@ def test_dockerfile_uses_frozen_lockfiles():
     text = "\n".join(_instructions())
     assert "uv sync --frozen --no-dev" in text
     assert "pnpm install --frozen-lockfile" in text
+
+
+def _stage(name: str) -> str:
+    """Instructions of one build stage (from its FROM up to the next FROM)."""
+    text = "\n".join(_instructions())
+    match = re.search(rf"^FROM .* AS {name}\n(.*?)(?=^FROM |\Z)", text, flags=re.M | re.S)
+    assert match, name
+    return match.group(1)
+
+
+def test_web_build_carries_the_same_version_and_build_id_as_the_runtime():
+    # The bundle embeds `<version>+<build id>` and the API reports the same pair in
+    # X-BambuBridge-Version; a mismatch makes every page show a permanent update banner.
+    web, runtime = _stage("web-builder"), _stage("runtime")
+    for stage in (web, runtime):
+        assert "ARG VERSION=0.0.0-dev" in stage
+        assert "ARG REVISION=unknown" in stage
+    assert 'BAMBUBRIDGE_BUILD_VERSION="${VERSION}"' in web
+    assert 'BAMBUBRIDGE_BUILD_ID="${REVISION}"' in web
+    assert 'BAMBUBRIDGE_BUILD_VERSION="${VERSION}"' in runtime
+    assert 'BAMBUBRIDGE_BUILD_ID="${REVISION}"' in runtime
+    # Set before the build, but after the dependency install so a new version keeps that layer.
+    assert (
+        web.index("pnpm install") < web.index("BAMBUBRIDGE_BUILD_VERSION") < web.index("pnpm build")
+    )

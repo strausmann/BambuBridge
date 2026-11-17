@@ -33,6 +33,14 @@ RUN pnpm install --frozen-lockfile
 # The icon step copies the logo from docs/brand/ (frontend/scripts/icons.ts).
 COPY docs/brand/ /src/docs/brand/
 COPY frontend/ ./
+# The bundle embeds `<version>+<build id>` (vite.config.ts) and the API reports the same pair in
+# X-BambuBridge-Version; both must come from the same build arguments as the runtime stage below,
+# or every page shows a permanent update banner. Placed after the install so a new version keeps
+# the dependency layer.
+ARG VERSION=0.0.0-dev
+ARG REVISION=unknown
+ENV BAMBUBRIDGE_BUILD_VERSION="${VERSION}" \
+    BAMBUBRIDGE_BUILD_ID="${REVISION}"
 RUN pnpm build
 
 # -----------------------------------------------------------------------------

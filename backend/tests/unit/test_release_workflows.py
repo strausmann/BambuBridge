@@ -186,3 +186,14 @@ def test_examples_readme_requires_cosign_3():
     text = (ROOT / "examples" / "README.md").read_text(encoding="utf-8")
     assert "cosign 3 or newer" in text
     assert "cosign verify --key cosign.pub" in text
+
+
+def test_dependabot_auto_merge_can_read_checks():
+    # The wait-on-check action lists check runs of the head commit; in a private repository that
+    # needs checks: read.
+    text = _wf("dependabot-auto-merge.yml")
+    block = re.search(r"^permissions:\n((?:  .*\n)+)", text, flags=re.M)
+    assert block
+    assert "  checks: read\n" in block.group(1)
+    assert "  contents: write\n" in block.group(1)
+    assert "  pull-requests: write\n" in block.group(1)
