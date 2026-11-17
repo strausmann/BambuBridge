@@ -79,6 +79,10 @@ ignore = []
     "S105",  # fake secrets in tests
     "S106",
 ]
+"scripts/licence_report.py" = [
+    "S105",  # "(" is a token of the SPDX expression parser, not a password
+    "S603",  # runs the pinned pip-licenses of the build, with a fixed argument list
+]
 
 [tool.mypy]
 python_version = "3.14"

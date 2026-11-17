@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 Björn Strausmann and BambuBridge contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Licences - backend runtime
+
+# Checks the licences of the locked runtime dependencies (uv.lock). The authoritative check runs
+# in the `builder` stage of backend/Dockerfile against what is installed into the image.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - backend/pyproject.toml
+      - backend/uv.lock
+      - licence-policy.yml
+      - backend/scripts/licence_report.py
+      - .github/workflows/licence-backend.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-licences:
+    name: Backend runtime licences
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          python-version: "3.14.10"
+
+      - name: Install the locked runtime dependencies
+        working-directory: backend
+        run: uv sync --frozen --no-dev
+
+      - name: Install the licence tool into its own venv
+        run: |
+          uv venv /tmp/tool
+          uv pip install --python /tmp/tool/bin/python pip-licenses==5.5.5
+
+      - name: Check the licences against licence-policy.yml
+        working-directory: backend
+        run: >-
+          /tmp/tool/bin/python -m scripts.licence_report
+          --python .venv/bin/python
+          --policy ../licence-policy.yml
+          --own-project pyproject.toml

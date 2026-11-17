@@ -1,0 +1,63 @@
+{
+  "allow-licenses": [
+    "0BSD",
+    "AFL-2.1",
+    "AGPL-3.0-only",
+    "AGPL-3.0-or-later",
+    "Apache-2.0",
+    "BlueOak-1.0.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC-BY-4.0",
+    "CC0-1.0",
+    "GPL-2.0-or-later",
+    "GPL-3.0-only",
+    "GPL-3.0-or-later",
+    "HPND",
+    "ISC",
+    "LGPL-2.0-or-later",
+    "LGPL-2.1-only",
+    "LGPL-2.1-or-later",
+    "LGPL-3.0-only",
+    "LGPL-3.0-or-later",
+    "MIT",
+    "MIT-0",
+    "MIT-CMU",
+    "MPL-2.0",
+    "OFL-1.1",
+    "PSF-2.0",
+    "Python-2.0",
+    "Unlicense",
+    "Zlib"
+  ],
+  "allow-dependencies-licenses": [
+    "pkg:npm/json-schema@0.4.0",
+    "pkg:npm/spdx-exceptions@2.5.0",
+    "pkg:npm/spdx-expression-validate@2.0.0"
+  ],
+  "fail-on-scopes": [
+    "runtime",
+    "unknown"
+  ],
+  "license-check": true,
+  "vulnerability-check": false,
+  "x-licence-text-sha256-refresh": "Python exceptions pin the reviewed licence file with licence-text-sha256 (SHA-256 of the pip-licenses LicenseText, UTF-8). When the gate reports 'the licence file has changed', read the new text, confirm the exception still holds, then run from backend/ in a venv with the runtime dependencies: python -c \"import sys; from scripts.licence_report import _collect, licence_text_sha256; [print(e['Name'], licence_text_sha256(e)) for e in _collect(sys.argv[1])]\" <runtime-python>, and replace the hash of that package.",
+  "x-licence-exceptions": [
+    {
+      "purl": "pkg:npm/spdx-exceptions@2.5.0",
+      "licence": "CC-BY-3.0",
+      "reason": "SPDX licence-list data, build time only (dependency of rollup-license-plugin, not in the shipped web bundle), attribution kept."
+    },
+    {
+      "purl": "pkg:npm/spdx-expression-validate@2.0.0",
+      "licence": "CC-BY-3.0 AND MIT",
+      "reason": "SPDX licence-list data, build time only (dependency of rollup-license-plugin, not in the shipped web bundle), attribution kept."
+    },
+    {
+      "purl": "pkg:npm/json-schema@0.4.0",
+      "licence": "AFL-2.1 OR BSD-3-Clause",
+      "reason": "The dependency graph mis-reports the package.json expression (AFL-2.1 AND AFL-3.0 AND BSD-3-Clause); package.json says (AFL-2.1 OR BSD-3-Clause)."
+    }
+  ]
+}

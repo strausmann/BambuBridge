@@ -1,0 +1,110 @@
+# SPDX-FileCopyrightText: 2026 Björn Strausmann and BambuBridge contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Release
+
+# Manual only. There is deliberately no schedule: a release is a decision, and 0.2.0 must not
+# appear before the audit, the history check and the acceptance. The nightly run is switched on
+# after v0.2.0.
+#
+# Run it from `main` for a stable release, or from the branch `rc` for a release candidate
+# (semantic-release publishes 0.2.0-rc.1, 0.2.0-rc.2, ... from `rc`; see .releaserc.json).
+# semantic-release pushes the tag and creates the GitHub Release; the images are then built from
+# that tag by docker-publish.yml.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run - analyse commits but do not publish"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: semantic-release
+    runs-on: ubuntu-24.04
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/rc'
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      new-release-published: ${{ steps.semantic.outputs.version != '' }}
+      new-release-version: ${{ steps.semantic.outputs.version }}
+    steps:
+      # No credentials are persisted by the checkout. The deploy key is only loaded into an
+      # ssh-agent right before semantic-release runs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+
+      # Installed from the lockfile WITHOUT lifecycle scripts, before the deploy key exists in
+      # this job: dependency code never runs while the key is loadable.
+      - name: Install semantic-release (locked, no scripts)
+        working-directory: .github/release-tools
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Load deploy key into ssh-agent
+        env:
+          SSH_KEY: ${{ secrets.SEMANTIC_RELEASE_SSH_KEY }}
+        run: |
+          set -eu
+          eval "$(ssh-agent -s)" > /dev/null
+          printf '%s\n' "$SSH_KEY" | ssh-add - 2> /dev/null
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$RUNNER_TEMP/known_hosts"
+          {
+            echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK"
+            echo "SSH_AGENT_PID=$SSH_AGENT_PID"
+            echo "GIT_SSH_COMMAND=ssh -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -o StrictHostKeyChecking=yes"
+          } >> "$GITHUB_ENV"
+
+      # .releaserc.json writes `version=<x>` to $GITHUB_OUTPUT from the exec plugin's publishCmd,
+      # so the output is set only when a release was really published (never in a dry run).
+      - name: semantic-release
+        id: semantic
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+        run: |
+          set -eu
+          args=()
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          .github/release-tools/node_modules/.bin/semantic-release "${args[@]}"
+
+      - name: Stop ssh-agent
+        if: always()
+        run: |
+          if [ -n "${SSH_AGENT_PID:-}" ]; then ssh-agent -k > /dev/null || true; fi
+
+  # A release created with GITHUB_TOKEN fires no `release` event, so the image build is called
+  # from here. semantic-release has pushed the tag; the image jobs check out refs/tags/v<version>.
+  # Secrets are handed over by name, the deploy key is not passed on.
+  images:
+    name: Release images
+    needs: release
+    if: needs.release.outputs.new-release-published == 'true' && !inputs.dry_run
+    uses: ./.github/workflows/docker-publish.yml
+    with:
+      tag: ${{ needs.release.outputs.new-release-version }}
+    secrets:
+      COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+      COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: write
