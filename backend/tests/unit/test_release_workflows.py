@@ -109,10 +109,10 @@ def test_codeql_and_licence_gate_only_when_public():
 def test_release_tools_versions_match_plan():
     package = json.loads((ROOT / ".github" / "release-tools" / "package.json").read_text())
     assert package["dependencies"] == {
-        "@semantic-release/changelog": "7.0.0",
-        "@semantic-release/exec": "7.1.0",
-        "@semantic-release/git": "11.0.1",
-        "conventional-changelog-conventionalcommits": "10.4.1",
+        "@semantic-release/changelog": "6.0.3",
+        "@semantic-release/exec": "6.0.3",
+        "@semantic-release/git": "10.0.1",
+        "conventional-changelog-conventionalcommits": "9.3.1",
         "semantic-release": "25.0.9",
     }
     assert (ROOT / ".github" / "release-tools" / "package-lock.json").is_file()
@@ -197,3 +197,14 @@ def test_dependabot_auto_merge_can_read_checks():
     assert "  checks: read\n" in block.group(1)
     assert "  contents: write\n" in block.group(1)
     assert "  pull-requests: write\n" in block.group(1)
+
+
+def test_release_tools_lock_pairs_preset_with_a_compatible_writer():
+    # Preset 10.x needs conventional-changelog-writer 9+, semantic-release 25.0.9 brings 8.x:
+    # that pair fails in generateNotes ("Missing helper"). The lock must hold the proven pair.
+    lock = json.loads((ROOT / ".github" / "release-tools" / "package-lock.json").read_text())
+    packages = lock["packages"]
+    preset = packages["node_modules/conventional-changelog-conventionalcommits"]["version"]
+    writer = packages["node_modules/conventional-changelog-writer"]["version"]
+    assert preset == "9.3.1"
+    assert writer.startswith("8.")
