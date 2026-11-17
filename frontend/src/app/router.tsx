@@ -1,10 +1,14 @@
 import { useLingui } from "@lingui/react/macro";
-import { createRootRoute, createRoute, createRouter, getRouteApi, Outlet, useLocation, useRouter, type RouterHistory } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, getRouteApi, Outlet, useLocation, useRouter, useRouterState, type RouterHistory } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { Button } from "react-aria-components";
 import { ApiError, apiFetch } from "../api/client";
 import { DevicePage } from "../features/device/DevicePage";
-import { NotFoundPage, OverviewPage, ProtocolPage, ProvidersPage, SettingsLayout, SettingsPage } from "../pages/placeholders";
+import { OverviewPage } from "../features/overview/OverviewPage";
+import { ProtocolPage } from "../features/protocol/ProtocolPage";
+import { ProvidersPage } from "../features/providers/ProvidersPage";
+import { SettingsIndex, SettingsSectionPage } from "../features/settings/sections";
+import { NotFoundPage, SettingsLayout } from "../pages/shellPages";
 import { ConnectionBanner } from "../shell/ConnectionBanner";
 import { NoticeArea } from "../shell/Notice";
 import { UpdateBanner } from "../shell/UpdateBanner";
@@ -13,7 +17,7 @@ import { BootstrapKeyCreated } from "../shell/BootstrapKeyCreated";
 import { SignIn } from "../shell/SignIn";
 import { PRIMARY_BUTTON } from "../shell/ui";
 import { PUBLIC_PAGES } from "./routes";
-import { useLeaving, useSession, type ApiKeyCreated } from "./session";
+import { useInfo, useLeaving, useSession, type ApiKeyCreated } from "./session";
 
 export const BOOTSTRAP_HEADER = "X-BambuBridge-Bootstrap";
 
@@ -103,10 +107,16 @@ function RootLayout() {
   const location = useLocation();
   const leaving = useLeaving();
   const onPublicPage = PUBLIC_PATHS.includes(location.pathname);
+  // While the router moves from one page to the next the location is already the new one but the
+  // matched page is still the old one. A signed-out visitor must not see (or let load data) the
+  // old page on the way to the sign-in: its requests would find the sign-in gone and send the
+  // browser round the sign-in hop again.
+  const leaf = useRouterState({ select: (state) => state.matches.at(-1)?.routeId });
+  const publicMatch = leaf !== undefined && PUBLIC_PATHS.includes(leaf as (typeof PUBLIC_PAGES)[number]);
   const inShell = session.signedIn && !onPublicPage && !leaving;
   return (
     <>
-      <RootContent session={session} href={location.href} onPublicPage={onPublicPage} leaving={leaving} />
+      <RootContent session={session} href={location.href} onPublicPage={onPublicPage} publicMatch={publicMatch} leaving={leaving} />
       <NoticeArea aboveTabBar={inShell}>
         <ConnectionBanner />
         <UpdateBanner />
@@ -115,12 +125,12 @@ function RootLayout() {
   );
 }
 
-function RootContent({ session, href, onPublicPage, leaving }: { session: ReturnType<typeof useSession>; href: string; onPublicPage: boolean; leaving: boolean }) {
+function RootContent({ session, href, onPublicPage, publicMatch, leaving }: { session: ReturnType<typeof useSession>; href: string; onPublicPage: boolean; publicMatch: boolean; leaving: boolean }) {
   // On the way to the sign-in hop (src/app/session.ts): no shell with emptied data meanwhile.
   if (session.isPending || leaving) return <Splash />;
   if (session.isError) return <Unreachable onRetry={() => void session.refetch()} />;
   if (!session.signedIn) {
-    if (onPublicPage) return <Outlet />;
+    if (onPublicPage) return publicMatch ? <Outlet /> : <Splash />;
     return <RedirectTo href={`/sign-in?redirect=${encodeURIComponent(href)}`} />;
   }
   if (onPublicPage) return <Outlet />;
@@ -137,9 +147,12 @@ const signInApi = getRouteApi("/sign-in");
 
 function SignInRoute() {
   const session = useSession();
+  const info = useInfo({ fresh: true });
   const { redirect } = signInApi.useSearch();
   if (session.signedIn) return <RedirectTo href={safeRedirect(redirect) ?? "/"} />;
-  return <SignIn onSignIn={session.signIn} onSso={session.signInWithSso} />;
+  // Offered only while the server says the first admin token can still be made; until it has
+  // answered, the link is not there (it would flash and vanish on a finished install).
+  return <SignIn onSignIn={session.signIn} onSso={session.signInWithSso} bootstrapOpen={info.data?.bootstrap_open === true} />;
 }
 
 /** The first admin token: created with the one-time bootstrap key, never with a session. */
@@ -162,9 +175,16 @@ function BootstrapRoute() {
   return <BootstrapKeyCreated onCreate={createFirstAdminToken} onContinue={session.signIn} />;
 }
 
+const sectionApi = getRouteApi("/settings/$section");
+
+function SettingsSectionRoute() {
+  const { section } = sectionApi.useParams();
+  return <SettingsSectionPage section={section} />;
+}
+
 const page = <P extends string>(path: P, component: () => React.JSX.Element) => createRoute({ getParentRoute: () => rootRoute, path, component });
 
-// Settings is a layout with one child per section; the sections arrive with the management pages.
+// Settings is a layout: its index lists the sections, `/settings/$section` shows one of them.
 const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsLayout });
 const settingsChild = <P extends string>(path: P, component: () => React.JSX.Element) =>
   createRoute({ getParentRoute: () => settingsRoute, path, component });
@@ -184,7 +204,7 @@ const routeTree = rootRoute.addChildren([
   page("/", OverviewPage),
   page("/providers", ProvidersPage),
   page("/protocol", ProtocolPage),
-  settingsRoute.addChildren([settingsChild("/", SettingsPage), settingsChild("/$section", SettingsPage)]),
+  settingsRoute.addChildren([settingsChild("/", SettingsIndex), settingsChild("/$section", SettingsSectionRoute)]),
   page("/device", () => <DevicePage />),
   page("/bootstrap", BootstrapRoute),
   signInRoute,

@@ -27,7 +27,7 @@ const touch = (browser: BrowserName, width: number, height: number) => ({ ...bro
 // Playwright's WebKit on Linux registers, updates and serves offline as Chromium does), the
 // shell on the desktop, the phone layout and navigation on phone and tablet sizes.
 const WORKER = /(session-expired|update|offline|worker-routes)\.spec\.ts$/;
-const DESKTOP = [/shell\.spec\.ts$/, WORKER];
+const DESKTOP = [/(shell|providers|protocol|settings)\.spec\.ts$/, WORKER];
 const HANDHELD = [/(layout|navigation|back)\.spec\.ts$/, WORKER];
 
 export default defineConfig({

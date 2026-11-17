@@ -15,6 +15,9 @@ export function TopBar() {
   const { t } = useLingui();
   const session = useSession();
   const userId = useId();
+  // A single sign-on session shows who the identity provider reported; a token sign-in has no
+  // such subject and shows the user's display name.
+  const who = session.identitySubject ?? session.user;
   const [signOutFailed, setSignOutFailed] = useState(false);
   const signOutButton = useRef<HTMLButtonElement>(null);
 
@@ -47,15 +50,15 @@ export function TopBar() {
         <Logo variant="mark" className="block h-9" />
       </Link>
       <div className="ml-auto flex min-w-0 items-center gap-1">
-        {session.user ? (
+        {who ? (
           // Below 640 px there is no room for the line; it still describes the sign-out button.
           <p id={userId} className="sr-only text-small text-ink-2 sm:not-sr-only sm:mr-2 sm:block sm:min-w-0 sm:truncate" data-testid="signed-in-user">
-            {t`Angemeldet als ${session.user}`}
+            {t`Angemeldet als ${who}`}
           </p>
         ) : null}
         <ThemeSwitch />
         <LanguageSwitch />
-        <Button ref={signOutButton} aria-label={t`Abmelden`} aria-describedby={session.user ? userId : undefined} onPress={signOut} className={ICON_BUTTON}>
+        <Button ref={signOutButton} aria-label={t`Abmelden`} aria-describedby={who ? userId : undefined} onPress={signOut} className={ICON_BUTTON}>
           <SignOutIcon />
         </Button>
       </div>

@@ -62,8 +62,8 @@ export async function signIn(page: Page, token: string): Promise<void> {
   await page.getByRole("button", { name: "Anmelden", exact: true }).click();
 }
 
-/** A fresh install, signed in with its first admin token, on `path`. */
-export async function signedInAt(page: Page, path: string): Promise<void> {
+/** A fresh install, signed in with its first admin token, on `path`; resolves to that token (for calls the page itself does not make). */
+export async function signedInAt(page: Page, path: string): Promise<string> {
   const token = await bootstrapToken(page);
   await page.goto(path);
   await signIn(page, token);
@@ -75,6 +75,19 @@ export async function signedInAt(page: Page, path: string): Promise<void> {
   // median 1.24 s with workers blocked, 1.40 s with the worker installing, worst 1.81 s. The
   // burst costs a little; it does not explain a request pending for five seconds.
   await expect(page.getByTestId("signed-in-user")).toBeAttached({ timeout: 20_000 });
+  return token;
+}
+
+export const KEY_HEADER = "X-BambuBridge-Key";
+
+/** A demo instance made through the API (no browser), ticking every second. Resolves to its id. */
+export async function makeDemoInstance(page: Page, token: string, name: string, label = "alpha"): Promise<string> {
+  const made = await page.request.post("/api/v1/providers", {
+    headers: { [KEY_HEADER]: token },
+    data: { kind: "integration", type_name: "demo", name, enabled: true, config: { interval_seconds: 1, label, token: "e2e-demo-token-1234" } },
+  });
+  expect(made.status(), await made.text()).toBe(201);
+  return ((await made.json()) as { id: string }).id;
 }
 
 /** The page is controlled by the service worker (the shell came from its cache). */

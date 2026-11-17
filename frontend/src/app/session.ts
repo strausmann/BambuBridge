@@ -16,11 +16,14 @@ const SESSION_PATH = "/api/v1/auth/session";
 export const CONTINUE_PATH = "/auth/continue";
 
 /** Public name, version and build of the server; available before anyone is signed in. */
-export function useInfo(): UseQueryResult<InfoData> {
+export function useInfo({ fresh = false }: { fresh?: boolean } = {}): UseQueryResult<InfoData> {
   return useQuery({
     queryKey: INFO_KEY,
     queryFn: () => apiFetch<InfoData>("/api/v1/info"),
     staleTime: 60_000,
+    // `fresh`: ask again on every mount, whatever was cached (the sign-in page reads whether the
+    // first-start screen is still open, which changes the moment the first admin token exists).
+    ...(fresh ? { refetchOnMount: "always" as const } : {}),
   });
 }
 
