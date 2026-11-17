@@ -112,6 +112,44 @@ describe("providers page", () => {
     expect(calls.find((call) => call.method === "PATCH")!.body).toEqual({ name: "Workshop demo", enabled: true, config: { interval_seconds: 30, label: "demo", token: null } });
   });
 
+  it("clearing a stored optional number on edit sends null: a reset, not an omission", async () => {
+    const user = userEvent.setup();
+    const calls = answers({
+      [`PATCH /api/v1/providers/${DEMO_INSTANCE.id}`]: () => jsonResponse(DEMO_INSTANCE),
+      [`POST /api/v1/providers/${DEMO_INSTANCE.id}/test`]: () => jsonResponse({ ok: true, message: "fine", duration_ms: 1 }),
+    });
+    renderApp("/providers");
+    await user.click(await within(await screen.findByRole("article", { name: "Workshop demo" })).findByRole("button", { name: "Bearbeiten" }));
+    const sheet = await screen.findByRole("dialog");
+    await user.clear(within(sheet).getByRole("spinbutton", { name: /Interval/ }));
+
+    await user.click(within(sheet).getByRole("button", { name: "Verbindung testen" }));
+    await waitFor(() => expect(calls.some((call) => call.path.endsWith("/test"))).toBe(true));
+    expect(calls.find((call) => call.path.endsWith("/test"))!.body).toEqual({ config: { interval_seconds: null, label: "demo" } });
+
+    await user.click(within(sheet).getByRole("button", { name: "Speichern" }));
+    await waitFor(() => expect(calls.some((call) => call.method === "PATCH")).toBe(true));
+    expect(calls.find((call) => call.method === "PATCH")!.body).toEqual({ name: "Workshop demo", enabled: true, config: { interval_seconds: null, label: "demo" } });
+  });
+
+  it("clearing the same number while making a new instance leaves it out", async () => {
+    const user = userEvent.setup();
+    const calls = answers({ "POST /api/v1/providers": () => jsonResponse(DEMO_INSTANCE, { status: 201 }) });
+    renderApp("/providers");
+    await user.click(await screen.findByRole("button", { name: "Instanz hinzufügen" }));
+    const sheet = await screen.findByRole("dialog");
+    await user.click(within(sheet).getByRole("combobox", { name: "Typ" }));
+    await user.click(await screen.findByRole("option", { name: "demo (integration)" }));
+    await user.type(await within(sheet).findByRole("textbox", { name: "Name" }), "Fresh");
+    await user.type(within(sheet).getByLabelText(/^Token/, { selector: "input" }), "s3cret-value");
+    await user.clear(within(sheet).getByRole("spinbutton", { name: /Interval/ }));
+    await user.click(within(sheet).getByRole("button", { name: "Speichern" }));
+    await waitFor(() => expect(calls.some((call) => call.method === "POST" && call.path === "/api/v1/providers")).toBe(true));
+    const body = calls.find((call) => call.method === "POST" && call.path === "/api/v1/providers")!.body as { config: Record<string, unknown> };
+    expect(body.config).toEqual({ label: "demo", token: "s3cret-value" });
+    expect(Object.hasOwn(body.config, "interval_seconds")).toBe(false);
+  });
+
   it("an invalid number blocks saving and testing, and the message says why", async () => {
     const user = userEvent.setup();
     const calls = answers();

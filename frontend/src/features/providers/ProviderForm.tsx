@@ -9,7 +9,7 @@ import { BusyButton } from "../../shell/Busy";
 import { AppComboBox } from "../../shell/overlays/AppComboBox";
 import { AppSheet } from "../../shell/overlays/AppSheet";
 import { FIELD, FOCUS, PRIMARY_BUTTON, SECONDARY_BUTTON } from "../../shell/ui";
-import { PROVIDERS_KEY, field, type ProbeResult, type ProviderInstance, type ProviderType } from "../common/api";
+import { PROVIDERS_KEY, field, withField, type ProbeResult, type ProviderInstance, type ProviderType } from "../common/api";
 import { Badge, useErrorText } from "../common/ui";
 import { SchemaForm, schemaDefaults, schemaErrors, schemaFields, type ConfigValue, type SecretState } from "./SchemaForm";
 
@@ -64,6 +64,19 @@ function Fields({ type, instance, onDone }: { type: ProviderType; instance?: Pro
   const dirty = name !== (instance?.name ?? "") || enabled !== (instance?.enabled ?? true) || JSON.stringify(config) !== JSON.stringify(initialConfig);
   useDirtyGuard(dirty);
 
+  /**
+   * What goes over the wire. Changing an instance, a stored plain field that is now empty must be
+   * said as `null` (back to the default): the API keeps every field that is left out. A new
+   * instance has nothing stored, so an empty field is simply left out.
+   */
+  const outgoing = (): ConfigValue =>
+    instance
+      ? schemaFields(schema)
+          .filter((spec) => !(spec.spec.kind === "string" && spec.spec.secret))
+          .filter((spec) => field(instance.config, spec.name) !== undefined && field(config, spec.name) === undefined)
+          .reduce<ConfigValue>((next, spec) => withField<unknown>(next, spec.name, null), config)
+      : config;
+
   const secretState: Record<string, SecretState> = Object.fromEntries(
     schemaFields(schema)
       .filter((spec) => spec.spec.kind === "string" && spec.spec.secret)
@@ -89,7 +102,7 @@ function Fields({ type, instance, onDone }: { type: ProviderType; instance?: Pro
   const save = useMutation({
     mutationFn: () =>
       instance
-        ? apiFetch<ProviderInstance>(`/api/v1/providers/${encodeURIComponent(instance.id)}`, { method: "PATCH", json: { name, enabled, config } })
+        ? apiFetch<ProviderInstance>(`/api/v1/providers/${encodeURIComponent(instance.id)}`, { method: "PATCH", json: { name, enabled, config: outgoing() } })
         : apiFetch<ProviderInstance>("/api/v1/providers", { method: "POST", json: { kind: type.kind, type_name: type.type_name, name, enabled, config } }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: PROVIDERS_KEY });
@@ -102,7 +115,7 @@ function Fields({ type, instance, onDone }: { type: ProviderType; instance?: Pro
     mutationFn: () =>
       apiFetch<ProbeResult>(
         instance ? `/api/v1/providers/${encodeURIComponent(instance.id)}/test` : `/api/v1/provider-types/${encodeURIComponent(type.kind)}/${encodeURIComponent(type.type_name)}/test`,
-        { method: "POST", json: { config } },
+        { method: "POST", json: { config: outgoing() } },
       ),
     onSuccess: setProbe,
     onError: fail,
