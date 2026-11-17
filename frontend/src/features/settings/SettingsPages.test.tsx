@@ -91,6 +91,29 @@ describe("retention", () => {
     expect(calls.find((call) => call.method === "PUT")!.body).toEqual({ values: { "retention.events_days": 21 } });
   });
 
+  it("after a save the number field shows the value the server now has, not the old one", async () => {
+    const user = userEvent.setup();
+    let stored = 90;
+    answers({
+      // The refresh answers a little later than the save, as a real one does.
+      "GET /api/v1/settings": async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        return jsonResponse(SETTINGS.map((setting) => (setting.key === "retention.events_days" ? { ...setting, value: stored, set: true } : setting)));
+      },
+      "PUT /api/v1/settings": () => {
+        stored = 14;
+        return new Response(null, { status: 204 });
+      },
+    });
+    renderApp("/settings/retention");
+    const days = await screen.findByRole("spinbutton", { name: "Ereignisse aufbewahren (Tage)" });
+    await user.clear(days);
+    await user.type(days, "14");
+    await user.click(screen.getByRole("button", { name: "Speichern" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("ohne Neustart");
+    expect(screen.getByRole("spinbutton", { name: "Ereignisse aufbewahren (Tage)" })).toHaveValue(14);
+  });
+
   it("a value outside the bounds is held back by the browser before anything is sent", async () => {
     const user = userEvent.setup();
     const calls = answers({ "PUT /api/v1/settings": () => new Response(null, { status: 204 }) });

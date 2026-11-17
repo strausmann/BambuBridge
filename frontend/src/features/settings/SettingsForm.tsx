@@ -49,11 +49,13 @@ export function SettingsForm({ sections }: { sections: readonly string[] }) {
       setSaved(false);
     },
     onSuccess: async () => {
+      // The fields start over from the stored values only once those are the new ones: a remount
+      // before the refresh is through would show the old value next to the "saved" message.
+      await queryClient.invalidateQueries({ queryKey: SETTINGS_KEY });
       setDraft({});
       setBlank(new Set());
       setEpoch((n) => n + 1);
       setSaved(true);
-      await queryClient.invalidateQueries({ queryKey: SETTINGS_KEY });
     },
     onError: (error) => setMessage(errorText(error)),
   });
