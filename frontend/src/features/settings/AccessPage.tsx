@@ -181,10 +181,15 @@ function TokenShown({ created, onClose }: { created: Created; onClose: () => voi
       </pre>
       <Button
         onPress={() => {
-          navigator.clipboard.writeText(created.token).then(
-            () => setCopy("done"),
-            () => setCopy("failed"),
-          );
+          // Over plain http the clipboard API is missing and the call throws at once, before a promise exists.
+          void (async () => {
+            try {
+              await navigator.clipboard.writeText(created.token);
+              setCopy("done");
+            } catch {
+              setCopy("failed");
+            }
+          })();
         }}
         className={`${SECONDARY_BUTTON} self-start`}
       >

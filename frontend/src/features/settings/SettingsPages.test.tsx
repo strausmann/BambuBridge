@@ -254,6 +254,19 @@ describe("access", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Kopieren ging nicht");
   });
 
+  it("a missing clipboard (plain http) is said too, not thrown", async () => {
+    const user = userEvent.setup();
+    answers({ "POST /api/v1/admin/api-keys": () => jsonResponse({ ...KEY, token: "bb_pat_x" }, { status: 201 }) });
+    // `writeText` is not even there: calling it throws before any promise exists.
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    renderApp("/settings/access");
+    await user.click(await screen.findByRole("button", { name: "Token anlegen" }));
+    await user.type(within(await screen.findByRole("dialog")).getByRole("textbox", { name: "Name" }), "n");
+    await user.click(screen.getByRole("button", { name: "Anlegen" }));
+    await user.click(await screen.findByRole("button", { name: "In die Zwischenablage kopieren" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Kopieren ging nicht");
+  });
+
   it("the sign-in limit sits on this page", async () => {
     answers();
     renderApp("/settings/access");
