@@ -65,6 +65,9 @@ env:
 jobs:
   build:
     name: Build (${{ matrix.arch }})
+    # A manual run without a tag from another branch must not move edge or sha-<7>: only main, or a
+    # release (tag set), publishes.
+    if: github.ref == 'refs/heads/main' || inputs.tag != ''
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -181,6 +184,9 @@ jobs:
 
   merge:
     name: Merge manifest and sign
+    # A manual run without a tag from another branch must not move edge or sha-<7>: only main, or a
+    # release (tag set), publishes.
+    if: github.ref == 'refs/heads/main' || inputs.tag != ''
     runs-on: ubuntu-24.04
     needs: build
     permissions:

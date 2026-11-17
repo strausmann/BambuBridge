@@ -1,7 +1,8 @@
 """Guards for backend/Dockerfile.
 
 Text scan on purpose: the properties are the literal lines of the file (pins, user, healthcheck).
-It cannot tell a real instruction from a comment; the real build is exercised in the docker job.
+It cannot tell a real instruction from a comment; the real build is exercised by the `docker`
+job of ci.yml (build only) and by docker-publish.yml.
 """
 
 from __future__ import annotations
@@ -40,13 +41,18 @@ def test_dockerfile_runtime_user_1000_and_healthcheck():
 
 
 def test_dockerfile_base_images_pinned_exact():
-    froms = [line for line in _instructions() if line.startswith("FROM ")]
-    images = {line.split()[1] for line in froms if line.split()[1] != "web-builder"}
-    assert "node:26.13.1-trixie-slim" in images
-    assert "python:3.14.10-slim-trixie" in images
-    assert "ghcr.io/astral-sh/uv:0.13.7" in "\n".join(_instructions())
-    for line in froms:
-        assert not re.search(r":(latest|\d+(\.\d+)?-)", line.split()[1]) or "slim" in line
+    text = "\n".join(_instructions())
+    froms = [line.split()[1] for line in _instructions() if line.startswith("FROM ")]
+    # Every base image is an exact pin: node for the web build, python twice.
+    assert froms == [
+        "node:26.13.1-trixie-slim",
+        "python:3.14.10-slim-trixie",
+        "python:3.14.10-slim-trixie",
+    ]
+    assert "COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /uvx /bin/" in text
+    copied = re.findall(r"COPY --from=(\S+)", text)
+    external = [ref for ref in copied if "/" in ref or ":" in ref]
+    assert external == ["ghcr.io/astral-sh/uv:0.13.7"]
 
 
 def test_dockerfile_installs_pnpm_without_corepack():

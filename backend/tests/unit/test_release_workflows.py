@@ -144,3 +144,45 @@ def test_cosign_public_key_is_committed_and_private_is_not():
 def test_dependabot_auto_merge_pins_actions():
     text = _wf("dependabot-auto-merge.yml")
     assert "github.actor == 'dependabot[bot]'" in text
+
+
+GUARD = "if: github.ref == 'refs/heads/main' || inputs.tag != ''"
+
+
+def test_publish_edge_only_from_main_or_with_release_tag():
+    # A manual run without a tag from another branch must not move edge or sha-<7>.
+    text = _wf("docker-publish.yml")
+    jobs = re.split(r"^jobs:\n", text, flags=re.M)[1]
+    for job_id in ("build", "merge"):
+        block = re.search(rf"^  {job_id}:\n((?:    .*\n|\n)+)", jobs, flags=re.M)
+        assert block, job_id
+        header = block.group(1).split("    steps:")[0]
+        assert GUARD in header, f"{job_id} lacks the dispatch guard"
+
+
+def test_dependabot_auto_merge_passes_dependency_names_via_env():
+    text = _wf("dependabot-auto-merge.yml")
+    assert "DEP_NAMES: ${{ steps.meta.outputs.dependency-names }}" in text
+    assert "$DEP_NAMES" in text
+    run_lines = [ln for ln in text.splitlines() if "gh pr comment" in ln]
+    assert run_lines
+    assert all("${{" not in ln for ln in run_lines)
+
+
+def test_ci_builds_the_image_without_pushing():
+    text = _wf("ci.yml")
+    assert re.search(r"^  docker:\n", text, flags=re.M)
+    block = re.search(r"^  docker:\n((?:    .*\n|\n)+)", text, flags=re.M)
+    assert block
+    job = block.group(1)
+    assert "runs-on: ubuntu-24.04\n" in job
+    assert "docker build -f backend/Dockerfile ." in job
+    assert "push" not in job.replace("persist-credentials", "")
+    assert "cosign" not in job
+    assert "login" not in job
+
+
+def test_examples_readme_requires_cosign_3():
+    text = (ROOT / "examples" / "README.md").read_text(encoding="utf-8")
+    assert "cosign 3 or newer" in text
+    assert "cosign verify --key cosign.pub" in text

@@ -26,7 +26,8 @@ The container reads exactly five start variables:
 Everything else is set in the web UI. Data lives in bind mounts under `/docker/stacks/bambubridge/`
 (no named volumes), so a backup of that directory is a backup of the installation.
 
-Verify the image signature before you run it:
+Verify the image signature before you run it. cosign 3 or newer is required: the images are signed
+with cosign 3, whose bundle format cosign 2 cannot verify.
 
 ```sh
 cosign verify --key cosign.pub ghcr.io/strausmann/bambubridge:0.2.0
