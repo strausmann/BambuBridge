@@ -227,13 +227,20 @@ describe("system and general", () => {
     expect(screen.getByRole("link", { name: /Beschreibung der Schnittstelle/ })).toHaveAttribute("href", "/docs");
   });
 
-  it("system names a part that is down, and says 'unknown' when the server only answers 503", async () => {
+  it("system names the part that is down, taken from the 503 body", async () => {
     answers({ "GET /readiness": () => jsonResponse({ database: "ok", listener: "unavailable" }, { status: 503 }) });
     renderApp("/settings/system");
     expect(await screen.findByTestId("server-version")).toHaveTextContent("0.2.0");
-    // A 503 carries no body through the API layer: both parts read "unknown", not "ok".
+    const state = await screen.findByRole("region", { name: "Zustand" });
+    expect(await within(state).findByText("In Ordnung")).toBeInTheDocument();
+    expect(within(state).getByText("Nicht erreichbar")).toBeInTheDocument();
+    expect(within(state).queryByText("Unbekannt")).not.toBeInTheDocument();
+  });
+
+  it("system says 'unknown' only when the 503 has no readable body", async () => {
+    answers({ "GET /readiness": () => problemResponse(503, "database_unavailable", "x") });
+    renderApp("/settings/system");
     expect(await screen.findAllByText("Unbekannt")).toHaveLength(2);
-    expect(screen.queryByText("In Ordnung")).not.toBeInTheDocument();
   });
 
   it("general holds the deduplication window", async () => {

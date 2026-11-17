@@ -30,8 +30,18 @@ describe("overview page", () => {
     expect(within(card).getAllByText("In Ordnung")).toHaveLength(2);
   });
 
-  it("says 'not ready' when the server answers 503", async () => {
+  it("on a 503 it shows which part is down, taken from the body of the answer", async () => {
     answers({ "GET /readiness": () => jsonResponse({ database: "unavailable", listener: "ok" }, { status: 503 }) });
+    renderApp("/");
+    const card = await screen.findByRole("region", { name: "Systemstatus" });
+    expect(await within(card).findByText("Nicht bereit")).toBeInTheDocument();
+    expect(within(card).getByText("Nicht erreichbar")).toBeInTheDocument();
+    expect(within(card).getByText("In Ordnung")).toBeInTheDocument();
+    expect(within(card).queryByText(/meldet sich nicht bereit/)).not.toBeInTheDocument();
+  });
+
+  it("on a 503 without a readable body it says so and sends to the system page", async () => {
+    answers({ "GET /readiness": () => problemResponse(503, "database_unavailable", "Database unavailable") });
     renderApp("/");
     const card = await screen.findByRole("region", { name: "Systemstatus" });
     expect(await within(card).findByText("Nicht bereit")).toBeInTheDocument();

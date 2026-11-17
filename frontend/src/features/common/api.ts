@@ -44,16 +44,22 @@ export interface ReadinessState {
   listener: "ok" | "unavailable" | "unknown";
 }
 
+const isPart = (value: unknown): value is "ok" | "unavailable" => value === "ok" || value === "unavailable";
+
 /**
- * `/readiness` answers 503 when a part is down; the problem layer of `apiFetch` keeps no body for
- * that, so a 503 reads as "not ready, parts unknown". Anything else (no network, 401) is an error.
+ * `/readiness` answers 503 with the state of each part in its body; that body is read. A 503
+ * without such a body reads as "not ready, parts unknown". Anything else (no network, 401) is an error.
  */
 export async function fetchReadiness(): Promise<ReadinessState> {
   try {
     const body = await apiFetch<{ database: "ok" | "unavailable"; listener: "ok" | "unavailable" }>("/readiness");
     return { ready: body.database === "ok" && body.listener === "ok", database: body.database, listener: body.listener };
   } catch (error) {
-    if (error instanceof ApiError && error.status === 503) return { ready: false, database: "unknown", listener: "unknown" };
+    if (error instanceof ApiError && error.status === 503) {
+      const body = error.body as { database?: unknown; listener?: unknown } | null | undefined;
+      if (body && isPart(body.database) && isPart(body.listener)) return { ready: false, database: body.database, listener: body.listener };
+      return { ready: false, database: "unknown", listener: "unknown" };
+    }
     throw error;
   }
 }

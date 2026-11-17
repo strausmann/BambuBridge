@@ -16,14 +16,17 @@ export class ApiError extends Error {
   readonly detail: string;
   /** The problem's `extensions`; null when none. */
   readonly extensions: Record<string, unknown> | null;
+  /** The parsed JSON body of the error answer, for the few routes whose error body is not a problem (`/readiness`); undefined otherwise. */
+  readonly body: unknown;
 
-  constructor(status: number, code: string | null, detail: string, extensions: Record<string, unknown> | null = null) {
+  constructor(status: number, code: string | null, detail: string, extensions: Record<string, unknown> | null = null, body?: unknown) {
     super(detail);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.detail = detail;
     this.extensions = extensions;
+    this.body = body;
   }
 }
 
@@ -168,9 +171,10 @@ export async function apiFetch<T>(path: string, init: ApiInit = {}): Promise<T> 
 
   if (response.type === "opaqueredirect") throw authRequired(new AuthRequiredError("login_redirect", "Sign-in required"));
   if (!response.ok) {
-    const { code, detail, extensions } = parseProblem(response.status, await readJson(response));
+    const errorBody = await readJson(response);
+    const { code, detail, extensions } = parseProblem(response.status, errorBody);
     if (response.status === 401) throw authRequired(new AuthRequiredError(code, detail));
-    throw new ApiError(response.status, code, detail, extensions);
+    throw new ApiError(response.status, code, detail, extensions, errorBody);
   }
   if (response.status === 204) return undefined as T;
   // The API never answers with a page: HTML here is the login page of a proxy in front of it.
