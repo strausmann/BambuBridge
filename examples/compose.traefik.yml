@@ -1,0 +1,80 @@
+# SPDX-FileCopyrightText: 2026 Björn Strausmann and BambuBridge contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# ============================================================================
+# BambuBridge - behind Traefik
+# Assumes a Traefik instance with HTTPS and a "letsencrypt" certresolver, attached to an
+# external Docker network called "traefik".
+# Required in the .env file: POSTGRES_PASSWORD, BAMBUBRIDGE_SECRET_KEY, BAMBUBRIDGE_PUBLIC_URL,
+# PUBLIC_HOST (the public host name), PROXY_IP (the fixed address of the Traefik container).
+# ============================================================================
+
+services:
+  bambubridge:
+    image: ghcr.io/strausmann/bambubridge:${IMAGE_VERSION:-0.2.0}
+    pull_policy: missing
+    container_name: bambubridge
+    user: "1000:1000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    environment:
+      # Postgres 18 is the only supported database. The password is the same as POSTGRES_PASSWORD below.
+      BAMBUBRIDGE_DATABASE_URL: "postgresql+asyncpg://bambubridge:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/bambubridge"
+      # 32 random bytes, base64url. Generate with: openssl rand -base64 32 | tr '+/' '-_'
+      # Losing this key makes the stored secrets unreadable: keep a copy outside this host.
+      BAMBUBRIDGE_SECRET_KEY: "${BAMBUBRIDGE_SECRET_KEY:?set BAMBUBRIDGE_SECRET_KEY}"
+      BAMBUBRIDGE_PUBLIC_URL: "${BAMBUBRIDGE_PUBLIC_URL:?set BAMBUBRIDGE_PUBLIC_URL}"
+      # One-time key (32+ characters) for the first sign-in. Remove it once an admin exists.
+      BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY: "${BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY:-}"
+      FORWARDED_ALLOW_IPS: "${PROXY_IP:?set PROXY_IP to the fixed address of your reverse proxy on this network}"
+    networks:
+      - traefik
+      - internal
+    expose:
+      - "8000"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.bambubridge.rule=Host(`${PUBLIC_HOST:?set PUBLIC_HOST}`)"
+      - "traefik.http.routers.bambubridge.entrypoints=websecure"
+      - "traefik.http.routers.bambubridge.tls.certresolver=letsencrypt"
+      - "traefik.http.services.bambubridge.loadbalancer.server.port=8000"
+      # Server-sent events (the live event stream): do not buffer.
+      - "traefik.http.services.bambubridge.loadbalancer.responseforwarding.flushinterval=100ms"
+
+  postgres:
+    image: postgres:18.6-trixie
+    pull_policy: missing
+    container_name: bambubridge-postgres
+    restart: unless-stopped
+    networks:
+      - internal
+    environment:
+      POSTGRES_USER: bambubridge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: bambubridge
+    volumes:
+      - /docker/stacks/bambubridge/postgres/data:/var/lib/postgresql
+      - /etc/localtime:/etc/localtime:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bambubridge -d bambubridge"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+networks:
+  traefik:
+    external: true
+  internal:
+    internal: true

@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 Björn Strausmann and BambuBridge contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+# Build context is the repository root (docker build -f backend/Dockerfile .)
+.git
+.github
+.claude
+.gemini
+.husky
+.superpowers
+docs/*
+!docs/brand
+examples
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/node_modules
+frontend/dist
+frontend/coverage
+backend/tests
+**/.env
+**/.env.*
+**/*.log
+**/*.pem
+**/*.key
+data
