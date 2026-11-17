@@ -13,6 +13,11 @@ import { useSettingLabel } from "./settingText";
 
 type Draft = Record<string, unknown>;
 
+/** A copy of the set without `key`. */
+function without(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
+  return set.has(key) ? new Set([...set].filter((entry) => entry !== key)) : set;
+}
+
 /** The value a field shows: what was changed here, else what the server has. */
 function shown(setting: SettingView, draft: Draft): unknown {
   return Object.hasOwn(draft, setting.key) ? field(draft, setting.key) : setting.value;
@@ -32,7 +37,10 @@ export function SettingsForm({ sections }: { sections: readonly string[] }) {
   const [saved, setSaved] = useState(false);
   // Fields keep the text being typed; when a change is dropped or reset they start over from the value.
   const [epoch, setEpoch] = useState(0);
-  useDirtyGuard(Object.keys(draft).length > 0);
+  // Number fields that hold no whole number right now. An empty field is no value: saving waits until it is filled.
+  const [blank, setBlank] = useState<ReadonlySet<string>>(new Set());
+  const blocked = blank.size > 0;
+  useDirtyGuard(Object.keys(draft).length > 0 || blocked);
 
   const save = useMutation({
     mutationFn: () => apiFetch<void>("/api/v1/settings", { method: "PUT", json: { values: draft } }),
@@ -42,6 +50,7 @@ export function SettingsForm({ sections }: { sections: readonly string[] }) {
     },
     onSuccess: async () => {
       setDraft({});
+      setBlank(new Set());
       setEpoch((n) => n + 1);
       setSaved(true);
       await queryClient.invalidateQueries({ queryKey: SETTINGS_KEY });
@@ -55,11 +64,17 @@ export function SettingsForm({ sections }: { sections: readonly string[] }) {
   const change = (key: string, value: unknown) => {
     setSaved(false);
     setDraft((current) => withField<unknown>(current, key, value));
-    if (value === null) setEpoch((n) => n + 1);
+    if (value === null) {
+      setBlank((current) => without(current, key));
+      setEpoch((n) => n + 1);
+    }
   };
+  /** A number field holds no whole number (`true`: emptied or half typed) or holds one again (`false`). */
+  const setBlankField = (key: string, empty: boolean) => setBlank((current) => (current.has(key) === empty ? current : empty ? new Set(current).add(key) : without(current, key)));
   /** Back to what is stored: drops the change of one field. */
   const revert = (key: string) => {
     setDraft((current) => withField<unknown>(current, key, undefined));
+    setBlank((current) => without(current, key));
     setEpoch((n) => n + 1);
   };
 
@@ -68,12 +83,12 @@ export function SettingsForm({ sections }: { sections: readonly string[] }) {
       className="flex flex-col gap-5"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!save.isPending && Object.keys(draft).length > 0) save.mutate();
+        if (!save.isPending && !blocked && Object.keys(draft).length > 0) save.mutate();
       }}
     >
       {own.length === 0 ? <p className="text-ink-2">{t`Hier gibt es keine Einstellungen.`}</p> : null}
       {own.map((setting) => (
-        <SettingField key={`${setting.key}:${epoch}`} setting={setting} draft={draft} onChange={change} onRevert={revert} disabled={save.isPending} />
+        <SettingField key={`${setting.key}:${epoch}`} setting={setting} draft={draft} onChange={change} onRevert={revert} onBlank={setBlankField} disabled={save.isPending} />
       ))}
       {message ? <ErrorNote>{message}</ErrorNote> : null}
       {saved ? (
@@ -82,15 +97,16 @@ export function SettingsForm({ sections }: { sections: readonly string[] }) {
         </p>
       ) : null}
       <div className="flex flex-wrap justify-end gap-3">
-        <Button isDisabled={Object.keys(draft).length === 0 || save.isPending} onPress={() => {
+        <Button isDisabled={(Object.keys(draft).length === 0 && !blocked) || save.isPending} onPress={() => {
             setDraft({});
+            setBlank(new Set());
             setEpoch((n) => n + 1);
           }}
           className={SECONDARY_BUTTON}
         >
           {t`Änderungen verwerfen`}
         </Button>
-        <BusyButton type="submit" busy={save.isPending} isDisabled={Object.keys(draft).length === 0 || save.isPending} className={PRIMARY_BUTTON}>
+        <BusyButton type="submit" busy={save.isPending} isDisabled={Object.keys(draft).length === 0 || blocked || save.isPending} className={PRIMARY_BUTTON}>
           {t`Speichern`}
         </BusyButton>
       </div>
@@ -106,7 +122,7 @@ interface FieldProps {
   disabled: boolean;
 }
 
-function SettingField({ setting, draft, onChange, onRevert, disabled }: FieldProps) {
+function SettingField({ setting, draft, onChange, onRevert, onBlank, disabled }: FieldProps & { onBlank: (key: string, empty: boolean) => void }) {
   const { t } = useLingui();
   const label = useSettingLabel()(setting.key);
   const value = shown(setting, draft);
@@ -125,7 +141,7 @@ function SettingField({ setting, draft, onChange, onRevert, disabled }: FieldPro
   switch (setting.type) {
     case "int":
       return (
-        <IntSetting setting={setting} label={label} value={value} range={range} reset={reset} disabled={disabled} onChange={(n) => onChange(setting.key, n)} />
+        <IntSetting setting={setting} label={label} value={value} range={range} reset={reset} disabled={disabled} onChange={(n) => onChange(setting.key, n)} onBlank={(empty) => onBlank(setting.key, empty)} />
       );
     case "bool":
       return (
@@ -159,8 +175,10 @@ function SettingField({ setting, draft, onChange, onRevert, disabled }: FieldPro
  * A number field that may be empty while it is typed in: only a whole number is handed on, so
  * clearing the field to type a new value does not put the old one back under the cursor.
  */
-function IntSetting({ setting, label, value, range, reset, disabled, onChange }: { setting: SettingView; label: string; value: unknown; range: string | undefined; reset: React.ReactNode; disabled: boolean; onChange: (n: number) => void }) {
+function IntSetting({ setting, label, value, range, reset, disabled, onChange, onBlank }: { setting: SettingView; label: string; value: unknown; range: string | undefined; reset: React.ReactNode; disabled: boolean; onChange: (n: number) => void; onBlank: (empty: boolean) => void }) {
+  const { t } = useLingui();
   const [text, setText] = useState(value === null || value === undefined ? String(setting.default ?? "") : String(value));
+  const notWhole = text.trim() === "" || !Number.isInteger(Number(text));
   return (
     <div className="flex flex-col gap-1.5">
       <TextField
@@ -168,8 +186,11 @@ function IntSetting({ setting, label, value, range, reset, disabled, onChange }:
         onChange={(next) => {
           setText(next);
           const parsed = Number(next);
-          if (next.trim() !== "" && Number.isInteger(parsed)) onChange(parsed);
+          const whole = next.trim() !== "" && Number.isInteger(parsed);
+          onBlank(!whole);
+          if (whole) onChange(parsed);
         }}
+        isInvalid={notWhole}
         type="number"
         isDisabled={disabled}
         name={setting.key}
@@ -179,6 +200,7 @@ function IntSetting({ setting, label, value, range, reset, disabled, onChange }:
         <Input className={FIELD} inputMode="numeric" min={setting.min ?? undefined} max={setting.max ?? undefined} step={1} />
       </TextField>
       {range ? <p className="text-small text-ink-2">{range}</p> : null}
+      {notWhole ? <p className="text-small font-semibold text-bad">{t`Bitte eine ganze Zahl eingeben.`}</p> : null}
       {reset}
     </div>
   );

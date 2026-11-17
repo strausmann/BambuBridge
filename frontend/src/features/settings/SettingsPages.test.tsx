@@ -70,6 +70,27 @@ describe("retention", () => {
     expect(calls.find((call) => call.method === "PUT")!.body).toEqual({ values: { "retention.events_days": 14 } });
   });
 
+  it("an emptied number field cannot be saved: the typed value is not sent behind its back", async () => {
+    const user = userEvent.setup();
+    const calls = answers({ "PUT /api/v1/settings": () => new Response(null, { status: 204 }) });
+    renderApp("/settings/retention");
+    const days = await screen.findByRole("spinbutton", { name: "Ereignisse aufbewahren (Tage)" });
+    await user.clear(days);
+    await user.type(days, "14");
+    expect(screen.getByRole("button", { name: "Speichern" })).toBeEnabled();
+    await user.clear(days);
+    expect(screen.getByText("Bitte eine ganze Zahl eingeben.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Speichern" })).toBeDisabled();
+    await user.type(days, "{Enter}");
+    expect(calls.some((call) => call.method === "PUT")).toBe(false);
+
+    await user.type(days, "21");
+    expect(screen.queryByText("Bitte eine ganze Zahl eingeben.")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Speichern" }));
+    await waitFor(() => expect(calls.some((call) => call.method === "PUT")).toBe(true));
+    expect(calls.find((call) => call.method === "PUT")!.body).toEqual({ values: { "retention.events_days": 21 } });
+  });
+
   it("a value outside the bounds is held back by the browser before anything is sent", async () => {
     const user = userEvent.setup();
     const calls = answers({ "PUT /api/v1/settings": () => new Response(null, { status: 204 }) });
