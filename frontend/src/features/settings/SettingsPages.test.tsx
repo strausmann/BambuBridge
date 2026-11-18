@@ -135,6 +135,28 @@ describe("retention", () => {
     expect(calls.find((call) => call.method === "PUT")!.body).toEqual({ values: { "retention.communication_days": null } });
   });
 
+  it("resetting one field leaves another field's empty state alone: saving stays blocked", async () => {
+    const user = userEvent.setup();
+    const calls = answers({ "PUT /api/v1/settings": () => new Response(null, { status: 204 }) });
+    renderApp("/settings/retention");
+    const days = await screen.findByRole("spinbutton", { name: "Ereignisse aufbewahren (Tage)" });
+    await user.clear(days);
+    expect(screen.getByText("Bitte eine ganze Zahl eingeben.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Speichern" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Kommunikationsprotokoll aufbewahren (Tage): auf Standard zurücksetzen" }));
+    // The emptied field was not touched: it is still empty and still says so.
+    expect(screen.getByRole("spinbutton", { name: "Ereignisse aufbewahren (Tage)" })).toHaveValue(null);
+    expect(screen.getByText("Bitte eine ganze Zahl eingeben.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Speichern" })).toBeDisabled();
+
+    await user.type(screen.getByRole("spinbutton", { name: "Ereignisse aufbewahren (Tage)" }), "21");
+    expect(screen.queryByText("Bitte eine ganze Zahl eingeben.")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Speichern" }));
+    await waitFor(() => expect(calls.some((call) => call.method === "PUT")).toBe(true));
+    expect(calls.find((call) => call.method === "PUT")!.body).toEqual({ values: { "retention.events_days": 21, "retention.communication_days": null } });
+  });
+
   it("discarding the changes puts the stored values back", async () => {
     const user = userEvent.setup();
     answers();

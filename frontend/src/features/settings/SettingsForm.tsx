@@ -41,7 +41,11 @@ export function SettingsForm({ sections }: { sections: readonly string[] }) {
   const [message, setMessage] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   // Fields keep the text being typed; when a change is dropped or reset they start over from the value.
+  // `epoch` restarts all of them (discard all, saved); `fieldEpoch` only the one that was reset or reverted,
+  // so the others keep what is typed in them and what `blank` says about it.
   const [epoch, setEpoch] = useState(0);
+  const [fieldEpoch, setFieldEpoch] = useState<ReadonlyMap<string, number>>(new Map());
+  const restartField = (key: string) => setFieldEpoch((current) => new Map(current).set(key, (current.get(key) ?? 0) + 1));
   // Number fields that hold no whole number right now. An empty field is no value: saving waits until it is filled.
   const [blank, setBlank] = useState<ReadonlySet<string>>(new Set());
   const blocked = blank.size > 0;
@@ -73,7 +77,7 @@ export function SettingsForm({ sections }: { sections: readonly string[] }) {
     setDraft((current) => withField<unknown>(current, key, value));
     if (value === null) {
       setBlank((current) => without(current, key));
-      setEpoch((n) => n + 1);
+      restartField(key);
     }
   };
   /** A number field holds no whole number (`true`: emptied or half typed) or holds one again (`false`). */
@@ -82,7 +86,7 @@ export function SettingsForm({ sections }: { sections: readonly string[] }) {
   const revert = (key: string) => {
     setDraft((current) => withField<unknown>(current, key, undefined));
     setBlank((current) => without(current, key));
-    setEpoch((n) => n + 1);
+    restartField(key);
   };
 
   return (
@@ -95,7 +99,7 @@ export function SettingsForm({ sections }: { sections: readonly string[] }) {
     >
       {own.length === 0 ? <p className="text-ink-2">{t`Hier gibt es keine Einstellungen.`}</p> : null}
       {own.map((setting) => (
-        <SettingField key={`${setting.key}:${epoch}`} setting={setting} draft={draft} onChange={change} onRevert={revert} onBlank={setBlankField} disabled={save.isPending} />
+        <SettingField key={`${setting.key}:${epoch}:${fieldEpoch.get(setting.key) ?? 0}`} setting={setting} draft={draft} onChange={change} onRevert={revert} onBlank={setBlankField} disabled={save.isPending} />
       ))}
       {message ? <ErrorNote>{message}</ErrorNote> : null}
       {saved ? (
