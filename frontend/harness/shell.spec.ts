@@ -281,7 +281,7 @@ test.describe("fix round 1", () => {
     await page.setViewportSize({ width: 375, height: 780 });
     await page.goto(`${SIGNED_IN}&signout=fail`);
     await page.getByRole("button", { name: "Abmelden" }).click();
-    const alert = page.getByRole("alert");
+    const alert = page.getByRole("alert").filter({ hasText: "Abmelden fehlgeschlagen" });
     await expect(alert).toHaveText("Abmelden fehlgeschlagen, die Sitzung ist noch offen");
     await expect(alert).toBeInViewport({ ratio: 1 });
     await expect(page.getByRole("heading", { name: "Übersicht" })).toBeVisible();

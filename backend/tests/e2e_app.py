@@ -236,11 +236,16 @@ class VersionOverride:
 
 
 async def _reset(request: Request) -> Response:
-    """Back to a fresh install: empty tables, no rate-limit history, the first build."""
+    """Back to a fresh install: empty tables and memory, no rate-limit history, the first build."""
     if request.headers.get(RESET_HEADER) != RESET_HEADER_VALUE:
         return Response(status_code=403)
     app: FastAPI = request.app
     await truncate_all(app.state.engine)
+    # What lives in memory follows the empty database: running provider instances are stopped
+    # (they would keep emitting for rows that are gone) and the settings are the defaults again.
+    await app.state.provider_manager.start_all()
+    async with app.state.session_factory() as session:
+        await app.state.settings_store.load(session)
     for name in _LIMITERS:
         setattr(app.state, name, SlidingWindowRateLimiter())
     builds: Builds | None = app.state.e2e_builds

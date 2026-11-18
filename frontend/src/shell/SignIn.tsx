@@ -26,6 +26,11 @@ function useSignInMessage() {
 interface Props {
   onSignIn: (token: string) => Promise<void>;
   onSso: () => Promise<void>;
+  /**
+   * The first-start link is offered only while the server can still make a first admin token
+   * (`bootstrap_open` of `/api/v1/info`); once an admin token exists it leads nowhere.
+   */
+  bootstrapOpen?: boolean;
 }
 
 /**
@@ -33,7 +38,7 @@ interface Props {
  * a trusted proxy). The token is never stored by this page. A refused token is cleared; after
  * any other failure (no answer, rate limit, server error) it stays, so it need not be typed again.
  */
-export function SignIn({ onSignIn, onSso }: Props) {
+export function SignIn({ onSignIn, onSso, bootstrapOpen = true }: Props) {
   const { t } = useLingui();
   const messageFor = useSignInMessage();
   const [token, setToken] = useState("");
@@ -94,12 +99,14 @@ export function SignIn({ onSignIn, onSso }: Props) {
       <BusyButton ref={ssoButton} busy={busy === "sso"} isDisabled={busy !== null} onPress={() => void run("sso", onSso)} className={SECONDARY_BUTTON}>
         {t`Mit einmaliger Anmeldung (SSO) fortfahren`}
       </BusyButton>
-      <p className="flex flex-wrap items-center gap-x-1.5 text-ink-2">
-        <span>{t`Erster Start?`}</span>
-        <Link to="/bootstrap" className={TEXT_LINK}>
-          {t`Erstes Admin-Token anlegen`}
-        </Link>
-      </p>
+      {bootstrapOpen ? (
+        <p className="flex flex-wrap items-center gap-x-1.5 text-ink-2">
+          <span>{t`Erster Start?`}</span>
+          <Link to="/bootstrap" className={TEXT_LINK}>
+            {t`Erstes Admin-Token anlegen`}
+          </Link>
+        </p>
+      ) : null}
     </AuthScreen>
   );
 }

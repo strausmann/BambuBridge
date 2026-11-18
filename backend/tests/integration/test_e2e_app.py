@@ -94,6 +94,25 @@ async def test_reset_reopens_bootstrap_and_ends_sessions(
     assert again.json()["token"] != first.json()["token"]
 
 
+async def test_reset_returns_the_settings_in_memory_to_their_defaults(
+    browser: httpx.AsyncClient, e2e: FastAPI, bootstrap_headers: dict[str, str]
+):
+    token = (await browser.post(KEYS, json=BODY, headers=bootstrap_headers)).json()["token"]
+    changed = await browser.put(
+        "/api/v1/settings",
+        json={"values": {"retention.events_days": 14}},
+        headers={"X-BambuBridge-Key": token},
+    )
+    assert changed.status_code == 204, changed.text
+    store = e2e.state.settings_store
+    assert store.get("retention.events_days") == 14
+
+    assert (await browser.post(e2e_app.RESET_PATH, headers=RESET)).status_code == 204
+
+    # The table is empty, so the next test must not meet the previous test's value.
+    assert store.get("retention.events_days") == 90
+
+
 async def test_reset_forgets_rate_limit_history(browser: httpx.AsyncClient, e2e: FastAPI):
     limit = e2e.state.settings_store.get("auth.sign_in_limit_per_minute")
     for _ in range(limit):

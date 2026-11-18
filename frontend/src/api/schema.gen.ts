@@ -713,6 +713,11 @@ export interface components {
         };
         /** Info */
         Info: {
+            /**
+             * Bootstrap Open
+             * @description The first admin token can still be created with the bootstrap key: a key is configured and no usable admin token exists. A hint for the sign-in page.
+             */
+            bootstrap_open: boolean;
             /** Build */
             build: string;
             /**

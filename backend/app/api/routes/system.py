@@ -7,7 +7,8 @@ database): a request that presents credentials then gets the readiness answer in
 a generic 503, which tells nothing beyond "the database is unavailable". Without
 credentials the answer is 401 as for every other guarded route.
 
-``/api/v1/info`` is public by design: name, version and build id, nothing else.
+``/api/v1/info`` is public by design: name, version and build id, plus one hint for the
+sign-in page: whether the first-start screen is still of use (``bootstrap_open``).
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
-from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.api.errors import CONNECTION_ERRORS, ApiError, DatabaseUnavailableError
@@ -30,7 +31,9 @@ from app.auth.dependencies import (
     mark_scope,
 )
 from app.build_info import BUILD_ID, VERSION
+from app.config import Settings
 from app.db.session import connected
+from app.repositories import api_keys as api_keys_repo
 from app.schemas.problem import ProblemDetail
 from app.schemas.system import Info, Readiness
 
@@ -44,6 +47,7 @@ _DB_DOWN: tuple[type[BaseException], ...] = (
     *CONNECTION_ERRORS,
 )
 _CHECK_FAILED: tuple[type[BaseException], ...] = (TimeoutError, *_DB_DOWN)
+_HINT_FAILED: tuple[type[BaseException], ...] = (*_CHECK_FAILED, DBAPIError)
 
 
 async def _readiness_auth(
@@ -118,6 +122,29 @@ async def readiness(
     return JSONResponse(status_code=200 if ready else 503, content=body.model_dump())
 
 
+async def _bootstrap_open(request: Request) -> bool:
+    """Whether the first-start screen can still create the first admin token.
+
+    A hint for the sign-in page only: the bootstrap route enforces the rules itself. Open
+    means a bootstrap key is configured and no usable admin token exists. When the database
+    cannot answer, the state is unknown and reported open (the hint then stays visible; the
+    route refuses a closed bootstrap anyway).
+    """
+    settings: Settings = request.app.state.settings
+    if not settings.bootstrap_admin_key.get_secret_value():
+        return False
+
+    async def closed() -> bool:
+        async with request.app.state.session_factory() as session:
+            await connected(session)
+            return await api_keys_repo.usable_admin_token_exists(session)
+
+    try:
+        return not await asyncio.wait_for(closed(), timeout=DATABASE_CHECK_TIMEOUT_SECONDS)
+    except _HINT_FAILED:
+        return True
+
+
 @router.get("/api/v1/info", summary="Name, version and build of this server")
-async def info() -> Info:
-    return Info(version=VERSION, build=BUILD_ID)
+async def info(request: Request) -> Info:
+    return Info(version=VERSION, build=BUILD_ID, bootstrap_open=await _bootstrap_open(request))
