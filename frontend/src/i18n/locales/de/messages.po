@@ -7,6 +7,10 @@ msgstr ""
 "X-Generator: @lingui/cli\n"
 "Language: de\n"
 
+#: src/features/providers/SchemaForm.tsx
+msgid " (Pflichtfeld)"
+msgstr " (Pflichtfeld)"
+
 #: src/features/device/DevicePage.tsx
 msgid "„App installieren“ oder „Zum Startbildschirm hinzufügen“ wählen."
 msgstr "„App installieren“ oder „Zum Startbildschirm hinzufügen“ wählen."
@@ -14,6 +18,32 @@ msgstr "„App installieren“ oder „Zum Startbildschirm hinzufügen“ wähle
 #: src/features/device/DevicePage.tsx
 msgid "„Zum Home-Bildschirm“ wählen und „Hinzufügen“ tippen."
 msgstr "„Zum Home-Bildschirm“ wählen und „Hinzufügen“ tippen."
+
+#. placeholder {0}: detail.data.duration_ms
+#. placeholder {0}: entry.duration_ms
+#. placeholder {0}: probe.duration_ms
+#: src/features/protocol/CommunicationPage.tsx
+#: src/features/providers/ProviderForm.tsx
+msgid "{0} ms"
+msgstr "{0} ms"
+
+#. placeholder {0}: spec.title
+#: src/features/providers/SchemaForm.tsx
+msgid "{0}: entfernen"
+msgstr "{0}: entfernen"
+
+#: src/features/settings/SettingsForm.tsx
+msgid "{label}: auf Standard zurücksetzen"
+msgstr "{label}: auf Standard zurücksetzen"
+
+#: src/features/settings/SettingsForm.tsx
+msgid "{label}: entfernen"
+msgstr "{label}: entfernen"
+
+#: src/features/providers/ProvidersPage.tsx
+#: src/features/settings/AccessPage.tsx
+msgid "Abbrechen"
+msgstr "Abbrechen"
 
 #: src/shell/TopBar.tsx
 msgid "Abmelden"
@@ -31,6 +61,19 @@ msgstr "Admin-Token"
 msgid "Admin-Token anlegen"
 msgstr "Admin-Token anlegen"
 
+#. placeholder {0}: action.name
+#: src/features/providers/ProvidersPage.tsx
+msgid "Aktion „{0}“"
+msgstr "Aktion „{0}“"
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Aktionen"
+msgstr "Aktionen"
+
+#: src/features/providers/ProviderForm.tsx
+msgid "Aktiv"
+msgstr "Aktiv"
+
 #: src/features/device/DevicePage.tsx
 msgid "Aktiv ab dem nächsten Laden"
 msgstr "Aktiv ab dem nächsten Laden"
@@ -43,23 +86,109 @@ msgstr "Aktiv, diese Seite kommt aus dem Worker"
 msgid "Aktiv, eine neue Version wartet"
 msgstr "Aktiv, eine neue Version wartet"
 
+#: src/features/providers/ProvidersPage.tsx
+msgid "Aktivieren"
+msgstr "Aktivieren"
+
+#: src/features/protocol/CommunicationPage.tsx
+#: src/features/protocol/EventsPage.tsx
+msgid "Alle"
+msgstr "Alle"
+
+#: src/features/protocol/CommunicationPage.tsx
+msgid "Alle Instanzen"
+msgstr "Alle Instanzen"
+
+#: src/features/protocol/EventsPage.tsx
+msgid "Alle Quellen"
+msgstr "Alle Quellen"
+
+#: src/features/protocol/EventsPage.tsx
+msgid "Alle Typen"
+msgstr "Alle Typen"
+
+#: src/features/settings/sections.tsx
+msgid "Allgemein"
+msgstr "Allgemein"
+
 #: src/features/device/DevicePage.tsx
 msgid "Als App installieren"
 msgstr "Als App installieren"
 
-#: src/pages/placeholders.tsx
+#: src/features/settings/sections.tsx
+msgid "Ältere Einträge werden gelöscht."
+msgstr "Ältere Einträge werden gelöscht."
+
+#: src/features/protocol/CommunicationPage.tsx
+#: src/features/protocol/EventsPage.tsx
+msgid "Ältere laden"
+msgstr "Ältere laden"
+
+#: src/features/providers/ProvidersPage.tsx
 #: src/shell/nav.tsx
 msgid "Anbieter"
 msgstr "Anbieter"
 
-#. placeholder {0}: session.user
+#: src/features/settings/SettingsForm.tsx
+msgid "Änderung verwerfen"
+msgstr "Änderung verwerfen"
+
+#: src/features/settings/SettingsForm.tsx
+msgid "Änderungen verwerfen"
+msgstr "Änderungen verwerfen"
+
+#: src/features/protocol/CommunicationPage.tsx
+msgid "Anfrage: Inhalt"
+msgstr "Anfrage: Inhalt"
+
+#: src/features/protocol/CommunicationPage.tsx
+msgid "Anfrage: Kopfzeilen"
+msgstr "Anfrage: Kopfzeilen"
+
+#: src/features/providers/ProviderStatusBadge.tsx
+msgid "Angehalten"
+msgstr "Angehalten"
+
+#. placeholder {0}: formatDateTime(key.created_at)
+#: src/features/settings/AccessPage.tsx
+msgid "angelegt {0}"
+msgstr "angelegt {0}"
+
 #: src/shell/TopBar.tsx
-msgid "Angemeldet als {0}"
-msgstr "Angemeldet als {0}"
+msgid "Angemeldet als {who}"
+msgstr "Angemeldet als {who}"
+
+#: src/features/settings/AccessPage.tsx
+msgid "Anlegen"
+msgstr "Anlegen"
+
+#: src/features/settings/settingText.ts
+msgid "Anmeldedienste (in dieser Reihenfolge gefragt)"
+msgstr "Anmeldedienste (in dieser Reihenfolge gefragt)"
 
 #: src/shell/SignIn.tsx
 msgid "Anmelden"
 msgstr "Anmelden"
+
+#: src/features/settings/settingText.ts
+msgid "Anmeldeversuche pro Minute"
+msgstr "Anmeldeversuche pro Minute"
+
+#: src/features/settings/AccessPage.tsx
+msgid "Anmeldung"
+msgstr "Anmeldung"
+
+#: src/features/protocol/CommunicationPage.tsx
+msgid "Antwort"
+msgstr "Antwort"
+
+#: src/features/protocol/CommunicationPage.tsx
+msgid "Antwort: Inhalt"
+msgstr "Antwort: Inhalt"
+
+#: src/features/protocol/CommunicationPage.tsx
+msgid "Antwort: Kopfzeilen"
+msgstr "Antwort: Kopfzeilen"
 
 #: src/features/device/DevicePage.tsx
 msgid "API"
@@ -69,10 +198,79 @@ msgstr "API"
 msgid "API-Token"
 msgstr "API-Token"
 
+#: src/features/settings/AccessPage.tsx
+msgid "API-Tokens"
+msgstr "API-Tokens"
+
+#: src/features/settings/sections.tsx
+msgid "API-Tokens und Anmeldung"
+msgstr "API-Tokens und Anmeldung"
+
+#: src/features/settings/SettingsForm.tsx
+msgid "Auf Standard zurücksetzen"
+msgstr "Auf Standard zurücksetzen"
+
+#: src/features/settings/sections.tsx
+msgid "Aufbewahrung"
+msgstr "Aufbewahrung"
+
+#: src/features/protocol/CommunicationPage.tsx
+msgid "Aufruf"
+msgstr "Aufruf"
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Ausführen"
+msgstr "Ausführen"
+
+#: src/features/protocol/CommunicationPage.tsx
+msgid "ausgehend"
+msgstr "ausgehend"
+
+#: src/features/protocol/EventBadge.tsx
+msgid "Ausstehend"
+msgstr "Ausstehend"
+
+#: src/features/overview/OverviewPage.tsx
+#: src/features/protocol/EventsPage.tsx
+msgid "BambuBridge"
+msgstr "BambuBridge"
+
 #: src/shell/Sidebar.tsx
 #: src/shell/TopBar.tsx
 msgid "BambuBridge, zur Übersicht"
 msgstr "BambuBridge, zur Übersicht"
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Bearbeiten"
+msgstr "Bearbeiten"
+
+#: src/features/settings/AccessPage.tsx
+msgid "Bedienen"
+msgstr "Bedienen"
+
+#: src/features/settings/AccessPage.tsx
+msgid "Berechtigung"
+msgstr "Berechtigung"
+
+#: src/features/overview/OverviewPage.tsx
+msgid "Bereit"
+msgstr "Bereit"
+
+#: src/features/settings/SystemPage.tsx
+msgid "Beschreibung der Schnittstelle (API)"
+msgstr "Beschreibung der Schnittstelle (API)"
+
+#: src/features/protocol/FilterBar.tsx
+msgid "Bis"
+msgstr "Bis"
+
+#: src/features/providers/SchemaForm.tsx
+msgid "Bitte eine ganze Zahl eingeben."
+msgstr "Bitte eine ganze Zahl eingeben."
+
+#: src/features/providers/SchemaForm.tsx
+msgid "Bitte wählen"
+msgstr "Bitte wählen"
 
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Bootstrap-Schlüssel"
@@ -86,6 +284,10 @@ msgstr "Browser (minimale Leiste)"
 msgid "Browser-Tab"
 msgstr "Browser-Tab"
 
+#: src/features/settings/SystemPage.tsx
+msgid "Build"
+msgstr "Build"
+
 #: src/features/device/DevicePage.tsx
 msgid "Build des Servers"
 msgstr "Build des Servers"
@@ -93,6 +295,10 @@ msgstr "Build des Servers"
 #: src/features/device/DevicePage.tsx
 msgid "Build dieser App"
 msgstr "Build dieser App"
+
+#: src/features/common/ui.tsx
+msgid "Dafür fehlt die Berechtigung."
+msgstr "Dafür fehlt die Berechtigung."
 
 #: src/features/device/DevicePage.tsx
 msgid "Darstellung"
@@ -102,6 +308,19 @@ msgstr "Darstellung"
 msgid "Das Browsermenü öffnen (die drei Punkte)."
 msgstr "Das Browsermenü öffnen (die drei Punkte)."
 
+#: src/features/common/ui.tsx
+msgid "Das gibt es nicht mehr. Lade die Seite neu."
+msgstr "Das gibt es nicht mehr. Lade die Seite neu."
+
+#: src/features/settings/AccessPage.tsx
+msgid "Das neue Token"
+msgstr "Das neue Token"
+
+#. placeholder {0}: target.name
+#: src/features/settings/AccessPage.tsx
+msgid "Das Token „{0}“ wird mit der nächsten Anfrage abgelehnt. Das lässt sich nicht rückgängig machen."
+msgstr "Das Token „{0}“ wird mit der nächsten Anfrage abgelehnt. Das lässt sich nicht rückgängig machen."
+
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Das Token konnte nicht angelegt werden."
 msgstr "Das Token konnte nicht angelegt werden."
@@ -109,6 +328,20 @@ msgstr "Das Token konnte nicht angelegt werden."
 #: src/shell/ConnectionBanner.tsx
 msgid "Daten werden erst wieder angezeigt, wenn die Verbindung zurück ist."
 msgstr "Daten werden erst wieder angezeigt, wenn die Verbindung zurück ist."
+
+#: src/features/overview/OverviewPage.tsx
+#: src/features/settings/SystemPage.tsx
+msgid "Datenbank"
+msgstr "Datenbank"
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Deaktivieren"
+msgstr "Deaktivieren"
+
+#: src/features/providers/ProviderStatusBadge.tsx
+#: src/features/settings/AccessPage.tsx
+msgid "Deaktiviert"
+msgstr "Deaktiviert"
 
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Dein Admin-Token"
@@ -119,6 +352,7 @@ msgid "Der Bootstrap-Schlüssel wurde nicht akzeptiert."
 msgstr "Der Bootstrap-Schlüssel wurde nicht akzeptiert."
 
 #: src/app/router.tsx
+#: src/features/common/ui.tsx
 #: src/shell/BootstrapKeyCreated.tsx
 #: src/shell/SignIn.tsx
 msgid "Der Server ist nicht erreichbar."
@@ -127,6 +361,14 @@ msgstr "Der Server ist nicht erreichbar."
 #: src/features/device/DevicePage.tsx
 msgid "Der Server läuft auf einem anderen Build als diese App."
 msgstr "Der Server läuft auf einem anderen Build als diese App."
+
+#: src/features/overview/OverviewPage.tsx
+msgid "Der Server meldet sich nicht bereit. Welcher Teil fehlt, sagt die Seite „System“ unter Einstellungen."
+msgstr "Der Server meldet sich nicht bereit. Welcher Teil fehlt, sagt die Seite „System“ unter Einstellungen."
+
+#: src/features/providers/ProviderForm.tsx
+msgid "Der Typ dieser Instanz ist in diesem Server nicht vorhanden."
+msgstr "Der Typ dieser Instanz ist in diesem Server nicht vorhanden."
 
 #: src/shell/ThemeSwitch.tsx
 msgid "Design"
@@ -144,7 +386,12 @@ msgstr "Die einmalige Anmeldung hat dich nicht erkannt. Öffne die BambuBridge �
 msgid "Die installierte App öffnet sich ohne Browserleiste. Daten zeigt sie nur mit Verbindung zum Server."
 msgstr "Die installierte App öffnet sich ohne Browserleiste. Daten zeigt sie nur mit Verbindung zum Server."
 
-#: src/pages/placeholders.tsx
+#. placeholder {0}: instance.name
+#: src/features/providers/ProvidersPage.tsx
+msgid "Die Instanz „{0}“ und ihre gespeicherten Geheimnisse werden gelöscht. Ihre bisherigen Ereignisse bleiben im Protokoll."
+msgstr "Die Instanz „{0}“ und ihre gespeicherten Geheimnisse werden gelöscht. Ihre bisherigen Ereignisse bleiben im Protokoll."
+
+#: src/pages/shellPages.tsx
 msgid "Diese Adresse gibt es in der BambuBridge nicht."
 msgstr "Diese Adresse gibt es in der BambuBridge nicht."
 
@@ -152,18 +399,38 @@ msgstr "Diese Adresse gibt es in der BambuBridge nicht."
 msgid "Diese Seite in Safari öffnen."
 msgstr "Diese Seite in Safari öffnen."
 
-#: src/pages/placeholders.tsx
-msgid "Diese Seite ist noch leer. Ihr Inhalt folgt in einer der nächsten Versionen."
-msgstr "Diese Seite ist noch leer. Ihr Inhalt folgt in einer der nächsten Versionen."
-
 #: src/shell/SignIn.tsx
 msgid "Dieser Benutzer ist deaktiviert."
 msgstr "Dieser Benutzer ist deaktiviert."
 
+#: src/features/providers/SchemaForm.tsx
+msgid "Dieser Feldtyp ({type}) wird nicht unterstützt und kann hier nicht bearbeitet werden."
+msgstr "Dieser Feldtyp ({type}) wird nicht unterstützt und kann hier nicht bearbeitet werden."
+
+#: src/features/providers/ProviderForm.tsx
+msgid "Dieser Name ist schon vergeben."
+msgstr "Dieser Name ist schon vergeben."
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Dieser Server kennt keine Anbietertypen."
+msgstr "Dieser Server kennt keine Anbietertypen."
+
+#: src/features/providers/SchemaForm.tsx
+msgid "Dieser Typ hat keine Einstellungen."
+msgstr "Dieser Typ hat keine Einstellungen."
+
 #: src/features/device/DevicePage.tsx
-#: src/pages/placeholders.tsx
+#: src/features/settings/sections.tsx
 msgid "Dieses Gerät"
 msgstr "Dieses Gerät"
+
+#: src/features/settings/SystemPage.tsx
+msgid "Dieses Gerät: Verbindung, App-Installation und Versionen"
+msgstr "Dieses Gerät: Verbindung, App-Installation und Versionen"
+
+#: src/features/settings/AccessPage.tsx
+msgid "Dieses Token wird nur jetzt angezeigt."
+msgstr "Dieses Token wird nur jetzt angezeigt."
 
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Dieses Token wird nur jetzt angezeigt. Lege es in deinem Passwortmanager ab, bevor du fortfährst."
@@ -177,28 +444,115 @@ msgstr "Dieses Token wurde nicht akzeptiert."
 msgid "Dunkles Design"
 msgstr "Dunkles Design"
 
+#: src/features/providers/ProviderForm.tsx
+msgid "Ein Geheimnis fehlt. Gib es ein."
+msgstr "Ein Geheimnis fehlt. Gib es ein."
+
+#: src/features/providers/ProviderForm.tsx
+msgid "Ein gespeichertes Geheimnis lässt sich nicht mehr lesen. Gib es neu ein."
+msgstr "Ein gespeichertes Geheimnis lässt sich nicht mehr lesen. Gib es neu ein."
+
 #: src/features/device/DevicePage.tsx
 msgid "Ein Proxy antwortet mit einer Anmeldeseite"
 msgstr "Ein Proxy antwortet mit einer Anmeldeseite"
 
-#: src/pages/placeholders.tsx
+#: src/features/protocol/CommunicationPage.tsx
+msgid "eingehend"
+msgstr "eingehend"
+
+#: src/features/settings/sections.tsx
+msgid "Einmalige Anmeldung (SSO)"
+msgstr "Einmalige Anmeldung (SSO)"
+
+#: src/features/settings/sections.tsx
+msgid "Einstellung nicht gefunden"
+msgstr "Einstellung nicht gefunden"
+
+#: src/features/providers/ProvidersPage.tsx
+#: src/features/settings/sections.tsx
 #: src/shell/nav.tsx
 msgid "Einstellungen"
 msgstr "Einstellungen"
 
-#: src/pages/placeholders.tsx
+#: src/features/overview/OverviewPage.tsx
+#: src/features/settings/SystemPage.tsx
+msgid "Einstellungen live"
+msgstr "Einstellungen live"
+
+#: src/features/settings/sections.tsx
 msgid "Einstellungsseiten"
 msgstr "Einstellungsseiten"
+
+#: src/features/settings/AccessPage.tsx
+msgid "Endgültig entziehen"
+msgstr "Endgültig entziehen"
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Endgültig löschen"
+msgstr "Endgültig löschen"
+
+#: src/features/settings/sections.tsx
+msgid "Entdoppelung von Ereignissen"
+msgstr "Entdoppelung von Ereignissen"
 
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Entferne <0>BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY</0> aus dem Container; der Schlüssel wirkt nicht mehr, sobald dieses Token existiert."
 msgstr "Entferne <0>BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY</0> aus dem Container; der Schlüssel wirkt nicht mehr, sobald dieses Token existiert."
+
+#: src/features/providers/SchemaForm.tsx
+#: src/features/settings/SettingsForm.tsx
+msgid "Entfernen"
+msgstr "Entfernen"
+
+#: src/features/providers/SchemaForm.tsx
+#: src/features/settings/SettingsForm.tsx
+msgid "Entfernen abbrechen"
+msgstr "Entfernen abbrechen"
+
+#: src/features/settings/AccessPage.tsx
+msgid "Entziehen"
+msgstr "Entziehen"
+
+#: src/features/protocol/EventDetail.tsx
+msgid "Ereignis"
+msgstr "Ereignis"
+
+#: src/features/protocol/EventsPage.tsx
+#: src/features/protocol/ProtocolPage.tsx
+#: src/features/settings/sections.tsx
+msgid "Ereignisse"
+msgstr "Ereignisse"
+
+#: src/features/settings/settingText.ts
+msgid "Ereignisse aufbewahren (Tage)"
+msgstr "Ereignisse aufbewahren (Tage)"
+
+#: src/features/protocol/EventsPage.tsx
+msgid "Ereignisse filtern"
+msgstr "Ereignisse filtern"
+
+#: src/features/protocol/EventsPage.tsx
+msgid "Ereignistyp"
+msgstr "Ereignistyp"
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Ereignistypen"
+msgstr "Ereignistypen"
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Ergebnis"
+msgstr "Ergebnis"
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Ergebnis der Aktion"
+msgstr "Ergebnis der Aktion"
 
 #: src/features/device/DevicePage.tsx
 msgid "Erneut prüfen"
 msgstr "Erneut prüfen"
 
 #: src/app/router.tsx
+#: src/features/common/ui.tsx
 msgid "Erneut versuchen"
 msgstr "Erneut versuchen"
 
@@ -223,17 +577,70 @@ msgstr "Erstes Admin-Token anlegen"
 msgid "Es gibt bereits ein Admin-Token. Melde dich damit an."
 msgstr "Es gibt bereits ein Admin-Token. Melde dich damit an."
 
+#: src/features/settings/AccessPage.tsx
+msgid "Es gibt noch kein Token."
+msgstr "Es gibt noch kein Token."
+
+#: src/features/overview/OverviewPage.tsx
+msgid "Es gibt noch keine Instanz."
+msgstr "Es gibt noch keine Instanz."
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Es gibt noch keine Instanz. Lege mit „Instanz hinzufügen“ die erste an."
+msgstr "Es gibt noch keine Instanz. Lege mit „Instanz hinzufügen“ die erste an."
+
+#: src/features/settings/SettingsForm.tsx
+msgid "Es ist kein Anmeldedienst verfügbar."
+msgstr "Es ist kein Anmeldedienst verfügbar."
+
+#: src/features/common/ui.tsx
 #: src/shell/SignIn.tsx
 msgid "Etwas ist schiefgegangen."
 msgstr "Etwas ist schiefgegangen."
+
+#: src/features/providers/ProviderStatusBadge.tsx
+msgid "Fehler"
+msgstr "Fehler"
 
 #: src/features/device/DevicePage.tsx
 msgid "Fehler {status}"
 msgstr "Fehler {status}"
 
+#: src/features/protocol/EventBadge.tsx
+msgid "Fehlgeschlagen"
+msgstr "Fehlgeschlagen"
+
 #: src/features/device/DevicePage.tsx
+#: src/features/settings/AccessPage.tsx
 msgid "Fertig"
 msgstr "Fertig"
+
+#: src/features/providers/ProviderStatusBadge.tsx
+msgid "Geheimnis fehlt"
+msgstr "Geheimnis fehlt"
+
+#: src/features/protocol/CommunicationPage.tsx
+msgid "Gekürzt"
+msgstr "Gekürzt"
+
+#: src/features/overview/OverviewPage.tsx
+#: src/features/protocol/CommunicationPage.tsx
+#: src/features/protocol/EventsPage.tsx
+msgid "Gelöschte Instanz"
+msgstr "Gelöschte Instanz"
+
+#: src/features/providers/SchemaForm.tsx
+#: src/features/settings/SettingsForm.tsx
+msgid "gesetzt"
+msgstr "gesetzt"
+
+#: src/features/settings/SettingsForm.tsx
+msgid "Gespeichert. Die Änderung gilt ohne Neustart."
+msgstr "Gespeichert. Die Änderung gilt ohne Neustart."
+
+#: src/features/providers/ProviderStatusBadge.tsx
+msgid "Getrennt"
+msgstr "Getrennt"
 
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Gib den Bootstrap-Schlüssel ein, den du dem Container als <0>BAMBUBRIDGE_BOOTSTRAP_ADMIN_KEY</0> mitgegeben hast. Er kann genau eines: das erste Admin-Token anlegen."
@@ -252,33 +659,166 @@ msgstr "Helles Design"
 msgid "Hier bleiben"
 msgstr "Hier bleiben"
 
+#: src/features/settings/SettingsForm.tsx
+msgid "Hier gibt es keine Einstellungen."
+msgstr "Hier gibt es keine Einstellungen."
+
+#. placeholder {0}: kind.max
+#: src/features/providers/SchemaForm.tsx
+msgid "Höchstens {0}"
+msgstr "Höchstens {0}"
+
 #: src/features/device/DevicePage.tsx
 msgid "HTTPS"
 msgstr "HTTPS"
+
+#: src/features/settings/AccessPage.tsx
+msgid "In die Zwischenablage kopieren"
+msgstr "In die Zwischenablage kopieren"
+
+#: src/features/overview/OverviewPage.tsx
+#: src/features/settings/SystemPage.tsx
+msgid "In Ordnung"
+msgstr "In Ordnung"
 
 #: src/features/device/DevicePage.tsx
 msgid "Installierte App"
 msgstr "Installierte App"
 
+#: src/features/protocol/CommunicationPage.tsx
+msgid "Instanz"
+msgstr "Instanz"
+
+#: src/features/providers/ProviderForm.tsx
+msgid "Instanz bearbeiten"
+msgstr "Instanz bearbeiten"
+
+#: src/features/providers/ProviderForm.tsx
+#: src/features/providers/ProvidersPage.tsx
+msgid "Instanz hinzufügen"
+msgstr "Instanz hinzufügen"
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Instanz löschen"
+msgstr "Instanz löschen"
+
+#. placeholder {0}: instance.name
+#: src/features/providers/ProvidersPage.tsx
+msgid "Instanz: {0}"
+msgstr "Instanz: {0}"
+
+#: src/features/overview/OverviewPage.tsx
+#: src/features/providers/ProvidersPage.tsx
+msgid "Instanzen"
+msgstr "Instanzen"
+
 #: src/features/device/DevicePage.tsx
 msgid "Ja"
 msgstr "Ja"
+
+#: src/features/providers/ProviderForm.tsx
+msgid "Kein Typ passt."
+msgstr "Kein Typ passt."
+
+#: src/features/protocol/CommunicationPage.tsx
+msgid "Keine Antwort"
+msgstr "Keine Antwort"
+
+#: src/features/protocol/CommunicationPage.tsx
+msgid "Keine Einträge für diese Filter."
+msgstr "Keine Einträge für diese Filter."
+
+#: src/features/protocol/EventsPage.tsx
+msgid "Keine Ereignisse für diese Filter."
+msgstr "Keine Ereignisse für diese Filter."
 
 #: src/shell/ConnectionBanner.tsx
 msgid "Keine Verbindung"
 msgstr "Keine Verbindung"
 
+#: src/features/protocol/EventDetail.tsx
+msgid "Keine Zustellung nötig."
+msgstr "Keine Zustellung nötig."
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Keine."
+msgstr "Keine."
+
+#: src/features/protocol/CommunicationPage.tsx
+#: src/features/protocol/ProtocolPage.tsx
+msgid "Kommunikation"
+msgstr "Kommunikation"
+
+#: src/features/protocol/CommunicationPage.tsx
+msgid "Kommunikation filtern"
+msgstr "Kommunikation filtern"
+
+#: src/features/settings/settingText.ts
+msgid "Kommunikationsprotokoll aufbewahren (Tage)"
+msgstr "Kommunikationsprotokoll aufbewahren (Tage)"
+
+#: src/features/settings/settingText.ts
+msgid "Kopfzeile mit dem Benutzernamen"
+msgstr "Kopfzeile mit dem Benutzernamen"
+
+#: src/features/settings/settingText.ts
+msgid "Kopfzeile mit dem Vertrauens-Token"
+msgstr "Kopfzeile mit dem Vertrauens-Token"
+
+#: src/features/settings/sections.tsx
+msgid "Kopfzeilen des vorgeschalteten Anmeldedienstes"
+msgstr "Kopfzeilen des vorgeschalteten Anmeldedienstes"
+
+#: src/features/settings/AccessPage.tsx
+msgid "Kopiere es an einen sicheren Ort. Später ist nur noch der Anfang sichtbar."
+msgstr "Kopiere es an einen sicheren Ort. Später ist nur noch der Anfang sichtbar."
+
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Kopieren fehlgeschlagen. Markiere das Token und kopiere es von Hand."
 msgstr "Kopieren fehlgeschlagen. Markiere das Token und kopiere es von Hand."
+
+#: src/features/settings/AccessPage.tsx
+msgid "Kopieren ging nicht. Markiere das Token und kopiere es von Hand."
+msgstr "Kopieren ging nicht. Markiere das Token und kopiere es von Hand."
 
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Kopiert"
 msgstr "Kopiert"
 
+#: src/features/settings/AccessPage.tsx
+msgid "Kopiert."
+msgstr "Kopiert."
+
 #: src/app/router.tsx
+#: src/features/common/ui.tsx
 msgid "Lädt …"
 msgstr "Lädt …"
+
+#: src/features/settings/AccessPage.tsx
+msgid "Läuft ab (freiwillig)"
+msgstr "Läuft ab (freiwillig)"
+
+#. placeholder {0}: formatDateTime(key.expires_at)
+#: src/features/settings/AccessPage.tsx
+msgid "läuft ab {0}"
+msgstr "läuft ab {0}"
+
+#: src/features/providers/SchemaForm.tsx
+#: src/features/settings/SettingsForm.tsx
+msgid "Leer lassen, um den gespeicherten Wert zu behalten"
+msgstr "Leer lassen, um den gespeicherten Wert zu behalten"
+
+#: src/features/settings/AccessPage.tsx
+msgid "Lesen"
+msgstr "Lesen"
+
+#: src/features/overview/OverviewPage.tsx
+msgid "Letzte Ereignisse"
+msgstr "Letzte Ereignisse"
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Löschen"
+msgstr "Löschen"
 
 #: src/shell/SignIn.tsx
 msgid "Melde dich mit einem API-Token an."
@@ -288,13 +828,29 @@ msgstr "Melde dich mit einem API-Token an."
 msgid "Meldung schließen"
 msgstr "Meldung schließen"
 
+#. placeholder {0}: kind.min
+#: src/features/providers/SchemaForm.tsx
+msgid "Mindestens {0}"
+msgstr "Mindestens {0}"
+
 #: src/shell/SignIn.tsx
 msgid "Mit einmaliger Anmeldung (SSO) fortfahren"
 msgstr "Mit einmaliger Anmeldung (SSO) fortfahren"
 
+#: src/features/providers/ProviderForm.tsx
+#: src/features/settings/AccessPage.tsx
+#: src/features/settings/SystemPage.tsx
+msgid "Name"
+msgstr "Name"
+
 #: src/features/device/DevicePage.tsx
 msgid "Nein"
 msgstr "Nein"
+
+#: src/features/providers/SchemaForm.tsx
+#: src/features/settings/SettingsForm.tsx
+msgid "neu eingeben nötig"
+msgstr "neu eingeben nötig"
 
 #: src/shell/UpdateBanner.tsx
 msgid "Neu laden"
@@ -304,9 +860,24 @@ msgstr "Neu laden"
 msgid "Neue Version – jetzt neu laden"
 msgstr "Neue Version – jetzt neu laden"
 
+#: src/features/settings/AccessPage.tsx
+msgid "Neues Token"
+msgstr "Neues Token"
+
+#: src/features/overview/OverviewPage.tsx
+msgid "Nicht bereit"
+msgstr "Nicht bereit"
+
 #: src/features/device/DevicePage.tsx
+#: src/features/overview/OverviewPage.tsx
+#: src/features/settings/SystemPage.tsx
 msgid "Nicht erreichbar"
 msgstr "Nicht erreichbar"
+
+#: src/features/providers/SchemaForm.tsx
+#: src/features/settings/SettingsForm.tsx
+msgid "nicht gesetzt"
+msgstr "nicht gesetzt"
 
 #: src/features/device/DevicePage.tsx
 msgid "Nicht registriert"
@@ -320,26 +891,97 @@ msgstr "Nicht unterstützt"
 msgid "Nicht verfügbar (braucht HTTPS)"
 msgstr "Nicht verfügbar (braucht HTTPS)"
 
-#: src/pages/placeholders.tsx
+#: src/features/overview/OverviewPage.tsx
+#: src/features/protocol/EventsPage.tsx
+msgid "Noch keine Ereignisse."
+msgstr "Noch keine Ereignisse."
+
+#: src/features/protocol/CommunicationPage.tsx
+msgid "Noch keine Kommunikation."
+msgstr "Noch keine Kommunikation."
+
+#: src/features/settings/AccessPage.tsx
+msgid "noch nie benutzt"
+msgstr "noch nie benutzt"
+
+#: src/features/settings/AccessPage.tsx
+msgid "Notiz (freiwillig)"
+msgstr "Notiz (freiwillig)"
+
+#: src/features/protocol/EventDetail.tsx
+msgid "Nutzdaten"
+msgstr "Nutzdaten"
+
+#: src/features/protocol/EventDetail.tsx
+msgid "Nutzdaten des Ereignisses"
+msgstr "Nutzdaten des Ereignisses"
+
+#: src/features/protocol/CommunicationPage.tsx
+msgid "Ohne Antwort"
+msgstr "Ohne Antwort"
+
+#: src/features/settings/SettingsForm.tsx
+msgid "Ohne Auswahl ist die Anmeldung über Kopfzeilen aus."
+msgstr "Ohne Auswahl ist die Anmeldung über Kopfzeilen aus."
+
+#: src/features/protocol/ProtocolPage.tsx
 #: src/shell/nav.tsx
 msgid "Protokoll"
 msgstr "Protokoll"
+
+#: src/features/protocol/ProtocolPage.tsx
+msgid "Protokollbereiche"
+msgstr "Protokollbereiche"
 
 #: src/app/router.tsx
 msgid "Prüfe die Verbindung und versuche es erneut."
 msgstr "Prüfe die Verbindung und versuche es erneut."
 
+#: src/features/protocol/EventDetail.tsx
+#: src/features/protocol/EventsPage.tsx
+msgid "Quelle"
+msgstr "Quelle"
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Schema anzeigen"
+msgstr "Schema anzeigen"
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Schema der Einstellungen"
+msgstr "Schema der Einstellungen"
+
+#. placeholder {0}: event.name
+#: src/features/providers/ProvidersPage.tsx
+msgid "Schema der Nutzdaten von {0}"
+msgstr "Schema der Nutzdaten von {0}"
+
+#. placeholder {0}: action.name
+#: src/features/providers/ProvidersPage.tsx
+msgid "Schema der Parameter von {0}"
+msgstr "Schema der Parameter von {0}"
+
+#: src/features/protocol/EventDetail.tsx
+msgid "Schemaversion"
+msgstr "Schemaversion"
+
+#: src/features/protocol/CommunicationPage.tsx
+#: src/features/protocol/EventDetail.tsx
+#: src/features/providers/ProvidersPage.tsx
 #: src/shell/overlays/OverlayHeader.tsx
 msgid "Schließen"
 msgstr "Schließen"
 
-#: src/pages/placeholders.tsx
+#: src/pages/shellPages.tsx
 msgid "Seite nicht gefunden"
 msgstr "Seite nicht gefunden"
 
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Seite verlassen? Das Token wird danach nicht mehr angezeigt."
 msgstr "Seite verlassen? Das Token wird danach nicht mehr angezeigt."
+
+#: src/features/settings/SystemPage.tsx
+msgid "Server"
+msgstr "Server"
 
 #: src/shell/Sidebar.tsx
 msgid "Server nicht erreichbar"
@@ -349,13 +991,48 @@ msgstr "Server nicht erreichbar"
 msgid "Service Worker"
 msgstr "Service Worker"
 
+#: src/features/providers/ProviderForm.tsx
+#: src/features/settings/SettingsForm.tsx
+msgid "Speichern"
+msgstr "Speichern"
+
+#: src/features/providers/ProviderStatusBadge.tsx
+msgid "Startet"
+msgstr "Startet"
+
+#. placeholder {0}: formatDateTime(instance.status.since)
+#: src/features/providers/ProvidersPage.tsx
+msgid "Status seit {0}"
+msgstr "Status seit {0}"
+
 #: src/shell/overlays/AppSearchField.tsx
 msgid "Suche leeren"
 msgstr "Suche leeren"
 
+#: src/features/settings/sections.tsx
+msgid "System"
+msgstr "System"
+
 #: src/shell/ThemeSwitch.tsx
 msgid "Systemdesign"
 msgstr "Systemdesign"
+
+#: src/features/overview/OverviewPage.tsx
+msgid "Systemstatus"
+msgstr "Systemstatus"
+
+#. placeholder {0}: key.name
+#: src/features/settings/AccessPage.tsx
+msgid "Token „{0}“ entziehen"
+msgstr "Token „{0}“ entziehen"
+
+#: src/features/settings/AccessPage.tsx
+msgid "Token anlegen"
+msgstr "Token anlegen"
+
+#: src/features/settings/AccessPage.tsx
+msgid "Token entziehen"
+msgstr "Token entziehen"
 
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Token kopieren"
@@ -369,10 +1046,19 @@ msgstr "Token verloren? Auf dem Server legt <0>bambubridge admin create-key</0> 
 msgid "Trotzdem verlassen"
 msgstr "Trotzdem verlassen"
 
-#: src/pages/placeholders.tsx
+#: src/features/protocol/EventDetail.tsx
+#: src/features/providers/ProviderForm.tsx
+msgid "Typ"
+msgstr "Typ"
+
+#: src/features/overview/OverviewPage.tsx
 #: src/shell/nav.tsx
 msgid "Übersicht"
 msgstr "Übersicht"
+
+#: src/features/settings/SystemPage.tsx
+msgid "Unbekannt"
+msgstr "Unbekannt"
 
 #: src/features/device/DevicePage.tsx
 msgid "Unbekannt (Server nicht erreichbar)"
@@ -386,43 +1072,180 @@ msgstr "Unten auf „Teilen“ tippen (das Quadrat mit dem Pfeil)."
 msgid "Verbinde …"
 msgstr "Verbinde …"
 
-#: src/pages/placeholders.tsx
+#: src/features/providers/ProviderForm.tsx
+#: src/features/providers/ProvidersPage.tsx
+msgid "Verbindung fehlgeschlagen"
+msgstr "Verbindung fehlgeschlagen"
+
+#: src/features/providers/ProviderForm.tsx
+#: src/features/providers/ProvidersPage.tsx
+msgid "Verbindung in Ordnung"
+msgstr "Verbindung in Ordnung"
+
+#: src/features/providers/ProviderForm.tsx
+#: src/features/providers/ProvidersPage.tsx
+msgid "Verbindung testen"
+msgstr "Verbindung testen"
+
+#: src/features/settings/sections.tsx
 msgid "Verbindung, App-Installation und Versionen"
 msgstr "Verbindung, App-Installation und Versionen"
+
+#: src/features/providers/ProviderStatusBadge.tsx
+msgid "Verbunden"
+msgstr "Verbunden"
+
+#: src/features/providers/ProvidersPage.tsx
+msgid "Verfügbare Typen"
+msgstr "Verfügbare Typen"
+
+#: src/features/settings/SystemPage.tsx
+msgid "Version"
+msgstr "Version"
+
+#. placeholder {0}: event.schema_version
+#: src/features/providers/ProvidersPage.tsx
+msgid "Version {0}"
+msgstr "Version {0}"
 
 #: src/shell/Sidebar.tsx
 msgid "Version {version}"
 msgstr "Version {version}"
 
+#: src/features/settings/sections.tsx
+msgid "Version, Zustand und Schnittstelle"
+msgstr "Version, Zustand und Schnittstelle"
+
+#. placeholder {0}: delivery.attempts
+#: src/features/protocol/EventDetail.tsx
+msgid "Versuche: {0}"
+msgstr "Versuche: {0}"
+
+#: src/features/settings/settingText.ts
+msgid "Vertrauens-Token (leer schaltet SSO aus)"
+msgstr "Vertrauens-Token (leer schaltet SSO aus)"
+
+#: src/features/settings/AccessPage.tsx
+msgid "Verwalten"
+msgstr "Verwalten"
+
 #: src/features/device/DevicePage.tsx
 msgid "Vollbild"
 msgstr "Vollbild"
+
+#: src/features/protocol/FilterBar.tsx
+msgid "Von"
+msgstr "Von"
+
+#: src/features/settings/sections.tsx
+msgid "Vorgeschalteter Anmeldedienst"
+msgstr "Vorgeschalteter Anmeldedienst"
 
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Weiter zur Oberfläche"
 msgstr "Weiter zur Oberfläche"
 
+#: src/features/settings/SystemPage.tsx
+msgid "Weiteres"
+msgstr "Weiteres"
+
 #: src/features/device/DevicePage.tsx
 msgid "Wie dieser Browser die BambuBridge sieht. Hilfreich für eine Fehlermeldung oder vor der Installation als App."
 msgstr "Wie dieser Browser die BambuBridge sieht. Hilfreich für eine Fehlermeldung oder vor der Installation als App."
 
+#: src/features/settings/sections.tsx
+msgid "Wie lange Ereignisse und Kommunikation bleiben"
+msgstr "Wie lange Ereignisse und Kommunikation bleiben"
+
+#: src/features/providers/SchemaForm.tsx
+#: src/features/settings/SettingsForm.tsx
+msgid "wird entfernt"
+msgstr "wird entfernt"
+
 #: src/features/device/DevicePage.tsx
 msgid "Wird geprüft …"
 msgstr "Wird geprüft …"
+
+#: src/features/protocol/EventDetail.tsx
+msgid "Zeit"
+msgstr "Zeit"
+
+#: src/features/settings/settingText.ts
+msgid "Zeitfenster gegen doppelte Ereignisse (Sekunden)"
+msgstr "Zeitfenster gegen doppelte Ereignisse (Sekunden)"
+
+#: src/features/overview/OverviewPage.tsx
+msgid "Zu den Anbietern"
+msgstr "Zu den Anbietern"
+
+#: src/features/common/ui.tsx
+msgid "Zu viele Anfragen. Warte eine Minute und versuche es erneut."
+msgstr "Zu viele Anfragen. Warte eine Minute und versuche es erneut."
 
 #: src/shell/BootstrapKeyCreated.tsx
 #: src/shell/SignIn.tsx
 msgid "Zu viele Versuche. Warte eine Minute und versuche es erneut."
 msgstr "Zu viele Versuche. Warte eine Minute und versuche es erneut."
 
+#: src/features/settings/sections.tsx
+msgid "Zugang"
+msgstr "Zugang"
+
+#: src/features/protocol/CommunicationPage.tsx
+msgid "Zugangsdaten sind schon beim Speichern durch *** ersetzt worden."
+msgstr "Zugangsdaten sind schon beim Speichern durch *** ersetzt worden."
+
+#: src/features/protocol/EventBadge.tsx
+msgid "Zugestellt"
+msgstr "Zugestellt"
+
+#. placeholder {0}: formatDateTime(key.last_used_at)
+#: src/features/settings/AccessPage.tsx
+msgid "zuletzt benutzt {0}"
+msgstr "zuletzt benutzt {0}"
+
 #: src/shell/AppShell.tsx
 msgid "Zum Inhalt springen"
 msgstr "Zum Inhalt springen"
 
-#: src/pages/placeholders.tsx
+#: src/features/overview/OverviewPage.tsx
+msgid "Zum Protokoll"
+msgstr "Zum Protokoll"
+
+#: src/pages/shellPages.tsx
 msgid "Zur Übersicht"
 msgstr "Zur Übersicht"
+
+#: src/features/settings/sections.tsx
+msgid "Zurück zu den Einstellungen"
+msgstr "Zurück zu den Einstellungen"
 
 #: src/shell/BootstrapKeyCreated.tsx
 msgid "Zurück zur Anmeldung"
 msgstr "Zurück zur Anmeldung"
+
+#: src/features/protocol/EventDetail.tsx
+msgid "Zusammenhang"
+msgstr "Zusammenhang"
+
+#: src/features/settings/SystemPage.tsx
+msgid "Zustand"
+msgstr "Zustand"
+
+#: src/features/protocol/EventDetail.tsx
+#: src/features/protocol/EventsPage.tsx
+msgid "Zustellung"
+msgstr "Zustellung"
+
+#: src/features/protocol/EventDetail.tsx
+msgid "Zustellungen"
+msgstr "Zustellungen"
+
+#. placeholder {0}: kind.min
+#. placeholder {0}: setting.min
+#. placeholder {1}: kind.max
+#. placeholder {1}: setting.max
+#: src/features/providers/SchemaForm.tsx
+#: src/features/settings/SettingsForm.tsx
+msgid "Zwischen {0} und {1}"
+msgstr "Zwischen {0} und {1}"

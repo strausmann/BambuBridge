@@ -180,6 +180,7 @@ describe("first start", () => {
   async function tokenShown(sessionPost: () => Response = () => problemResponse(503, "database_unavailable", "Database unavailable")) {
     stubFetch({
       "GET /api/v1/auth/session": signedOut,
+      "GET /api/v1/info": () => jsonResponse(INFO),
       "POST /api/v1/admin/api-keys": () => jsonResponse(CREATED, { status: 201 }),
       "POST /api/v1/auth/session": sessionPost,
     });
@@ -270,6 +271,7 @@ describe("first start", () => {
     let answer!: (response: Response) => void;
     stubFetch({
       "GET /api/v1/auth/session": signedOut,
+      "GET /api/v1/info": () => jsonResponse(INFO),
       "POST /api/v1/admin/api-keys": () => new Promise<Response>((resolve) => (answer = resolve)),
     });
     const user = userEvent.setup();

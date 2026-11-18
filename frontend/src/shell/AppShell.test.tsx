@@ -64,7 +64,8 @@ describe("app shell", () => {
     for (const [path, heading] of [
       ["/providers", "Anbieter"],
       ["/protocol", "Protokoll"],
-      ["/settings/access", "Einstellungen"],
+      ["/settings/access", "Zugang"],
+      ["/settings/unknown-section", "Einstellung nicht gefunden"],
       ["/device", "Dieses Gerät"],
     ] as const) {
       const { unmount } = renderApp(path);

@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { expect, shot, signedInAt, test } from "./fixtures";
+import { expect, KEY_HEADER, makeDemoInstance, shot, signedInAt, test } from "./fixtures";
 
 /** Every visible control below 44×44 px and every visible input below 16 px text. */
 async function offenders(page: Page): Promise<string[]> {
@@ -39,14 +39,36 @@ test("phone: every control is a 44 px touch target and every field has 16 px tex
   await expect(page.getByLabel("API-Token")).toBeVisible();
   expect(await offenders(page), "/sign-in").toEqual([]);
 
-  await signedInAt(page, "/");
-  for (const path of ["/", "/providers", "/protocol", "/settings", "/device"]) {
+  const token = await signedInAt(page, "/");
+  // With data in the lists: an instance, its events and calls, a token.
+  await makeDemoInstance(page, token, "layout-demo");
+  await expect
+    .poll(async () => ((await (await page.request.get("/api/v1/communication?limit=5", { headers: { [KEY_HEADER]: token } })).json()) as { items: unknown[] }).items.length, { timeout: 30_000 })
+    .toBeGreaterThan(0);
+  for (const path of ["/", "/providers", "/protocol", "/settings", "/settings/general", "/settings/access", "/settings/sso", "/settings/retention", "/settings/system", "/device"]) {
     await page.goto(path);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await expect(page.getByText("Lädt …")).toHaveCount(0);
     expect(await offenders(page), path).toEqual([]);
   }
 
+  // The communication tab, a detail sheet and the form of an instance.
+  await page.goto("/protocol");
+  await page.getByRole("tab", { name: "Kommunikation" }).tap();
+  await expect(page.getByRole("list", { name: "Kommunikation" })).toBeVisible();
+  // Measured at rest: a pressed control is briefly scaled down.
+  await page.waitForFunction(() => document.getAnimations().every((animation) => animation.playState !== "running"));
+  expect(await offenders(page), "/protocol communication").toEqual([]);
+  await page.goto("/providers");
+  await page.getByRole("article", { name: "layout-demo" }).getByRole("button", { name: "Bearbeiten" }).tap();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.waitForFunction(() => document.getAnimations().every((animation) => animation.playState !== "running"));
+  expect(await offenders(page), "/providers with the form").toEqual([]);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
   // The device page with its sheet open.
+  await page.goto("/device");
   await page.getByRole("button", { name: "Als App installieren" }).click();
   await expect(page.getByRole("dialog", { name: "Als App installieren" })).toBeVisible();
   // Measured once the sheet has arrived, not while it still scales in.

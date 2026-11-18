@@ -51,6 +51,9 @@ test("first start: the bootstrap key creates an admin token, shown exactly once,
   // Bootstrap is closed now, and the token is what signs in from here on.
   await page.getByRole("button", { name: "Abmelden" }).click();
   await expect(page.getByRole("heading", { name: "Anmelden" })).toBeVisible();
+  // The first-start entry is gone from the sign-in as soon as an admin token exists.
+  await expect(page.getByRole("link", { name: "Erstes Admin-Token anlegen" })).toHaveCount(0);
+  await expect(page.getByText("Erster Start?")).toHaveCount(0);
   await page.goto("/bootstrap");
   await page.getByLabel("Bootstrap-Schlüssel").fill(BOOTSTRAP_KEY);
   await page.getByRole("button", { name: "Admin-Token anlegen" }).click();

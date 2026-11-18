@@ -106,7 +106,7 @@ describe("sign-in", () => {
     let recognised = false;
     const calls = stubFetch({
       "GET /api/v1/auth/session": signedOut,
-      "POST /api/v1/auth/session": () => (recognised ? jsonResponse({ ...SESSION, user: "Ada", identity_provider: "pangolin_header", identity_subject: "ada" }, { status: 201 }) : signedOut()),
+      "POST /api/v1/auth/session": () => (recognised ? jsonResponse({ ...SESSION, identity_provider: "pangolin_header", identity_subject: "ada" }, { status: 201 }) : signedOut()),
       "GET /api/v1/info": () => jsonResponse(INFO),
     });
     const user = userEvent.setup();
@@ -119,7 +119,7 @@ describe("sign-in", () => {
 
     recognised = true;
     await user.click(sso);
-    expect(await screen.findByTestId("signed-in-user")).toHaveTextContent("Angemeldet als Ada");
+    expect(await screen.findByTestId("signed-in-user")).toHaveTextContent("Angemeldet als ada");
   });
 
   it("keeps the typed token when the failure is not about the token (no answer, rate limit, server error)", async () => {
@@ -380,9 +380,47 @@ describe("sign-out", () => {
     expect(queryClient.getQueryData(["events"])).toBeUndefined();
   });
 
+  it("a token sign-in shows the user's name; a single sign-on session shows the subject the provider reported", async () => {
+    stubFetch({ "GET /api/v1/auth/session": () => jsonResponse(SESSION), "GET /api/v1/info": () => jsonResponse(INFO) });
+    const first = renderApp("/");
+    expect(await screen.findByTestId("signed-in-user")).toHaveTextContent("Angemeldet als admin");
+    first.unmount();
+    stubFetch({ "GET /api/v1/auth/session": () => jsonResponse({ ...SESSION, identity_provider: "pangolin_header", identity_subject: "ada@example.invalid" }), "GET /api/v1/info": () => jsonResponse(INFO) });
+    renderApp("/");
+    expect(await screen.findByTestId("signed-in-user")).toHaveTextContent("Angemeldet als ada@example.invalid");
+  });
+
   it("names who is signed in on the sign-out button, also where the line is not shown", async () => {
     shell(() => new Response(null, { status: 204 }));
     expect(await screen.findByRole("button", { name: "Abmelden" })).toHaveAccessibleDescription("Angemeldet als admin");
+  });
+});
+
+describe("first-start link", () => {
+  const signedOutWith = (info: object) => stubFetch({ "GET /api/v1/auth/session": signedOut, "GET /api/v1/info": () => jsonResponse(info) });
+
+  it("is offered while the server can still make the first admin token", async () => {
+    signedOutWith({ ...INFO, bootstrap_open: true });
+    renderApp("/sign-in");
+    expect(await screen.findByRole("link", { name: "Erstes Admin-Token anlegen" })).toBeInTheDocument();
+  });
+
+  it("is gone once the first admin token exists", async () => {
+    const calls = signedOutWith({ ...INFO, bootstrap_open: false });
+    renderApp("/sign-in");
+    await screen.findByLabelText("API-Token");
+    await waitFor(() => expect(calls.some((call) => call.path === "/api/v1/info")).toBe(true));
+    // Give the answer time to land: the link must not appear after it.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByRole("link", { name: "Erstes Admin-Token anlegen" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Erster Start?")).not.toBeInTheDocument();
+  });
+
+  it("is not offered before the server has answered", async () => {
+    stubFetch({ "GET /api/v1/auth/session": signedOut, "GET /api/v1/info": () => new Promise<Response>(() => undefined) });
+    renderApp("/sign-in");
+    await screen.findByLabelText("API-Token");
+    expect(screen.queryByRole("link", { name: "Erstes Admin-Token anlegen" })).not.toBeInTheDocument();
   });
 });
 

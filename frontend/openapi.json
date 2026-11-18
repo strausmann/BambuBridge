@@ -847,6 +847,11 @@
       },
       "Info": {
         "properties": {
+          "bootstrap_open": {
+            "description": "The first admin token can still be created with the bootstrap key: a key is configured and no usable admin token exists. A hint for the sign-in page.",
+            "title": "Bootstrap Open",
+            "type": "boolean"
+          },
           "build": {
             "title": "Build",
             "type": "string"
@@ -864,7 +869,8 @@
         },
         "required": [
           "version",
-          "build"
+          "build",
+          "bootstrap_open"
         ],
         "title": "Info",
         "type": "object"

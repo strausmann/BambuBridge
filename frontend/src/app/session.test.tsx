@@ -152,6 +152,19 @@ describe("root layout", () => {
     uninstall();
   });
 
+  it.each(["/providers", "/protocol", "/settings/retention", "/settings/access"])(
+    "a signed-out visit to %s asks for no data of that page on the way to the sign-in",
+    async (path) => {
+      // The page's own requests would find the sign-in gone and send the browser round the
+      // sign-in hop again, which loses the place the visitor wanted to go to.
+      const calls = stubFetch({ "GET /api/v1/auth/session": signedOut, "GET /api/v1/info": () => jsonResponse(INFO) });
+      const { router } = renderApp(path);
+      await screen.findByLabelText("API-Token");
+      expect(router.state.location.search).toEqual({ redirect: path });
+      expect(calls.map((call) => call.path).sort()).toEqual(["/api/v1/auth/session", "/api/v1/info"]);
+    },
+  );
+
   it("another identity behind the same cookie does not inherit cached data", async () => {
     let current: Record<string, unknown> = SESSION;
     stubFetch({ "GET /api/v1/auth/session": () => jsonResponse(current), "GET /api/v1/info": () => jsonResponse(INFO) });
@@ -162,7 +175,7 @@ describe("root layout", () => {
 
     current = { ...SESSION, user: "Ada", identity_provider: "pangolin_header", identity_subject: "ada" };
     await queryClient.refetchQueries({ queryKey: SESSION_KEY });
-    await waitFor(() => expect(screen.getByTestId("signed-in-user")).toHaveTextContent("Ada"));
+    await waitFor(() => expect(screen.getByTestId("signed-in-user")).toHaveTextContent("ada"));
     expect(queryClient.getQueryData(["events"])).toBeUndefined();
   });
 
