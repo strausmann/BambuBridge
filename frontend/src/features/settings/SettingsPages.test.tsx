@@ -196,6 +196,24 @@ describe("single sign-on", () => {
 });
 
 describe("access", () => {
+  it("resetting a choices field previews the default, not an empty selection", async () => {
+    const user = userEvent.setup();
+    const calls = answers({
+      "GET /api/v1/settings": () => jsonResponse(SETTINGS.map((s) => (s.key === "auth.identity_providers" ? { ...s, set: true } : s))),
+      "PUT /api/v1/settings": () => new Response(null, { status: 204 }),
+    });
+    renderApp("/settings/access");
+    const provider = await screen.findByRole("checkbox", { name: "pangolin_header" });
+    expect(provider).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Anmeldedienste (in dieser Reihenfolge gefragt): auf Standard zurücksetzen" }));
+    // What is previewed is what the save will give: the default stays selected.
+    expect(screen.getByRole("checkbox", { name: "pangolin_header" })).toBeChecked();
+    expect(screen.queryByText("Ohne Auswahl ist die Anmeldung über Kopfzeilen aus.")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Speichern" }));
+    await waitFor(() => expect(calls.some((call) => call.method === "PUT")).toBe(true));
+    expect(calls.find((call) => call.method === "PUT")!.body).toEqual({ values: { "auth.identity_providers": null } });
+  });
+
   it("shows the plaintext of a new token once, and the list afterwards only its start", async () => {
     const user = userEvent.setup();
     const secret = "bb_pat_" + "Z".repeat(40);

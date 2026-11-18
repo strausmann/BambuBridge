@@ -18,9 +18,14 @@ function without(set: ReadonlySet<string>, key: string): ReadonlySet<string> {
   return set.has(key) ? new Set([...set].filter((entry) => entry !== key)) : set;
 }
 
-/** The value a field shows: what was changed here, else what the server has. */
+/**
+ * The value a field shows: what was changed here, else what the server has. `null` in the draft is
+ * "back to the default" (that is what the save does), so the default is what is previewed.
+ */
 function shown(setting: SettingView, draft: Draft): unknown {
-  return Object.hasOwn(draft, setting.key) ? field(draft, setting.key) : setting.value;
+  if (!Object.hasOwn(draft, setting.key)) return setting.value;
+  const drafted = field(draft, setting.key);
+  return drafted === null ? setting.default : drafted;
 }
 
 /**
