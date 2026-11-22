@@ -16,7 +16,7 @@ dependencies = [
     "bcrypt==5.0.0",
     "cryptography==50.0.2",
     "httpx==0.28.1",
-    "cachetools==8.0.0",
+    "cachetools==8.0.2",
     "prometheus-client==0.26.0",
     "python-multipart==0.0.33",
 ]
