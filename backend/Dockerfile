@@ -46,7 +46,7 @@ RUN pnpm build
 # -----------------------------------------------------------------------------
 # Stage 2: builder - the Python environment
 # -----------------------------------------------------------------------------
-FROM python:3.14.10-slim-trixie AS builder
+FROM python:3.15.2-slim-trixie AS builder
 COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /uvx /bin/
 
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
@@ -81,7 +81,7 @@ RUN uv venv /opt/licence-tool \
 # -----------------------------------------------------------------------------
 # Stage 3: runtime
 # -----------------------------------------------------------------------------
-FROM python:3.14.10-slim-trixie AS runtime
+FROM python:3.15.2-slim-trixie AS runtime
 
 # Set by the CI workflow (or locally with --build-arg); the defaults are placeholders.
 ARG VERSION=0.0.0-dev
